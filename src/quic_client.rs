@@ -44,7 +44,7 @@ impl MyQuicClient {
 
         let client = Arc::new(MyQuicClient {
             ep: endpoint,
-            conn: conn.clone(),
+            conn,
         });
 
         // 🔥 关键：启动后台接收任务（客户端持续监听服务器消息）

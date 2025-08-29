@@ -50,7 +50,10 @@ async fn main() -> Result<()> {
     server.close().await;
 
     info!("Connections closed, waiting for port release...");
-    sleep(Duration::from_secs(15)).await;
+    sleep(Duration::from_secs(5)).await;
+    drop(client);
+    drop(server);
+    sleep(Duration::from_secs(5)).await;
 
     let _server = MyQuicServer::open(server_addr).await?;
 
