@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::Result;
+use bytes::BytesMut;
 use quinn::{
     ClientConfig, Connection, Endpoint, crypto::rustls::QuicClientConfig,
     rustls::crypto::CryptoProvider,
@@ -15,14 +16,18 @@ use rustls::{
     pki_types::{CertificateDer, ServerName, UnixTime},
 };
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
-pub struct MyQuicClient {
+use crate::{common::Client, quic_sender::QuicSender};
+
+pub struct QuicClient {
     ep: Endpoint,
     conn: Connection,
+    client: Client,
 }
 
-impl MyQuicClient {
-    pub async fn create(server_addr: SocketAddr) -> Result<Arc<Self>> {
+impl QuicClient {
+    pub async fn create(server_addr: SocketAddr, title: String) -> Result<Arc<Self>> {
         // 创建自定义TLS配置（跳过证书验证）
         let crypto = rustls::ClientConfig::builder()
             .dangerous()
@@ -32,38 +37,48 @@ impl MyQuicClient {
         let client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto)?));
 
         // 创建客户端端点
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
-        let endpoint = Endpoint::client(addr)?;
+        let local_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
+        let endpoint = Endpoint::client(local_addr)?;
 
         // 连接到服务器
         let conn = endpoint
             .connect_with(client_config, server_addr, "quic_server")?
             .await?;
 
-        info!("Client: Connected to server at {}", server_addr);
+        let tx = conn.open_uni().await?;
+        let sender = QuicSender::new(tx);
 
-        let client = Arc::new(MyQuicClient {
+        let id = Uuid::new_v4().as_u128() as usize;
+        let client = Client::new(id, local_addr, title, Arc::new(sender));
+
+        info!("Connected to server at {}", server_addr);
+
+        let quic_client = Arc::new(QuicClient {
             ep: endpoint,
             conn,
+            client,
         });
 
         // 🔥 关键：启动后台接收任务（客户端持续监听服务器消息）
-        let client_clone = client.clone();
-        tokio::spawn(async move {
-            client_clone.start_receiving().await;
-            info!("Client: Receiver task stopped");
+
+        tokio::spawn({
+            let client_clone = quic_client.clone();
+            async move {
+                client_clone.start_receiving().await;
+                info!("Receiver task stopped");
+            }
         });
 
-        Ok(client)
+        Ok(quic_client)
     }
 
     // 🔥 核心方法：持续接收服务器消息
     async fn start_receiving(self: Arc<Self>) {
-        info!("Client: Starting receiver task");
+        info!("Starting receiver task");
         loop {
             match self.conn.accept_uni().await {
                 Ok(mut rcv) => {
-                    debug!("Client: Accepted incoming stream from server");
+                    debug!("Accepted incoming stream from server");
 
                     match rcv.read_to_end(1024).await {
                         Ok(buf) => {
@@ -71,33 +86,33 @@ impl MyQuicClient {
                             // ✅ 客户端在这里接收到服务器反馈
                             info!("SERVER: {}", msg);
                         }
-                        Err(e) => error!("Client: Error reading from stream: {}", e),
+                        Err(e) => error!("Error reading from stream: {}", e),
                     }
                 }
                 Err(e) => {
-                    warn!("Client: Error accepting stream: {}", e);
+                    warn!("Error accepting stream: {}", e);
                     break;
                 }
             }
         }
-        info!("Client: Receiver task ended (connection closed)");
+        info!("Receiver task ended (connection closed)");
     }
 
-    pub async fn send(&self, msg: &str) -> Result<()> {
-        info!("Client: Sending message: {}", msg);
-        let mut snd = self.conn.open_uni().await?;
-        snd.write_all(msg.as_bytes()).await?;
-        snd.finish()?; // 正确关闭流
-        debug!("Client: Message sent successfully");
+    pub async fn send(&self, msg: &BytesMut) -> Result<()> {
+        self.client.send_buf(msg).await?;
+        debug!("Message sent successfully");
         Ok(())
     }
 
     pub async fn close(&self) {
-        info!("Client: Closing connection");
+        info!("Closing connection");
+        if let Err(e) = self.client.close().await {
+            error!("Error closing client sender: {}", e);
+        }
         self.conn.close(0u32.into(), b"client closing");
         self.ep.close(0u32.into(), b"client shutdown");
         self.ep.wait_idle().await;
-        info!("Client: Shutdown complete");
+        info!("Shutdown complete");
     }
 }
 

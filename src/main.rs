@@ -1,4 +1,6 @@
+mod common;
 mod quic_client;
+mod quic_sender;
 mod quic_server;
 
 use std::{
@@ -7,10 +9,11 @@ use std::{
 };
 
 use anyhow::Result;
+use bytes::BytesMut;
 use tokio::time::sleep;
 use tracing::info;
 
-use crate::{quic_client::MyQuicClient, quic_server::MyQuicServer};
+use crate::{quic_client::QuicClient, quic_server::QuicServer};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,13 +24,13 @@ async fn main() -> Result<()> {
     let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
 
     // 启动服务器
-    let server = MyQuicServer::open(server_addr).await?;
+    let server = QuicServer::open(server_addr).await?;
     info!("Server started on {}", server_addr);
 
     sleep(Duration::from_secs(1)).await;
 
     // 创建客户端（自动启动接收任务）
-    let client = MyQuicClient::create(server_addr).await?;
+    let client = QuicClient::create(server_addr, "one".into()).await?;
     info!("Client connected to server");
 
     // 客户端持续接收消息（后台任务已启动）
@@ -35,7 +38,11 @@ async fn main() -> Result<()> {
     // 模拟用户交互：发送10条消息
     for i in 0..10 {
         info!("USER: Sending message {}", i);
-        client.send(&format!("Hello from client: {}", i)).await?;
+        client
+            .send(&BytesMut::from(
+                format!("Hello from client: {}", i).as_bytes(),
+            ))
+            .await?;
         sleep(Duration::from_secs(1)).await;
     }
 
@@ -55,7 +62,7 @@ async fn main() -> Result<()> {
     drop(server);
     sleep(Duration::from_secs(5)).await;
 
-    let _server = MyQuicServer::open(server_addr).await?;
+    let _server = QuicServer::open(server_addr).await?;
 
     Ok(())
 }
