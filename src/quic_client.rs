@@ -17,20 +17,25 @@ use rustls::{
     crypto::{verify_tls12_signature, verify_tls13_signature},
     pki_types::{CertificateDer, ServerName, UnixTime},
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
-    client::RexClient, command::RexCommand, common::new_uuid, data::RexData, quic_sender::QuicSender,
+    client::RexClient, client_handler::RexClientHandler, command::RexCommand, common::new_uuid,
+    data::RexData, quic_sender::QuicSender,
 };
 
 pub struct QuicClient {
     ep: Endpoint,
     conn: Connection,
-    client: RexClient,
+    client: Arc<RexClient>,
 }
 
 impl QuicClient {
-    pub async fn create(server_addr: SocketAddr, title: String) -> Result<Arc<Self>> {
+    pub async fn create(
+        server_addr: SocketAddr,
+        title: String,
+        handler: Arc<dyn RexClientHandler>,
+    ) -> Result<Arc<Self>> {
         // 创建自定义TLS配置（跳过证书验证）
         let crypto = rustls::ClientConfig::builder()
             .dangerous()
@@ -53,6 +58,7 @@ impl QuicClient {
 
         let id = new_uuid();
         let client = RexClient::new(id, local_addr, title, Arc::new(sender));
+        let client = Arc::new(client);
 
         info!("Connected to server at {}", server_addr);
 
@@ -70,7 +76,7 @@ impl QuicClient {
         tokio::spawn({
             let client_clone = quic_client.clone();
             async move {
-                client_clone.start_receiving().await;
+                client_clone.start_receiving(handler).await;
                 info!("Receiver task stopped");
             }
         });
@@ -79,15 +85,15 @@ impl QuicClient {
     }
 
     async fn login(&self) -> Result<()> {
-        let data = RexData::builder(RexCommand::Login)
+        let mut data = RexData::builder(RexCommand::Login)
             .data_from_string(self.client.title_str())
             .build();
-        self.send(&data.serialize()).await?;
+        self.send_data(&mut data).await?;
         Ok(())
     }
 
     // 🔥 核心方法：持续接收服务器消息
-    async fn start_receiving(self: Arc<Self>) {
+    async fn start_receiving(self: Arc<Self>, handler: Arc<dyn RexClientHandler>) {
         info!("Starting receiver task");
         loop {
             match self.conn.accept_uni().await {
@@ -104,24 +110,48 @@ impl QuicClient {
                         };
 
                         match data.header().command() {
-                            RexCommand::Title => {
-                                info!("Received: {:?}", data.data());
-                            }
-                            RexCommand::TitleReturn => todo!(),
-                            RexCommand::Group => todo!(),
-                            RexCommand::GroupReturn => todo!(),
-                            RexCommand::Cast => todo!(),
-                            RexCommand::CastReturn => todo!(),
-                            RexCommand::Login => {}
                             RexCommand::LoginReturn => {
-                                info!("Login Successfully");
+                                info!("Login successful");
+                                if let Err(e) = handler.login_ok(self.client.clone(), &data).await {
+                                    warn!("Error in login_ok handler: {}", e);
+                                }
                             }
-                            RexCommand::Check => todo!(),
-                            RexCommand::CheckReturn => todo!(),
-                            RexCommand::RegTitle => todo!(),
-                            RexCommand::RegTitleReturn => todo!(),
-                            RexCommand::DelTitle => todo!(),
-                            RexCommand::DelTitleReturn => todo!(),
+                            RexCommand::RegTitleReturn => {
+                                let title = data.data_as_string_lossy();
+                                self.client.insert_title(title);
+                            }
+
+                            RexCommand::DelTitleReturn => {
+                                let title = data.data_as_string_lossy();
+                                self.client.remove_title(&title);
+                            }
+
+                            RexCommand::Title
+                            | RexCommand::TitleReturn
+                            | RexCommand::Group
+                            | RexCommand::GroupReturn
+                            | RexCommand::Cast
+                            | RexCommand::CastReturn => {
+                                debug!("Received: {:?}", data.data());
+                                if let Err(e) = handler.handle(self.client.clone(), &data).await {
+                                    warn!("Error in handle: {}", e);
+                                }
+                            }
+
+                            RexCommand::Check => {
+                                debug!("Received heartbeat check");
+                                if let Err(e) = self
+                                    .send(
+                                        &RexData::builder(RexCommand::CheckReturn)
+                                            .build()
+                                            .serialize(),
+                                    )
+                                    .await
+                                {
+                                    warn!("Error sending heartbeat response: {}", e);
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -134,7 +164,14 @@ impl QuicClient {
         info!("Receiver task ended (connection closed)");
     }
 
-    pub async fn send(&self, msg: &BytesMut) -> Result<()> {
+    pub async fn send_data(&self, data: &mut RexData) -> Result<()> {
+        data.set_source(self.client.id());
+        self.client.send_buf(&data.serialize()).await?;
+        debug!("Data sent successfully");
+        Ok(())
+    }
+
+    async fn send(&self, msg: &BytesMut) -> Result<()> {
         self.client.send_buf(msg).await?;
         debug!("Message sent successfully");
         Ok(())
@@ -143,7 +180,7 @@ impl QuicClient {
     pub async fn close(&self) {
         info!("Closing connection");
         if let Err(e) = self.client.close().await {
-            error!("Error closing client sender: {}", e);
+            warn!("Error closing client sender: {}", e);
         }
         self.conn.close(0u32.into(), b"client closing");
         self.ep.close(0u32.into(), b"client shutdown");

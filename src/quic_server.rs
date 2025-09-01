@@ -4,7 +4,7 @@ use anyhow::Result;
 use quinn::{Connection, Endpoint, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::sync::{Mutex, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{client::RexClient, command::RexCommand, data::RexData, quic_sender::QuicSender};
 
@@ -47,7 +47,7 @@ impl QuicServer {
                                 }
                             });
                         }
-                        Err(e) => error!("Error accepting connection: {}", e),
+                        Err(e) => warn!("Error accepting connection: {}", e),
                     }
                 }
                 info!("Stopped accepting connections");
@@ -144,9 +144,49 @@ impl QuicServer {
                             RexCommand::LoginReturn => todo!(),
                             RexCommand::Check => todo!(),
                             RexCommand::CheckReturn => todo!(),
-                            RexCommand::RegTitle => todo!(),
+                            RexCommand::RegTitle => {
+                                let title = data.data_as_string_lossy();
+                                let id = data.header().source();
+                                for client in self.clients.read().await.iter() {
+                                    if client.id() == id {
+                                        client.insert_title(title);
+
+                                        if let Err(e) = client
+                                            .send_buf(
+                                                &data
+                                                    .set_command(RexCommand::RegTitleReturn)
+                                                    .serialize(),
+                                            )
+                                            .await
+                                        {
+                                            warn!("Error sending reg title return: {}", e);
+                                        };
+                                        break;
+                                    }
+                                }
+                            }
                             RexCommand::RegTitleReturn => todo!(),
-                            RexCommand::DelTitle => todo!(),
+                            RexCommand::DelTitle => {
+                                let title = data.data_as_string_lossy();
+                                let id = data.header().source();
+                                for client in self.clients.read().await.iter() {
+                                    if client.id() == id {
+                                        client.remove_title(&title);
+
+                                        if let Err(e) = client
+                                            .send_buf(
+                                                &data
+                                                    .set_command(RexCommand::DelTitleReturn)
+                                                    .serialize(),
+                                            )
+                                            .await
+                                        {
+                                            warn!("Error sending del title return: {}", e);
+                                        };
+                                        break;
+                                    }
+                                }
+                            }
                             RexCommand::DelTitleReturn => todo!(),
                         }
                     }

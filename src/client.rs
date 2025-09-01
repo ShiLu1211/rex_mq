@@ -15,7 +15,12 @@ pub struct RexClient {
 }
 
 impl RexClient {
-    pub fn new(id: usize, local_addr: SocketAddr, title: String, sender: Arc<dyn RexSender>) -> Self {
+    pub fn new(
+        id: usize,
+        local_addr: SocketAddr,
+        title: String,
+        sender: Arc<dyn RexSender>,
+    ) -> Self {
         RexClient {
             id,
             local_addr,
@@ -45,16 +50,16 @@ impl RexClient {
         self.id
     }
 
-    pub fn set_id(&mut self, id: usize) {
-        self.id = id;
-    }
-
     pub fn title_str(&self) -> String {
         self.titles.iter().map(|s| s.to_string()).join(";")
     }
 
-    pub fn set_title(&mut self, title: String) {
-        self.titles = title.split(';').map(|s| s.to_string()).collect();
+    pub fn insert_title(&self, title: String) {
+        self.titles.insert(title);
+    }
+
+    pub fn remove_title(&self, title: &str) {
+        self.titles.remove(title);
     }
 
     pub fn has_title(&self, title: &str) -> bool {

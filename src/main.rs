@@ -11,15 +11,22 @@ mod sender;
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Arc,
     time::Duration,
 };
 
 use anyhow::Result;
+use async_trait::async_trait;
 use tokio::time::sleep;
 use tracing::info;
 
 use crate::{
-    command::RexCommand, data::RexDataBuilder, quic_client::QuicClient, quic_server::QuicServer,
+    client::RexClient,
+    client_handler::RexClientHandler,
+    command::RexCommand,
+    data::{RexData, RexDataBuilder},
+    quic_client::QuicClient,
+    quic_server::QuicServer,
 };
 
 #[tokio::main]
@@ -37,10 +44,11 @@ async fn main() -> Result<()> {
     sleep(Duration::from_secs(1)).await;
 
     // 创建客户端（自动启动接收任务）
-    let client_r = QuicClient::create(server_addr, "one".into()).await?;
+    let client_r =
+        QuicClient::create(server_addr, "one".into(), Arc::new(RcvClientHandler)).await?;
     info!("Client connected to server");
 
-    let client_s = QuicClient::create(server_addr, "".into()).await?;
+    let client_s = QuicClient::create(server_addr, "".into(), Arc::new(SndClientHandler)).await?;
     info!("Client connected to server");
 
     // 客户端持续接收消息（后台任务已启动）
@@ -48,11 +56,11 @@ async fn main() -> Result<()> {
     // 模拟用户交互：发送10条消息
     for i in 0..10 {
         info!("USER: Sending message {}", i);
-        let data = RexDataBuilder::new(RexCommand::Title)
+        let mut data = RexDataBuilder::new(RexCommand::Title)
             .title("one")
             .data_from_slice(format!("Hello from client: {}", i).as_bytes())
             .build();
-        client_s.send(&data.serialize()).await?;
+        client_s.send_data(&mut data).await?;
         sleep(Duration::from_secs(1)).await;
     }
 
@@ -78,4 +86,42 @@ async fn main() -> Result<()> {
     let _server = QuicServer::open(server_addr).await?;
 
     Ok(())
+}
+
+struct RcvClientHandler;
+
+#[async_trait]
+impl RexClientHandler for RcvClientHandler {
+    async fn login_ok(&self, client: Arc<RexClient>, _data: &RexData) -> Result<()> {
+        info!("RcvHandler: Login OK for client ID {}", client.id());
+        Ok(())
+    }
+
+    async fn handle(&self, client: Arc<RexClient>, data: &RexData) -> Result<()> {
+        info!(
+            "RcvHandler: Received data for client ID {}: {:?}",
+            client.id(),
+            data.data()
+        );
+        Ok(())
+    }
+}
+
+struct SndClientHandler;
+
+#[async_trait]
+impl RexClientHandler for SndClientHandler {
+    async fn login_ok(&self, client: Arc<RexClient>, _data: &RexData) -> Result<()> {
+        info!("SndHandler: Login OK for client ID {}", client.id());
+        Ok(())
+    }
+
+    async fn handle(&self, client: Arc<RexClient>, data: &RexData) -> Result<()> {
+        info!(
+            "SndHandler: Received data for client ID {}: {:?}",
+            client.id(),
+            data.data()
+        );
+        Ok(())
+    }
 }
