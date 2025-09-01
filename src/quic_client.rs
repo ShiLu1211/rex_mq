@@ -1,6 +1,8 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
+    thread::sleep,
+    time::Duration,
 };
 
 use anyhow::Result;
@@ -17,12 +19,14 @@ use rustls::{
 };
 use tracing::{debug, error, info, warn};
 
-use crate::{client::Client, common::new_uuid, quic_sender::QuicSender};
+use crate::{
+    client::RexClient, command::RexCommand, common::new_uuid, data::RexData, quic_sender::QuicSender,
+};
 
 pub struct QuicClient {
     ep: Endpoint,
     conn: Connection,
-    client: Client,
+    client: RexClient,
 }
 
 impl QuicClient {
@@ -48,7 +52,7 @@ impl QuicClient {
         let sender = QuicSender::new(tx);
 
         let id = new_uuid();
-        let client = Client::new(id, local_addr, title, Arc::new(sender));
+        let client = RexClient::new(id, local_addr, title, Arc::new(sender));
 
         info!("Connected to server at {}", server_addr);
 
@@ -57,6 +61,9 @@ impl QuicClient {
             conn,
             client,
         });
+
+        quic_client.login().await?;
+        sleep(Duration::from_millis(100));
 
         // 🔥 关键：启动后台接收任务（客户端持续监听服务器消息）
 
@@ -71,6 +78,14 @@ impl QuicClient {
         Ok(quic_client)
     }
 
+    async fn login(&self) -> Result<()> {
+        let data = RexData::builder(RexCommand::Login)
+            .data_from_string(self.client.title_str())
+            .build();
+        self.send(&data.serialize()).await?;
+        Ok(())
+    }
+
     // 🔥 核心方法：持续接收服务器消息
     async fn start_receiving(self: Arc<Self>) {
         info!("Starting receiver task");
@@ -79,13 +94,35 @@ impl QuicClient {
                 Ok(mut rcv) => {
                     debug!("Accepted incoming stream from server");
 
-                    match rcv.read_to_end(1024).await {
-                        Ok(buf) => {
-                            let msg = String::from_utf8_lossy(&buf);
-                            // ✅ 客户端在这里接收到服务器反馈
-                            info!("SERVER: {}", msg);
+                    loop {
+                        let data = match RexData::read_from_quinn_stream(&mut rcv).await {
+                            Ok(data) => data,
+                            Err(e) => {
+                                warn!("Error reading from stream: {}", e);
+                                break;
+                            }
+                        };
+
+                        match data.header().command() {
+                            RexCommand::Title => {
+                                info!("Received: {:?}", data.data());
+                            }
+                            RexCommand::TitleReturn => todo!(),
+                            RexCommand::Group => todo!(),
+                            RexCommand::GroupReturn => todo!(),
+                            RexCommand::Cast => todo!(),
+                            RexCommand::CastReturn => todo!(),
+                            RexCommand::Login => {}
+                            RexCommand::LoginReturn => {
+                                info!("Login Successfully");
+                            }
+                            RexCommand::Check => todo!(),
+                            RexCommand::CheckReturn => todo!(),
+                            RexCommand::RegTitle => todo!(),
+                            RexCommand::RegTitleReturn => todo!(),
+                            RexCommand::DelTitle => todo!(),
+                            RexCommand::DelTitleReturn => todo!(),
                         }
-                        Err(e) => error!("Error reading from stream: {}", e),
                     }
                 }
                 Err(e) => {

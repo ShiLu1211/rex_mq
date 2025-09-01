@@ -45,6 +45,7 @@ impl RexHeader {
     pub fn command(&self) -> RexCommand {
         self.command
     }
+
     pub fn source(&self) -> usize {
         self.source
     }
@@ -243,6 +244,22 @@ impl RexData {
         buf.put_slice(&self.data);
 
         buf
+    }
+
+    // 设置命令
+    pub fn set_command(&mut self, command: RexCommand) -> &Self {
+        self.header.command = command;
+        self
+    }
+
+    pub fn set_source(&mut self, source: usize) -> &Self {
+        self.header.source = source;
+        self
+    }
+
+    pub fn set_target(&mut self, target: usize) -> &Self {
+        self.header.target = target;
+        self
     }
 
     // 反序列化数据包

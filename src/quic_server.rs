@@ -3,14 +3,15 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::Result;
 use quinn::{Connection, Endpoint, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
-use crate::data::RexData;
+use crate::{client::RexClient, command::RexCommand, data::RexData, quic_sender::QuicSender};
 
 pub struct QuicServer {
     ep: Endpoint,
     conns: Mutex<Vec<Connection>>,
+    clients: RwLock<Vec<Arc<RexClient>>>,
 }
 
 impl QuicServer {
@@ -22,6 +23,7 @@ impl QuicServer {
         let server = Arc::new(QuicServer {
             ep: endpoint.clone(),
             conns: Mutex::new(vec![]),
+            clients: RwLock::new(vec![]),
         });
 
         // 服务器连接处理任务
@@ -38,8 +40,9 @@ impl QuicServer {
                             // 为每个连接启动处理任务
                             tokio::spawn({
                                 let conn_ = conn.clone();
+                                let server_clone = server_.clone();
                                 async move {
-                                    QuicServer::handle_connection(conn_).await;
+                                    server_clone.handle_connection(conn_).await;
                                     info!("Connection closed");
                                 }
                             });
@@ -54,7 +57,20 @@ impl QuicServer {
         Ok(server)
     }
 
-    async fn handle_connection(conn: Connection) {
+    pub async fn close(&self) {
+        self.close_clients().await;
+        info!("Closing all connections");
+        for conn in self.conns.lock().await.iter() {
+            conn.close(0u32.into(), b"server closing");
+        }
+        self.ep.close(0u32.into(), b"server shutdown");
+        self.ep.wait_idle().await;
+        info!("Shutdown complete");
+    }
+}
+
+impl QuicServer {
+    async fn handle_connection(&self, conn: Connection) {
         info!("Handling new connection");
         loop {
             match conn.accept_uni().await {
@@ -62,28 +78,76 @@ impl QuicServer {
                     debug!("Accepted incoming stream");
                     // 使用长度前缀帧协议，在一个流上可以读多条消息
                     loop {
-                        let data = match RexData::read_from_quinn_stream(&mut rcv).await {
+                        let mut data = match RexData::read_from_quinn_stream(&mut rcv).await {
                             Ok(data) => data,
                             Err(e) => {
                                 warn!("Error reading from stream: {}", e);
                                 break;
                             }
                         };
-                        let msg = String::from_utf8_lossy(data.data());
-                        info!("Received from client: {}", msg);
 
-                        // 处理消息并回显（每条回显使用新的 uni 流）
-                        let response = format!("Echo: {}", msg);
-                        match conn.open_uni().await {
-                            Ok(mut snd) => {
-                                if let Err(e) = snd.write_all(response.as_bytes()).await {
-                                    error!("Error writing response: {}", e);
+                        match data.header().command() {
+                            RexCommand::Title => {
+                                let title = data.title().unwrap_or_default().to_string();
+                                info!("Received title: {}", title);
+
+                                let mut has_target = false;
+
+                                for client in self.clients.read().await.iter() {
+                                    if client.has_title(&title) {
+                                        data.set_target(client.id());
+
+                                        if let Err(e) = client.send_buf(&data.serialize()).await {
+                                            warn!("Error sending to client: {}", e);
+                                        } else {
+                                            has_target = true;
+                                            break;
+                                        }
+                                    }
                                 }
-                                if let Err(e) = snd.finish() {
-                                    error!("Error finishing response stream: {}", e);
+
+                                if !has_target {
+                                    warn!("No client found for title: {}", title);
                                 }
                             }
-                            Err(e) => error!("Error opening response stream: {}", e),
+                            RexCommand::TitleReturn => todo!(),
+                            RexCommand::Group => todo!(),
+                            RexCommand::GroupReturn => todo!(),
+                            RexCommand::Cast => todo!(),
+                            RexCommand::CastReturn => todo!(),
+                            RexCommand::Login => {
+                                let snd = match conn.open_uni().await {
+                                    Ok(snd) => snd,
+                                    Err(e) => {
+                                        warn!("Error opening uni stream: {}", e);
+                                        break;
+                                    }
+                                };
+                                let client = RexClient::new(
+                                    data.header().source(),
+                                    conn.remote_address(),
+                                    String::from_utf8_lossy(data.data()).to_string(),
+                                    Arc::new(QuicSender::new(snd)),
+                                );
+                                let client = Arc::new(client);
+                                self.add_client(client.clone()).await;
+
+                                if let Err(e) = client
+                                    .send_buf(
+                                        &data.set_command(RexCommand::LoginReturn).serialize(),
+                                    )
+                                    .await
+                                {
+                                    warn!("Error sending login return: {}", e);
+                                };
+                            }
+                            RexCommand::LoginReturn => todo!(),
+                            RexCommand::Check => todo!(),
+                            RexCommand::CheckReturn => todo!(),
+                            RexCommand::RegTitle => todo!(),
+                            RexCommand::RegTitleReturn => todo!(),
+                            RexCommand::DelTitle => todo!(),
+                            RexCommand::DelTitleReturn => todo!(),
                         }
                     }
                 }
@@ -95,14 +159,18 @@ impl QuicServer {
         }
     }
 
-    pub async fn close(&self) {
-        info!("Closing all connections");
-        for conn in self.conns.lock().await.iter() {
-            conn.close(0u32.into(), b"server closing");
+    async fn add_client(&self, client: Arc<RexClient>) {
+        let mut clients = self.clients.write().await;
+        clients.push(client);
+    }
+
+    async fn close_clients(&self) {
+        let clients = self.clients.write().await;
+        for client in clients.iter() {
+            if let Err(e) = client.close().await {
+                warn!("Error closing client {}: {}", client.id(), e);
+            }
         }
-        self.ep.close(0u32.into(), b"server shutdown");
-        self.ep.wait_idle().await;
-        info!("Shutdown complete");
     }
 }
 
