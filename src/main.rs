@@ -1,7 +1,11 @@
+mod client;
+mod command;
 mod common;
+mod data;
 mod quic_client;
 mod quic_sender;
 mod quic_server;
+mod sender;
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -9,11 +13,12 @@ use std::{
 };
 
 use anyhow::Result;
-use bytes::BytesMut;
 use tokio::time::sleep;
 use tracing::info;
 
-use crate::{quic_client::QuicClient, quic_server::QuicServer};
+use crate::{
+    command::RexCommand, data::RexDataBuilder, quic_client::QuicClient, quic_server::QuicServer,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -38,11 +43,10 @@ async fn main() -> Result<()> {
     // 模拟用户交互：发送10条消息
     for i in 0..10 {
         info!("USER: Sending message {}", i);
-        client
-            .send(&BytesMut::from(
-                format!("Hello from client: {}", i).as_bytes(),
-            ))
-            .await?;
+        let data = RexDataBuilder::new(RexCommand::Title)
+            .data_from_slice(format!("Hello from client: {}", i).as_bytes())
+            .build();
+        client.send(&data.serialize()).await?;
         sleep(Duration::from_secs(1)).await;
     }
 

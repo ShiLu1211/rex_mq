@@ -6,6 +6,8 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
+use crate::data::RexData;
+
 pub struct QuicServer {
     ep: Endpoint,
     conns: Mutex<Vec<Connection>>,
@@ -60,26 +62,14 @@ impl QuicServer {
                     debug!("Accepted incoming stream");
                     // 使用长度前缀帧协议，在一个流上可以读多条消息
                     loop {
-                        // 读取 4 字节长度前缀
-                        let mut len_buf = [0u8; 4];
-                        match rcv.read_exact(&mut len_buf).await {
-                            Ok(_) => {}
+                        let data = match RexData::read_from_quinn_stream(&mut rcv).await {
+                            Ok(data) => data,
                             Err(e) => {
-                                // 流被关闭或出错 -> 结束该流的处理，跳回 accept 下一个流
-                                debug!("stream read_exact length failed: {}", e);
+                                warn!("Error reading from stream: {}", e);
                                 break;
                             }
-                        }
-                        let len = u32::from_be_bytes(len_buf) as usize;
-
-                        // 读取 payload
-                        let mut data = vec![0u8; len];
-                        if let Err(e) = rcv.read_exact(&mut data).await {
-                            debug!("stream read_exact payload failed: {}", e);
-                            break;
-                        }
-
-                        let msg = String::from_utf8_lossy(&data);
+                        };
+                        let msg = String::from_utf8_lossy(data.data());
                         info!("Received from client: {}", msg);
 
                         // 处理消息并回显（每条回显使用新的 uni 流）

@@ -16,9 +16,8 @@ use rustls::{
     pki_types::{CertificateDer, ServerName, UnixTime},
 };
 use tracing::{debug, error, info, warn};
-use uuid::Uuid;
 
-use crate::{common::Client, quic_sender::QuicSender};
+use crate::{client::Client, common::new_uuid, quic_sender::QuicSender};
 
 pub struct QuicClient {
     ep: Endpoint,
@@ -48,7 +47,7 @@ impl QuicClient {
         let tx = conn.open_uni().await?;
         let sender = QuicSender::new(tx);
 
-        let id = Uuid::new_v4().as_u128() as usize;
+        let id = new_uuid();
         let client = Client::new(id, local_addr, title, Arc::new(sender));
 
         info!("Connected to server at {}", server_addr);
