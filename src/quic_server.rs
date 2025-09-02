@@ -123,26 +123,65 @@ impl QuicServer {
                                         break;
                                     }
                                 };
-                                let client = RexClient::new(
-                                    data.header().source(),
-                                    conn.remote_address(),
-                                    String::from_utf8_lossy(data.data()).to_string(),
-                                    Arc::new(QuicSender::new(snd)),
-                                );
-                                let client = Arc::new(client);
-                                self.add_client(client.clone()).await;
-
-                                if let Err(e) = client
-                                    .send_buf(
-                                        &data.set_command(RexCommand::LoginReturn).serialize(),
+                                let sender = Arc::new(QuicSender::new(snd));
+                                let mut is_exit = false;
+                                let id = data.header().source();
+                                for client in self.clients.read().await.iter() {
+                                    if client.id() == id {
+                                        client.set_sender(sender.clone()).await;
+                                        if let Err(e) = client
+                                            .send_buf(
+                                                &data
+                                                    .set_command(RexCommand::LoginReturn)
+                                                    .serialize(),
+                                            )
+                                            .await
+                                        {
+                                            warn!("Error sending login return: {}", e);
+                                        };
+                                        is_exit = true;
+                                        break;
+                                    }
+                                }
+                                if !is_exit {
+                                    let client = Arc::new(RexClient::new(
+                                        data.header().source(),
+                                        conn.remote_address(),
+                                        String::from_utf8_lossy(data.data()).to_string(),
+                                        sender,
+                                    ));
+                                    self.add_client(client.clone()).await;
+                                    if let Err(e) = client
+                                        .send_buf(
+                                            &data.set_command(RexCommand::LoginReturn).serialize(),
+                                        )
+                                        .await
+                                    {
+                                        warn!("Error sending login return: {}", e);
+                                    };
+                                }
+                            }
+                            RexCommand::LoginReturn => todo!(),
+                            RexCommand::Check => {
+                                let mut snd = match conn.open_uni().await {
+                                    Ok(snd) => snd,
+                                    Err(e) => {
+                                        warn!("Error opening uni stream: {}", e);
+                                        break;
+                                    }
+                                };
+                                if let Err(e) = snd
+                                    .write_all(
+                                        &data.set_command(RexCommand::CheckReturn).serialize(),
                                     )
                                     .await
                                 {
-                                    warn!("Error sending login return: {}", e);
+                                    warn!("Error sending check return: {}", e);
                                 };
+                                if let Err(e) = snd.finish() {
+                                    warn!("Error finishing check return: {}", e);
+                                }
                             }
-                            RexCommand::LoginReturn => todo!(),
-                            RexCommand::Check => todo!(),
                             RexCommand::CheckReturn => todo!(),
                             RexCommand::RegTitle => {
                                 let title = data.data_as_string_lossy();

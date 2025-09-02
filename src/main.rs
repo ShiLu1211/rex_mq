@@ -44,11 +44,12 @@ async fn main() -> Result<()> {
     sleep(Duration::from_secs(1)).await;
 
     // 创建客户端（自动启动接收任务）
-    let client_r =
-        QuicClient::create(server_addr, "one".into(), Arc::new(RcvClientHandler)).await?;
+    let client_r = QuicClient::new(server_addr, "one".into(), Arc::new(RcvClientHandler)).await?;
+    let client_r = client_r.open().await?;
     info!("Client connected to server");
 
-    let client_s = QuicClient::create(server_addr, "".into(), Arc::new(SndClientHandler)).await?;
+    let client_s = QuicClient::new(server_addr, "".into(), Arc::new(SndClientHandler)).await?;
+    let client_s = client_s.open().await?;
     info!("Client connected to server");
 
     // 客户端持续接收消息（后台任务已启动）
