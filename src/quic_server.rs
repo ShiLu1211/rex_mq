@@ -1,17 +1,21 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use quinn::{Connection, Endpoint, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, oneshot};
 use tracing::{debug, info, warn};
 
-use crate::{client::RexClient, command::RexCommand, data::RexData, quic_sender::QuicSender};
+use crate::{
+    client::RexClient, command::RexCommand, common::now_secs, data::RexData,
+    quic_sender::QuicSender,
+};
 
 pub struct QuicServer {
     ep: Endpoint,
     conns: Mutex<Vec<Connection>>,
     clients: RwLock<Vec<Arc<RexClient>>>,
+    shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
 }
 
 impl QuicServer {
@@ -20,10 +24,12 @@ impl QuicServer {
         let server_config = ServerConfig::with_single_cert(vec![cert], key)?;
         let endpoint = Endpoint::server(server_config, addr)?;
 
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let server = Arc::new(QuicServer {
             ep: endpoint.clone(),
             conns: Mutex::new(vec![]),
             clients: RwLock::new(vec![]),
+            shutdown_tx: Mutex::new(Some(shutdown_tx)),
         });
 
         // 服务器连接处理任务
@@ -54,10 +60,47 @@ impl QuicServer {
             }
         });
 
+        tokio::spawn({
+            let server_clone = server.clone();
+            async move {
+                let check_interval = Duration::from_secs(15); // 检查频率
+                let client_timeout = 30; // 客户端超时时间（秒）
+                let mut shutdown_rx = shutdown_rx;
+
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(check_interval) => {
+                            let mut clients = server_clone.clients.write().await;
+                            let now = now_secs();
+
+                            clients.retain(|client| {
+                                let last_active = client.last_recv();
+                                if now - last_active > client_timeout {
+                                    warn!("Client {} timed out, removing...", client.id());
+                                    false
+                                } else {
+                                    true
+                                }
+                            });
+                        }
+                        _ = &mut shutdown_rx => {
+                            info!("Cleanup task received shutdown signal, stopping.");
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
         Ok(server)
     }
 
     pub async fn close(&self) {
+        // Send shutdown signal to the cleanup task
+        if let Some(tx) = self.shutdown_tx.lock().await.take() {
+            let _ = tx.send(());
+        }
+
         self.close_clients().await;
         info!("Closing all connections");
         for conn in self.conns.lock().await.iter() {
@@ -85,6 +128,14 @@ impl QuicServer {
                                 break;
                             }
                         };
+
+                        // 查找对应的客户端并更新时间戳
+                        let client_id = data.header().source();
+                        let source_client = self.find_client_by_id(client_id).await;
+
+                        if let Some(client) = &source_client {
+                            client.update_last_recv();
+                        }
 
                         match data.header().command() {
                             RexCommand::Title => {
@@ -124,26 +175,17 @@ impl QuicServer {
                                     }
                                 };
                                 let sender = Arc::new(QuicSender::new(snd));
-                                let mut is_exit = false;
-                                let id = data.header().source();
-                                for client in self.clients.read().await.iter() {
-                                    if client.id() == id {
-                                        client.set_sender(sender.clone()).await;
-                                        if let Err(e) = client
-                                            .send_buf(
-                                                &data
-                                                    .set_command(RexCommand::LoginReturn)
-                                                    .serialize(),
-                                            )
-                                            .await
-                                        {
-                                            warn!("Error sending login return: {}", e);
-                                        };
-                                        is_exit = true;
-                                        break;
-                                    }
-                                }
-                                if !is_exit {
+                                if let Some(client) = &source_client {
+                                    client.set_sender(sender.clone()).await;
+                                    if let Err(e) = client
+                                        .send_buf(
+                                            &data.set_command(RexCommand::LoginReturn).serialize(),
+                                        )
+                                        .await
+                                    {
+                                        warn!("Error sending login return: {}", e);
+                                    };
+                                } else {
                                     let client = Arc::new(RexClient::new(
                                         data.header().source(),
                                         conn.remote_address(),
@@ -185,45 +227,39 @@ impl QuicServer {
                             RexCommand::CheckReturn => todo!(),
                             RexCommand::RegTitle => {
                                 let title = data.data_as_string_lossy();
-                                let id = data.header().source();
-                                for client in self.clients.read().await.iter() {
-                                    if client.id() == id {
-                                        client.insert_title(title);
-
-                                        if let Err(e) = client
-                                            .send_buf(
-                                                &data
-                                                    .set_command(RexCommand::RegTitleReturn)
-                                                    .serialize(),
-                                            )
-                                            .await
-                                        {
-                                            warn!("Error sending reg title return: {}", e);
-                                        };
-                                        break;
-                                    }
+                                if let Some(client) = &source_client {
+                                    client.insert_title(title);
+                                    if let Err(e) = client
+                                        .send_buf(
+                                            &data
+                                                .set_command(RexCommand::RegTitleReturn)
+                                                .serialize(),
+                                        )
+                                        .await
+                                    {
+                                        warn!("Error sending reg title return: {}", e);
+                                    };
+                                } else {
+                                    warn!("No client found for registration");
                                 }
                             }
                             RexCommand::RegTitleReturn => todo!(),
                             RexCommand::DelTitle => {
                                 let title = data.data_as_string_lossy();
-                                let id = data.header().source();
-                                for client in self.clients.read().await.iter() {
-                                    if client.id() == id {
-                                        client.remove_title(&title);
-
-                                        if let Err(e) = client
-                                            .send_buf(
-                                                &data
-                                                    .set_command(RexCommand::DelTitleReturn)
-                                                    .serialize(),
-                                            )
-                                            .await
-                                        {
-                                            warn!("Error sending del title return: {}", e);
-                                        };
-                                        break;
-                                    }
+                                if let Some(client) = &source_client {
+                                    client.remove_title(&title);
+                                    if let Err(e) = client
+                                        .send_buf(
+                                            &data
+                                                .set_command(RexCommand::DelTitleReturn)
+                                                .serialize(),
+                                        )
+                                        .await
+                                    {
+                                        warn!("Error sending reg title return: {}", e);
+                                    };
+                                } else {
+                                    warn!("No client found for registration");
                                 }
                             }
                             RexCommand::DelTitleReturn => todo!(),
@@ -250,6 +286,11 @@ impl QuicServer {
                 warn!("Error closing client {}: {}", client.id(), e);
             }
         }
+    }
+
+    async fn find_client_by_id(&self, id: usize) -> Option<Arc<RexClient>> {
+        let clients = self.clients.read().await;
+        clients.iter().find(|client| client.id() == id).cloned()
     }
 }
 

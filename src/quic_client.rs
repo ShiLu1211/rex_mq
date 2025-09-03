@@ -2,7 +2,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -45,7 +45,6 @@ pub struct QuicClient {
 
     status: AtomicBool,
 
-    last_recv: AtomicU64,
     idle_timeout: u64,
     pong_wait: u64,
 }
@@ -72,7 +71,6 @@ impl QuicClient {
             client_config,
             client_handler: handler,
             status: AtomicBool::new(false),
-            last_recv: AtomicU64::new(now_secs()),
             idle_timeout: 10,
             pong_wait: 5,
         }))
@@ -239,10 +237,13 @@ impl QuicClient {
     async fn heartbeat_task(&self, interval: u64) {
         loop {
             sleep(Duration::from_secs(interval)).await;
-
+            let Some(client) = self.get_client().await else {
+                warn!("No client available for heartbeat");
+                continue;
+            };
             // 先读取 last_recv，决定是否需要发心跳
-            let last = self.last_recv.load(Ordering::SeqCst);
-            let idle = now_secs() - last;
+            let last = client.last_recv();
+            let idle = now_secs().saturating_sub(last);
             if idle < self.idle_timeout {
                 // 最近已经收到数据，不需要发心跳
                 continue;
@@ -272,7 +273,7 @@ impl QuicClient {
                         // 等待 pong_wait，看 last_recv 是否被更新（收到任何数据都表示活跃）
                         let before = last;
                         sleep(Duration::from_secs(self.pong_wait)).await;
-                        let after = self.last_recv.load(Ordering::SeqCst);
+                        let after = client.last_recv();
                         if after <= before {
                             warn!("No response after heartbeat, trigger reconnect");
                             let _ = self.connect().await;
@@ -327,7 +328,7 @@ impl QuicClient {
             }
             _ => {}
         }
-        self.last_recv.store(now_secs(), Ordering::SeqCst);
+        client.update_last_recv();
     }
 
     async fn get_client(&self) -> Option<Arc<RexClient>> {

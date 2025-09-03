@@ -1,4 +1,10 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use anyhow::Result;
 use bytes::BytesMut;
@@ -6,13 +12,18 @@ use dashmap::DashSet;
 use itertools::Itertools;
 use tokio::sync::RwLock;
 
-use crate::{common::new_uuid, sender::RexSender};
+use crate::{
+    common::{new_uuid, now_secs},
+    sender::RexSender,
+};
 
 pub struct RexClient {
     id: usize,
     local_addr: SocketAddr,
     titles: DashSet<String>,
     sender: RwLock<Arc<dyn RexSender>>,
+
+    last_recv: AtomicU64,
 }
 
 impl RexClient {
@@ -27,15 +38,17 @@ impl RexClient {
             local_addr,
             titles: title.split(';').map(|s| s.to_string()).collect(),
             sender: RwLock::new(sender),
+            last_recv: AtomicU64::new(now_secs()),
         }
     }
 
-    pub fn new_with_title(title: String, sender: Arc<dyn RexSender>) -> Self {
+    pub fn from_title(title: String, sender: Arc<dyn RexSender>) -> Self {
         RexClient {
             id: new_uuid(),
-            local_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
+            local_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
             titles: title.split(';').map(|s| s.to_string()).collect(),
             sender: RwLock::new(sender),
+            last_recv: AtomicU64::new(now_secs()),
         }
     }
 
@@ -69,5 +82,13 @@ impl RexClient {
 
     pub fn has_title(&self, title: &str) -> bool {
         self.titles.contains(title)
+    }
+
+    pub fn update_last_recv(&self) {
+        self.last_recv.store(now_secs(), Ordering::SeqCst);
+    }
+
+    pub fn last_recv(&self) -> u64 {
+        self.last_recv.load(Ordering::SeqCst)
     }
 }
