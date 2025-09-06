@@ -14,3 +14,6 @@ client handler impl
 - 2025.9.2 client heartbeat impl
 
 - 2025.9.3 server check heartbeat and remove node
+
+- 2025.9.6 add server group and cast \
+fix client heartbeat update timestamp when send ok or recv 
