@@ -65,6 +65,26 @@ async fn main() -> Result<()> {
         sleep(Duration::from_secs(1)).await;
     }
 
+    for i in 0..10 {
+        info!("USER: Sending message {}", i);
+        let mut data = RexDataBuilder::new(RexCommand::Group)
+            .title("one")
+            .data_from_slice(format!("Hello from client: {}", i).as_bytes())
+            .build();
+        client_s.send_data(&mut data).await?;
+        sleep(Duration::from_secs(1)).await;
+    }
+
+    for i in 0..10 {
+        info!("USER: Sending message {}", i);
+        let mut data = RexDataBuilder::new(RexCommand::Cast)
+            .title("one")
+            .data_from_slice(format!("Hello from client: {}", i).as_bytes())
+            .build();
+        client_s.send_data(&mut data).await?;
+        sleep(Duration::from_secs(1)).await;
+    }
+
     info!("USER: Finished sending messages");
 
     // 等待一段时间让客户端接收剩余消息

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::{
     net::SocketAddr,
     sync::{
@@ -53,7 +54,12 @@ impl RexClient {
     }
 
     pub async fn send_buf(&self, buf: &BytesMut) -> Result<()> {
-        self.sender.write().await.send_buf(buf).await
+        if let Err(e) = self.sender.write().await.send_buf(buf).await {
+            return Err(e);
+        } else {
+            self.update_last_recv();
+        }
+        Ok(())
     }
 
     pub async fn close(&self) -> Result<()> {

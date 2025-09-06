@@ -1,4 +1,11 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::Result;
 use quinn::{Connection, Endpoint, ServerConfig};
@@ -128,142 +135,7 @@ impl QuicServer {
                                 break;
                             }
                         };
-
-                        // 查找对应的客户端并更新时间戳
-                        let client_id = data.header().source();
-                        let source_client = self.find_client_by_id(client_id).await;
-
-                        if let Some(client) = &source_client {
-                            client.update_last_recv();
-                        }
-
-                        match data.header().command() {
-                            RexCommand::Title => {
-                                let title = data.title().unwrap_or_default().to_string();
-                                info!("Received title: {}", title);
-
-                                let mut has_target = false;
-
-                                for client in self.clients.read().await.iter() {
-                                    if client.has_title(&title) {
-                                        data.set_target(client.id());
-
-                                        if let Err(e) = client.send_buf(&data.serialize()).await {
-                                            warn!("Error sending to client: {}", e);
-                                        } else {
-                                            has_target = true;
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                if !has_target {
-                                    warn!("No client found for title: {}", title);
-                                }
-                            }
-                            RexCommand::TitleReturn => todo!(),
-                            RexCommand::Group => todo!(),
-                            RexCommand::GroupReturn => todo!(),
-                            RexCommand::Cast => todo!(),
-                            RexCommand::CastReturn => todo!(),
-                            RexCommand::Login => {
-                                let snd = match conn.open_uni().await {
-                                    Ok(snd) => snd,
-                                    Err(e) => {
-                                        warn!("Error opening uni stream: {}", e);
-                                        break;
-                                    }
-                                };
-                                let sender = Arc::new(QuicSender::new(snd));
-                                if let Some(client) = &source_client {
-                                    client.set_sender(sender.clone()).await;
-                                    if let Err(e) = client
-                                        .send_buf(
-                                            &data.set_command(RexCommand::LoginReturn).serialize(),
-                                        )
-                                        .await
-                                    {
-                                        warn!("Error sending login return: {}", e);
-                                    };
-                                } else {
-                                    let client = Arc::new(RexClient::new(
-                                        data.header().source(),
-                                        conn.remote_address(),
-                                        String::from_utf8_lossy(data.data()).to_string(),
-                                        sender,
-                                    ));
-                                    self.add_client(client.clone()).await;
-                                    if let Err(e) = client
-                                        .send_buf(
-                                            &data.set_command(RexCommand::LoginReturn).serialize(),
-                                        )
-                                        .await
-                                    {
-                                        warn!("Error sending login return: {}", e);
-                                    };
-                                }
-                            }
-                            RexCommand::LoginReturn => todo!(),
-                            RexCommand::Check => {
-                                let mut snd = match conn.open_uni().await {
-                                    Ok(snd) => snd,
-                                    Err(e) => {
-                                        warn!("Error opening uni stream: {}", e);
-                                        break;
-                                    }
-                                };
-                                if let Err(e) = snd
-                                    .write_all(
-                                        &data.set_command(RexCommand::CheckReturn).serialize(),
-                                    )
-                                    .await
-                                {
-                                    warn!("Error sending check return: {}", e);
-                                };
-                                if let Err(e) = snd.finish() {
-                                    warn!("Error finishing check return: {}", e);
-                                }
-                            }
-                            RexCommand::CheckReturn => todo!(),
-                            RexCommand::RegTitle => {
-                                let title = data.data_as_string_lossy();
-                                if let Some(client) = &source_client {
-                                    client.insert_title(title);
-                                    if let Err(e) = client
-                                        .send_buf(
-                                            &data
-                                                .set_command(RexCommand::RegTitleReturn)
-                                                .serialize(),
-                                        )
-                                        .await
-                                    {
-                                        warn!("Error sending reg title return: {}", e);
-                                    };
-                                } else {
-                                    warn!("No client found for registration");
-                                }
-                            }
-                            RexCommand::RegTitleReturn => todo!(),
-                            RexCommand::DelTitle => {
-                                let title = data.data_as_string_lossy();
-                                if let Some(client) = &source_client {
-                                    client.remove_title(&title);
-                                    if let Err(e) = client
-                                        .send_buf(
-                                            &data
-                                                .set_command(RexCommand::DelTitleReturn)
-                                                .serialize(),
-                                        )
-                                        .await
-                                    {
-                                        warn!("Error sending reg title return: {}", e);
-                                    };
-                                } else {
-                                    warn!("No client found for registration");
-                                }
-                            }
-                            RexCommand::DelTitleReturn => todo!(),
-                        }
+                        self.handle_data(&mut data, &conn).await;
                     }
                 }
                 Err(e) => {
@@ -271,6 +143,195 @@ impl QuicServer {
                     break;
                 }
             }
+        }
+    }
+
+    async fn handle_data(&self, data: &mut RexData, conn: &Connection) {
+        // 查找对应的客户端并更新时间戳
+        let client_id = data.header().source();
+        let source_client = self.find_client_by_id(client_id).await;
+
+        if let Some(client) = &source_client {
+            client.update_last_recv();
+        }
+
+        match data.header().command() {
+            RexCommand::Title => {
+                let title = data.title().unwrap_or_default().to_string();
+                info!("Received title: {}", title);
+
+                let mut has_target = false;
+
+                for client in self.clients.read().await.iter() {
+                    if client.has_title(&title) {
+                        // 不发送给自己
+                        if client.id() == client_id {
+                            continue;
+                        }
+                        data.set_target(client.id());
+
+                        if let Err(e) = client.send_buf(&data.serialize()).await {
+                            warn!("Error sending to client: {}", e);
+                        } else {
+                            has_target = true;
+                            break;
+                        }
+                    }
+                }
+
+                if !has_target {
+                    warn!("No client found for title: {}", title);
+                }
+            }
+            RexCommand::TitleReturn => todo!(),
+            RexCommand::Group => {
+                let title = data.title().unwrap_or_default().to_string();
+                info!("Received group: {}", title);
+
+                let mut has_target = false;
+
+                let matching_clients: Vec<Arc<RexClient>> = self
+                    .clients
+                    .read()
+                    .await
+                    .iter()
+                    .filter(|client| client.has_title(&title) && client.id() != client_id)
+                    .cloned()
+                    .collect();
+
+                // 使用轮询方式选择客户端
+                static GROUP_ROUND_ROBIN_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+                let index = GROUP_ROUND_ROBIN_INDEX.fetch_add(1, Ordering::Relaxed);
+
+                for i in index..index + matching_clients.len() {
+                    let client = &matching_clients[i % matching_clients.len()];
+
+                    data.set_target(client.id());
+                    if let Err(e) = client.send_buf(&data.serialize()).await {
+                        warn!("Error sending group message to client: {}", e);
+                    } else {
+                        debug!("Sent group message to client ID: {}", client.id());
+                        has_target = true;
+                    }
+                }
+
+                if !has_target {
+                    warn!("No client found for title: {}", title);
+                }
+            }
+            RexCommand::GroupReturn => todo!(),
+            RexCommand::Cast => {
+                let title = data.title().unwrap_or_default().to_string();
+                info!("Received cast: {}", title);
+
+                let mut has_target = false;
+
+                for client in self.clients.read().await.iter() {
+                    if client.has_title(&title) {
+                        // 不发送给自己
+                        if client.id() == client_id {
+                            continue;
+                        }
+                        data.set_target(client.id());
+
+                        if let Err(e) = client.send_buf(&data.serialize()).await {
+                            warn!("Error sending to client: {}", e);
+                        } else {
+                            has_target = true;
+                        }
+                    }
+                }
+
+                if !has_target {
+                    warn!("No client found for title: {}", title);
+                }
+            }
+            RexCommand::CastReturn => todo!(),
+            RexCommand::Login => {
+                let snd = match conn.open_uni().await {
+                    Ok(snd) => snd,
+                    Err(e) => {
+                        warn!("Error opening uni stream: {}", e);
+                        return;
+                    }
+                };
+                let sender = Arc::new(QuicSender::new(snd));
+                if let Some(client) = &source_client {
+                    client.set_sender(sender.clone()).await;
+                    if let Err(e) = client
+                        .send_buf(&data.set_command(RexCommand::LoginReturn).serialize())
+                        .await
+                    {
+                        warn!("Error sending login return: {}", e);
+                    };
+                } else {
+                    let client = Arc::new(RexClient::new(
+                        data.header().source(),
+                        conn.remote_address(),
+                        String::from_utf8_lossy(data.data()).to_string(),
+                        sender,
+                    ));
+                    self.add_client(client.clone()).await;
+                    if let Err(e) = client
+                        .send_buf(&data.set_command(RexCommand::LoginReturn).serialize())
+                        .await
+                    {
+                        warn!("Error sending login return: {}", e);
+                    };
+                }
+            }
+            RexCommand::LoginReturn => todo!(),
+            RexCommand::Check => {
+                let mut snd = match conn.open_uni().await {
+                    Ok(snd) => snd,
+                    Err(e) => {
+                        warn!("Error opening uni stream: {}", e);
+                        return;
+                    }
+                };
+                if let Err(e) = snd
+                    .write_all(&data.set_command(RexCommand::CheckReturn).serialize())
+                    .await
+                {
+                    warn!("Error sending check return: {}", e);
+                };
+                debug!("Sent check return to {}", conn.remote_address());
+                if let Err(e) = snd.finish() {
+                    warn!("Error finishing check return: {}", e);
+                }
+            }
+            RexCommand::CheckReturn => todo!(),
+            RexCommand::RegTitle => {
+                let title = data.data_as_string_lossy();
+                if let Some(client) = &source_client {
+                    client.insert_title(title);
+                    if let Err(e) = client
+                        .send_buf(&data.set_command(RexCommand::RegTitleReturn).serialize())
+                        .await
+                    {
+                        warn!("Error sending reg title return: {}", e);
+                    };
+                } else {
+                    warn!("No client found for registration");
+                }
+            }
+            RexCommand::RegTitleReturn => todo!(),
+            RexCommand::DelTitle => {
+                let title = data.data_as_string_lossy();
+                if let Some(client) = &source_client {
+                    client.remove_title(&title);
+                    if let Err(e) = client
+                        .send_buf(&data.set_command(RexCommand::DelTitleReturn).serialize())
+                        .await
+                    {
+                        warn!("Error sending reg title return: {}", e);
+                    };
+                } else {
+                    warn!("No client found for registration");
+                }
+            }
+            RexCommand::DelTitleReturn => todo!(),
         }
     }
 
