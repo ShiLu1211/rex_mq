@@ -14,7 +14,10 @@ use tokio::sync::{Mutex, RwLock, oneshot};
 use tracing::{debug, info, warn};
 
 use crate::{
-    client::RexClient, command::RexCommand, common::now_secs, data::RexData,
+    client::RexClient,
+    command::RexCommand,
+    common::now_secs,
+    data::{RetCode, RexData},
     quic_sender::QuicSender,
 };
 
@@ -181,6 +184,18 @@ impl QuicServer {
 
                 if !has_target {
                     warn!("No client found for title: {}", title);
+                    if let Some(client) = &source_client
+                        && let Err(e) = client
+                            .send_buf(
+                                &data
+                                    .set_command(RexCommand::TitleReturn)
+                                    .set_retcode(RetCode::NoTargetAvailable)
+                                    .serialize(),
+                            )
+                            .await
+                    {
+                        warn!("Error sending to client: {}", e);
+                    };
                 }
             }
             RexCommand::TitleReturn => todo!(),
@@ -218,6 +233,18 @@ impl QuicServer {
 
                 if !has_target {
                     warn!("No client found for title: {}", title);
+                    if let Some(client) = &source_client
+                        && let Err(e) = client
+                            .send_buf(
+                                &data
+                                    .set_command(RexCommand::GroupReturn)
+                                    .set_retcode(RetCode::NoTargetAvailable)
+                                    .serialize(),
+                            )
+                            .await
+                    {
+                        warn!("Error sending to client: {}", e);
+                    };
                 }
             }
             RexCommand::GroupReturn => todo!(),
@@ -245,6 +272,18 @@ impl QuicServer {
 
                 if !has_target {
                     warn!("No client found for title: {}", title);
+                    if let Some(client) = &source_client
+                        && let Err(e) = client
+                            .send_buf(
+                                &data
+                                    .set_command(RexCommand::CastReturn)
+                                    .set_retcode(RetCode::NoTargetAvailable)
+                                    .serialize(),
+                            )
+                            .await
+                    {
+                        warn!("Error sending to client: {}", e);
+                    };
                 }
             }
             RexCommand::CastReturn => todo!(),
@@ -283,22 +322,11 @@ impl QuicServer {
             }
             RexCommand::LoginReturn => todo!(),
             RexCommand::Check => {
-                let mut snd = match conn.open_uni().await {
-                    Ok(snd) => snd,
-                    Err(e) => {
-                        warn!("Error opening uni stream: {}", e);
-                        return;
-                    }
-                };
-                if let Err(e) = snd
-                    .write_all(&data.set_command(RexCommand::CheckReturn).serialize())
+                if let Err(e) = self
+                    .send_buf_once(conn, &data.set_command(RexCommand::CheckReturn).serialize())
                     .await
                 {
                     warn!("Error sending check return: {}", e);
-                };
-                debug!("Sent check return to {}", conn.remote_address());
-                if let Err(e) = snd.finish() {
-                    warn!("Error finishing check return: {}", e);
                 }
             }
             RexCommand::CheckReturn => todo!(),
@@ -333,6 +361,14 @@ impl QuicServer {
             }
             RexCommand::DelTitleReturn => todo!(),
         }
+    }
+
+    /// 新开一个连接，发送后就关闭
+    async fn send_buf_once(&self, conn: &Connection, buf: &[u8]) -> Result<()> {
+        let mut snd = conn.open_uni().await?;
+        snd.write_all(buf).await?;
+        snd.finish()?;
+        Ok(())
     }
 
     async fn add_client(&self, client: Arc<RexClient>) {
