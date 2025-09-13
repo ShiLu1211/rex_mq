@@ -1,14 +1,3 @@
-mod client;
-mod client_handler;
-mod command;
-mod common;
-mod data;
-mod handler;
-mod quic_client;
-mod quic_sender;
-mod quic_server;
-mod sender;
-
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -20,13 +9,8 @@ use async_trait::async_trait;
 use tokio::time::sleep;
 use tracing::info;
 
-use crate::{
-    client::RexClient,
-    client_handler::RexClientHandler,
-    command::RexCommand,
-    data::{RexData, RexDataBuilder},
-    quic_client::QuicClient,
-    quic_server::QuicServer,
+use rex_mq::{
+    QuicClient, QuicServer, RexClient, RexClientHandler, RexCommand, RexData, RexDataBuilder,
 };
 
 #[tokio::main]
@@ -98,11 +82,11 @@ async fn main() -> Result<()> {
     server.close().await;
 
     info!("Connections closed, waiting for port release...");
-    sleep(Duration::from_secs(5)).await;
+    sleep(Duration::from_secs(1)).await;
     drop(client_s);
     drop(client_r);
     drop(server);
-    sleep(Duration::from_secs(5)).await;
+    sleep(Duration::from_secs(1)).await;
 
     let _server = QuicServer::open(server_addr).await?;
 

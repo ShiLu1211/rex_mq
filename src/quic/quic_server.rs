@@ -18,7 +18,7 @@ use crate::{
     command::RexCommand,
     common::now_secs,
     data::{RetCode, RexData},
-    quic_sender::QuicSender,
+    quic::QuicSender,
 };
 
 pub struct QuicServer {
@@ -228,6 +228,7 @@ impl QuicServer {
                     } else {
                         debug!("Sent group message to client ID: {}", client.id());
                         has_target = true;
+                        break;
                     }
                 }
 

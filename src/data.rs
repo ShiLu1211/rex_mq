@@ -72,6 +72,7 @@ impl RetCode {
             5000 => Some(RetCode::ServiceUnavailable),
             5001 => Some(RetCode::MaintenanceMode),
             5002 => Some(RetCode::VersionMismatch),
+            5003 => Some(RetCode::NoTargetAvailable),
             _ => None,
         }
     }
@@ -352,7 +353,7 @@ impl RexData {
     pub(self) fn header_ext(&self) -> &Option<RexHeaderExt> {
         &self.header_ext
     }
-    pub fn data(&self) -> &BytesMut {
+    pub fn data(&self) -> &[u8] {
         &self.data
     }
     pub fn data_mut(&mut self) -> &mut BytesMut {

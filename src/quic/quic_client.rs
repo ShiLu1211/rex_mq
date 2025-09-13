@@ -27,7 +27,7 @@ use crate::{
     command::RexCommand,
     common::{new_uuid, now_secs},
     data::RexData,
-    quic_sender::QuicSender,
+    quic::QuicSender,
 };
 
 pub struct QuicClient {
@@ -43,8 +43,11 @@ pub struct QuicClient {
     client_config: ClientConfig,
     client_handler: Arc<dyn RexClientHandler>,
 
+    // 状态
     status: AtomicBool,
+    shutdown: AtomicBool,
 
+    // 心跳
     idle_timeout: u64,
     pong_wait: u64,
 }
@@ -71,6 +74,7 @@ impl QuicClient {
             client_config,
             client_handler: handler,
             status: AtomicBool::new(false),
+            shutdown: AtomicBool::new(false),
             idle_timeout: 10,
             pong_wait: 5,
         }))
@@ -110,6 +114,7 @@ impl QuicClient {
     }
 
     pub async fn close(&self) {
+        self.shutdown.store(true, Ordering::SeqCst);
         if let Some(client) = self.get_client().await
             && let Err(e) = client.close().await
         {
@@ -185,7 +190,14 @@ impl QuicClient {
     async fn receiving_task(&self) {
         info!("Starting receiver task");
 
+        let mut backoff = 1; // 初始退避时间
+
         loop {
+            if self.shutdown.load(Ordering::SeqCst) {
+                info!("Shutdown requested, stop receiving_task");
+                break;
+            }
+
             let conn = {
                 let conn_guard = self.conn.read().await;
                 conn_guard.clone()
@@ -195,6 +207,8 @@ impl QuicClient {
                 match conn.accept_uni().await {
                     Ok(mut rcv) => {
                         debug!("Accepted incoming stream from server");
+
+                        backoff = 1;
 
                         // 处理单个流的所有消息
                         loop {
@@ -220,13 +234,17 @@ impl QuicClient {
             }
 
             if !self.status.load(Ordering::SeqCst) {
-                info!("Attempting to reconnect...");
-                if let Err(e) = self.connect().await {
-                    warn!("Connection error: {}", e);
-                    sleep(Duration::from_secs(1)).await;
-                    continue;
-                } else {
-                    sleep(Duration::from_millis(100)).await;
+                info!("Attempting to reconnect in {backoff}s...");
+                sleep(Duration::from_secs(backoff)).await;
+
+                match self.connect().await {
+                    Ok(_) => {
+                        backoff = 1; // 成功重连 -> 重置退避
+                    }
+                    Err(e) => {
+                        warn!("Reconnect failed: {}", e);
+                        backoff = (backoff * 2).min(60); // 指数退避，最多 60s
+                    }
                 }
             }
         }
@@ -235,7 +253,13 @@ impl QuicClient {
     }
 
     async fn heartbeat_task(&self, interval: u64) {
+        let mut backoff = 1;
         loop {
+            if self.shutdown.load(Ordering::SeqCst) {
+                info!("Shutdown requested, stop heartbeat task");
+                break;
+            }
+
             sleep(Duration::from_secs(interval)).await;
             let Some(client) = self.get_client().await else {
                 warn!("No client available for heartbeat");
@@ -245,6 +269,7 @@ impl QuicClient {
             let last = client.last_recv();
             let idle = now_secs().saturating_sub(last);
             if idle < self.idle_timeout {
+                backoff = 1; // 有数据 -> 重置退避
                 // 最近已经收到数据，不需要发心跳
                 continue;
             }
@@ -264,7 +289,14 @@ impl QuicClient {
                         if let Err(e) = s.write_all(&ping).await {
                             warn!("Heartbeat write failed: {}", e);
                             let _ = s.finish();
-                            let _ = self.connect().await;
+                            // 重连带退避
+                            sleep(Duration::from_secs(backoff)).await;
+                            if let Err(e) = self.connect().await {
+                                warn!("Reconnect after heartbeat failed: {}", e);
+                                backoff = (backoff * 2).min(60);
+                            } else {
+                                backoff = 1;
+                            }
                             continue;
                         }
                         let _ = s.finish();
@@ -275,15 +307,30 @@ impl QuicClient {
                         sleep(Duration::from_secs(self.pong_wait)).await;
                         let after = client.last_recv();
                         if after <= before {
-                            warn!("No response after heartbeat, trigger reconnect");
-                            let _ = self.connect().await;
+                            warn!(
+                                "No response after heartbeat, trigger reconnect in {backoff}s..."
+                            );
+                            sleep(Duration::from_secs(backoff)).await;
+                            if let Err(e) = self.connect().await {
+                                warn!("Reconnect after heartbeat failed: {}", e);
+                                backoff = (backoff * 2).min(60);
+                            } else {
+                                backoff = 1;
+                            }
                         } else {
                             debug!("Pong (or other data) received, connection healthy");
+                            backoff = 1;
                         }
                     }
                     Err(e) => {
                         warn!("Heartbeat open_uni failed: {}", e);
-                        let _ = self.connect().await;
+                        sleep(Duration::from_secs(backoff)).await;
+                        if let Err(e) = self.connect().await {
+                            warn!("Reconnect after heartbeat failed: {}", e);
+                            backoff = (backoff * 2).min(60);
+                        } else {
+                            backoff = 1;
+                        }
                         continue;
                     }
                 }
