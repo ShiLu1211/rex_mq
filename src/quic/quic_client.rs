@@ -228,7 +228,6 @@ impl QuicClient {
                     Err(e) => {
                         warn!("Error accepting stream: {}", e);
                         self.status.store(false, Ordering::SeqCst);
-                        break;
                     }
                 }
             }

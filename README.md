@@ -17,3 +17,7 @@ client handler impl
 
 - 2025.9.6 add server group and cast \
 fix client heartbeat update timestamp when send ok or recv 
+
+- 2025.9.8 add retcode back error
+
+- 2025.9.13 fix group, add test and refactor 

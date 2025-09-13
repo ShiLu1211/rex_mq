@@ -124,29 +124,28 @@ impl QuicServer {
 
 impl QuicServer {
     async fn handle_connection(&self, conn: Connection) {
-        info!("Handling new connection");
+        let addr = conn.remote_address();
+        info!("Handling new connection: {}", addr);
+
         loop {
             match conn.accept_uni().await {
                 Ok(mut rcv) => {
                     debug!("Accepted incoming stream");
-                    // 使用长度前缀帧协议，在一个流上可以读多条消息
-                    loop {
-                        let mut data = match RexData::read_from_quinn_stream(&mut rcv).await {
-                            Ok(data) => data,
-                            Err(e) => {
-                                warn!("Error reading from stream: {}", e);
-                                break;
-                            }
-                        };
+                    while let Ok(mut data) = RexData::read_from_quinn_stream(&mut rcv).await {
                         self.handle_data(&mut data, &conn).await;
                     }
                 }
                 Err(e) => {
-                    warn!("Error accepting stream: {}", e);
+                    warn!("Connection {} closed or error: {}", addr, e);
                     break;
                 }
             }
         }
+
+        // 从 conns 里移除
+        let mut conns = self.conns.lock().await;
+        conns.retain(|c| c.stable_id() != conn.stable_id());
+        info!("Connection {} removed from list", addr);
     }
 
     async fn handle_data(&self, data: &mut RexData, conn: &Connection) {
@@ -198,7 +197,6 @@ impl QuicServer {
                     };
                 }
             }
-            RexCommand::TitleReturn => todo!(),
             RexCommand::Group => {
                 let title = data.title().unwrap_or_default().to_string();
                 info!("Received group: {}", title);
@@ -248,7 +246,6 @@ impl QuicServer {
                     };
                 }
             }
-            RexCommand::GroupReturn => todo!(),
             RexCommand::Cast => {
                 let title = data.title().unwrap_or_default().to_string();
                 info!("Received cast: {}", title);
@@ -287,7 +284,6 @@ impl QuicServer {
                     };
                 }
             }
-            RexCommand::CastReturn => todo!(),
             RexCommand::Login => {
                 let snd = match conn.open_uni().await {
                     Ok(snd) => snd,
@@ -321,7 +317,6 @@ impl QuicServer {
                     };
                 }
             }
-            RexCommand::LoginReturn => todo!(),
             RexCommand::Check => {
                 if let Err(e) = self
                     .send_buf_once(conn, &data.set_command(RexCommand::CheckReturn).serialize())
@@ -330,7 +325,6 @@ impl QuicServer {
                     warn!("Error sending check return: {}", e);
                 }
             }
-            RexCommand::CheckReturn => todo!(),
             RexCommand::RegTitle => {
                 let title = data.data_as_string_lossy();
                 if let Some(client) = &source_client {
@@ -345,7 +339,6 @@ impl QuicServer {
                     warn!("No client found for registration");
                 }
             }
-            RexCommand::RegTitleReturn => todo!(),
             RexCommand::DelTitle => {
                 let title = data.data_as_string_lossy();
                 if let Some(client) = &source_client {
@@ -360,7 +353,9 @@ impl QuicServer {
                     warn!("No client found for registration");
                 }
             }
-            RexCommand::DelTitleReturn => todo!(),
+            _ => {
+                debug!("Received command: {:?}", data.header().command());
+            }
         }
     }
 
