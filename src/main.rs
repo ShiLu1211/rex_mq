@@ -1,132 +1,282 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::Arc,
-    time::Duration,
+    net::SocketAddr,
+    sync::{Arc, LazyLock},
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
-use async_trait::async_trait;
-use tokio::time::sleep;
-use tracing::info;
+use bytes::{Bytes, BytesMut};
+use clap::Parser;
+use hdrhistogram::Histogram;
+use rand::{Rng, distr::Alphanumeric, rng};
+use tokio::{sync::Mutex, time::sleep};
 
 use rex_mq::{
-    QuicClient, QuicServer, RexClient, RexClientHandler, RexCommand, RexData, RexDataBuilder,
+    QuicClient, QuicServer, RexClient, RexClientHandler, RexCommand, RexData, now_micros,
+    timestamp, timestamp_data,
 };
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // 初始化日志
-    tracing_subscriber::fmt::init();
+#[derive(clap::Parser)]
+#[command(
+    name = "rex-cli",
+    version = "0.1.0",
+    author = "ShiLu1211",
+    about = "rex_mq"
+)]
+#[command(propagate_version = true)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+}
 
-    let port = 8881;
-    let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
+#[derive(clap::Subcommand)]
+pub enum Commands {
+    Server(ServerArgs),
+    Recv(RecvArgs),
+    Send(SendArgs),
+    Bench(BenchArgs),
+}
 
-    // 启动服务器
-    let server = QuicServer::open(server_addr).await?;
-    info!("Server started on {}", server_addr);
+#[derive(clap::Args)]
+#[command(about = "rex server")]
+pub struct ServerArgs {
+    /// ip:port
+    #[arg(short, long)]
+    pub address: String,
+}
 
-    sleep(Duration::from_secs(1)).await;
+#[derive(clap::Args)]
+#[command(about = "rex recv client")]
+pub struct RecvArgs {
+    /// 服务端地址
+    #[arg(short, long)]
+    address: String,
+    /// 接收title, 多个用;隔开
+    #[arg(short, long)]
+    titles: String,
+    /// 是否开启tps延迟打印, 不开启则打印接收到的内容
+    #[arg(short, long, default_value_t = false)]
+    bench: bool,
+}
 
-    // 创建客户端（自动启动接收任务）
-    let client_r = QuicClient::new(server_addr, "one".into(), Arc::new(RcvClientHandler)).await?;
-    let client_r = client_r.open().await?;
-    info!("Client connected to server");
+#[derive(clap::Args)]
+#[command(about = "rex send client")]
+pub struct SendArgs {
+    /// 服务端地址
+    #[arg(short, long)]
+    address: String,
+    /// 发送类型 A单播 P组播 C广播
+    #[arg(short='y', long, value_parser=["title", "group", "cast"], default_value="title")]
+    typ: String,
+    /// 发送title
+    #[arg(short, long)]
+    title: String,
+    /// 发送内容
+    #[arg(short, long)]
+    content: String,
+    /// 发送次数, 默认发送1次
+    #[arg(short = 'u', long, default_value_t = 1)]
+    count: usize,
+}
 
-    let client_s = QuicClient::new(server_addr, "".into(), Arc::new(SndClientHandler)).await?;
-    let client_s = client_s.open().await?;
-    info!("Client connected to server");
+#[derive(clap::Args)]
+#[command(about = "lgx bench client")]
+pub struct BenchArgs {
+    /// 服务端地址
+    #[arg(short, long)]
+    address: String,
+    /// 发送类型 A单播 P组播 C广播
+    #[arg(short='y', long, value_parser=["title", "group", "cast"], default_value="title")]
+    typ: String,
+    /// 发送title
+    #[arg(short, long)]
+    title: String,
+    // 每次发送长度(>16), 默认1024
+    #[arg(short, long, default_value_t = 1024)]
+    len: usize,
+    // 发送间隔(微秒), 默认3微秒
+    #[arg(short, long, default_value_t = 3)]
+    interval: u128,
+    // 发送模式 消息1,2,3递增 对应recv bench=false的情况
+    #[arg(short, long, default_value_t = false)]
+    bench: bool,
+}
 
-    // 客户端持续接收消息（后台任务已启动）
+pub async fn start_server(args: ServerArgs) -> Result<()> {
+    let address = args.address.parse::<SocketAddr>()?;
+    let _server = QuicServer::open(address).await?;
 
-    // 模拟用户交互：发送10条消息
-    for i in 0..10 {
-        info!("USER: Sending message {}", i);
-        let mut data = RexDataBuilder::new(RexCommand::Title)
-            .title("one")
-            .data_from_slice(format!("Hello from client: {}", i).as_bytes())
-            .build();
-        client_s.send_data(&mut data).await?;
-        sleep(Duration::from_secs(1)).await;
+    loop {
+        sleep(Duration::from_millis(1000)).await;
     }
+}
 
-    for i in 0..10 {
-        info!("USER: Sending message {}", i);
-        let mut data = RexDataBuilder::new(RexCommand::Group)
-            .title("one")
-            .data_from_slice(format!("Hello from client: {}", i).as_bytes())
-            .build();
-        client_s.send_data(&mut data).await?;
-        sleep(Duration::from_secs(1)).await;
+pub async fn start_recv(args: RecvArgs) -> Result<()> {
+    let address = args.address.parse::<SocketAddr>()?;
+    let client = QuicClient::new(
+        address,
+        args.titles,
+        Arc::new(RcvClientHandler::new(args.bench)),
+    )
+    .await?;
+    let _client = client.open().await?;
+
+    if args.bench {
+        disp_metric().await;
+    } else {
+        loop {
+            sleep(Duration::from_millis(1000)).await;
+        }
     }
-
-    for i in 0..10 {
-        info!("USER: Sending message {}", i);
-        let mut data = RexDataBuilder::new(RexCommand::Cast)
-            .title("one")
-            .data_from_slice(format!("Hello from client: {}", i).as_bytes())
-            .build();
-        client_s.send_data(&mut data).await?;
-        sleep(Duration::from_secs(1)).await;
-    }
-
-    info!("USER: Finished sending messages");
-
-    // 等待一段时间让客户端接收剩余消息
-    sleep(Duration::from_secs(2)).await;
-
-    // 关闭连接
-    client_s.close().await;
-    sleep(Duration::from_secs(1)).await;
-    client_r.close().await;
-    sleep(Duration::from_secs(1)).await;
-    server.close().await;
-
-    info!("Connections closed, waiting for port release...");
-    sleep(Duration::from_secs(1)).await;
-    drop(client_s);
-    drop(client_r);
-    drop(server);
-    sleep(Duration::from_secs(1)).await;
-
-    let _server = QuicServer::open(server_addr).await?;
-
     Ok(())
 }
 
-struct RcvClientHandler;
+pub async fn start_send(args: SendArgs) -> Result<()> {
+    let address = args.address.parse::<SocketAddr>()?;
+    let client = QuicClient::new(address, "".to_string(), Arc::new(SndClientHandler)).await?;
+    let _client = client.open().await?;
+    Ok(())
+}
 
-#[async_trait]
+pub async fn start_bench(args: BenchArgs) -> Result<()> {
+    let address = args.address.parse::<SocketAddr>()?;
+    let client = QuicClient::new(address, "".to_string(), Arc::new(SndClientHandler)).await?;
+    let client = client.open().await?;
+
+    let command = match args.typ.as_str() {
+        "title" => RexCommand::Title,
+        "group" => RexCommand::Group,
+        "cast" => RexCommand::Cast,
+        _ => panic!("invalid type"),
+    };
+    let title = args.title;
+
+    let buf: Vec<u8> = rng().sample_iter(&Alphanumeric).take(args.len).collect();
+    let mut cnt = 0;
+
+    loop {
+        let now = Instant::now();
+        let msg = timestamp_data(buf.clone());
+        cnt += 1;
+        let mut data = if args.bench {
+            let msg_bytes = Bytes::from(msg);
+            let msg_bytesmut = BytesMut::from(msg_bytes);
+            RexData::new_with_title(command, 0, 0, title.clone(), msg_bytesmut)
+        } else {
+            RexData::new_with_title(
+                command,
+                0,
+                0,
+                title.clone(),
+                cnt.to_string().as_bytes().into(),
+            )
+        };
+
+        if client.send_data(&mut data).await.is_err() {};
+
+        loop {
+            if now.elapsed().as_micros() > args.interval {
+                break;
+            }
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    // 初始化日志
+    // tracing_subscriber::fmt::init();
+    let cli = Cli::parse();
+
+    if let Some(subcommand) = cli.command {
+        let _ = match subcommand {
+            Commands::Server(args) => {
+                let _ = start_server(args).await;
+                Ok(())
+            }
+            Commands::Recv(args) => start_recv(args).await,
+            Commands::Send(args) => start_send(args).await,
+            Commands::Bench(args) => start_bench(args).await,
+        };
+    }
+}
+
+static METRIC: LazyLock<Mutex<Histogram<u64>>> =
+    LazyLock::new(|| Mutex::new(Histogram::<u64>::new(3).unwrap()));
+
+pub async fn disp_metric() {
+    loop {
+        sleep(Duration::from_secs(1)).await;
+        let hist = {
+            let record = METRIC.lock().await;
+            record.clone()
+        };
+        println!(
+            "tps:{} mean:{} min:{} p50:{} p90:{} p95:{} p98:{} p99:{} max:{}",
+            hist.len(),
+            hist.mean(),
+            hist.min(),
+            hist.value_at_quantile(0.50),
+            hist.value_at_quantile(0.90),
+            hist.value_at_quantile(0.95),
+            hist.value_at_quantile(0.98),
+            hist.value_at_quantile(0.99),
+            hist.max(),
+        );
+        {
+            let mut hist = METRIC.lock().await;
+            hist.reset();
+        }
+    }
+}
+
+struct RcvClientHandler {
+    pub bench: bool,
+}
+
+impl RcvClientHandler {
+    pub fn new(bench: bool) -> Self {
+        Self { bench }
+    }
+}
+
+#[async_trait::async_trait]
 impl RexClientHandler for RcvClientHandler {
     async fn login_ok(&self, client: Arc<RexClient>, _data: &RexData) -> Result<()> {
-        info!("RcvHandler: Login OK for client ID {}", client.id());
+        println!("recv client login ok: [{}]", client.id());
         Ok(())
     }
 
-    async fn handle(&self, client: Arc<RexClient>, data: &RexData) -> Result<()> {
-        info!(
-            "RcvHandler: Received data for client ID {}: {:?}",
-            client.id(),
-            data.data()
-        );
+    async fn handle(&self, _client: Arc<RexClient>, data: &RexData) -> Result<()> {
+        if self.bench {
+            let command = data.header().command();
+            if command == RexCommand::Title
+                || command == RexCommand::Group
+                || command == RexCommand::Cast
+            {
+                let now = now_micros();
+                let latency = now - timestamp(data.data());
+                let mut record = METRIC.lock().await;
+                record.record(latency as u64).unwrap();
+            }
+        } else {
+            println!("recv: {}", data.data_as_string_lossy());
+        }
         Ok(())
     }
 }
 
 struct SndClientHandler;
 
-#[async_trait]
+#[async_trait::async_trait]
 impl RexClientHandler for SndClientHandler {
     async fn login_ok(&self, client: Arc<RexClient>, _data: &RexData) -> Result<()> {
-        info!("SndHandler: Login OK for client ID {}", client.id());
+        println!("send client login ok: [{}]", client.id());
         Ok(())
     }
 
-    async fn handle(&self, client: Arc<RexClient>, data: &RexData) -> Result<()> {
-        info!(
-            "SndHandler: Received data for client ID {}: {:?}",
-            client.id(),
-            data.data()
-        );
+    async fn handle(&self, _client: Arc<RexClient>, data: &RexData) -> Result<()> {
+        println!("send received: {}", data.data_as_string_lossy());
         Ok(())
     }
 }

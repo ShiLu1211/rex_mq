@@ -11,6 +11,9 @@ mod tests {
 
     use crate::common::TestFactory;
 
+    /**
+     * 重连测试 server重启
+     */
     #[tokio::test(flavor = "multi_thread")]
     async fn connect_test() -> Result<()> {
         let ss = TestFactory::default();
@@ -30,11 +33,11 @@ mod tests {
         server.close().await;
         sleep(Duration::from_secs(1)).await;
         drop(server);
-        sleep(Duration::from_secs(15)).await;
+        sleep(Duration::from_secs(1)).await;
 
         let server = ss.create_server().await?;
 
-        sleep(Duration::from_secs(10)).await;
+        sleep(Duration::from_secs(2)).await;
 
         let a = [b'a'; 1024];
         client2.send(RexCommand::Title, "one", &a).await.unwrap();

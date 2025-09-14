@@ -11,6 +11,7 @@ pub use crate::{
     client::RexClient,
     client_handler::RexClientHandler,
     command::RexCommand,
-    data::{RexData, RexDataBuilder, RetCode},
+    common::*,
+    data::{RetCode, RexData, RexDataBuilder},
     quic::{QuicClient, QuicServer},
 };

@@ -21,3 +21,6 @@ fix client heartbeat update timestamp when send ok or recv
 - 2025.9.8 add retcode back error
 
 - 2025.9.13 fix group, add test and refactor 
+
+- 2025.9.14 add bench \
+todo find why client reconnect when nothing recv and send
