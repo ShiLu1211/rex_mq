@@ -187,10 +187,9 @@ impl QuicClient {
     }
 
     // 🔥 核心方法：持续接收服务器消息
-    async fn receiving_task(&self) {
+    async fn receiving_task(self: Arc<Self>) {
         info!("Starting receiver task");
-
-        let mut backoff = 1; // 初始退避时间
+        let mut backoff = 1;
 
         loop {
             if self.shutdown.load(Ordering::SeqCst) {
@@ -207,42 +206,61 @@ impl QuicClient {
                 match conn.accept_uni().await {
                     Ok(mut rcv) => {
                         debug!("Accepted incoming stream from server");
-
                         backoff = 1;
 
-                        // 处理单个流的所有消息
-                        loop {
-                            let data = match RexData::read_from_quinn_stream(&mut rcv).await {
-                                Ok(data) => data,
-                                Err(e) => {
-                                    warn!("Error reading from stream: {}", e);
-                                    break;
-                                }
-                            };
+                        // 🔥 关键：一旦成功接收流，立即设置状态为连接正常
+                        self.status.store(true, Ordering::SeqCst);
 
-                            if let Some(client) = self.get_client().await {
-                                self.handle_received_data(&client, &data).await;
+                        let self_clone = self.clone();
+                        tokio::spawn(async move {
+                            loop {
+                                match RexData::read_from_quinn_stream(&mut rcv).await {
+                                    Ok(data) => {
+                                        if let Some(client) = self_clone.get_client().await {
+                                            self_clone.handle_received_data(&client, &data).await;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Error reading from stream: {}", e);
+                                        // 🔥 单个流出错不应该影响整体连接状态
+                                        break;
+                                    }
+                                }
                             }
-                        }
+                            debug!("Stream task ended");
+                        });
                     }
                     Err(e) => {
                         warn!("Error accepting stream: {}", e);
                         self.status.store(false, Ordering::SeqCst);
+
+                        // 🔥 accept_uni 失败才需要重连
+                        info!("Attempting to reconnect in {backoff}s...");
+                        sleep(Duration::from_secs(backoff)).await;
+
+                        match self.connect().await {
+                            Ok(_) => {
+                                backoff = 1;
+                            }
+                            Err(e) => {
+                                warn!("Reconnect failed: {}", e);
+                                backoff = (backoff * 2).min(60);
+                            }
+                        }
                     }
                 }
-            }
-
-            if !self.status.load(Ordering::SeqCst) {
-                info!("Attempting to reconnect in {backoff}s...");
+            } else {
+                // 无连接时尝试重连
+                info!("No connection, attempting to reconnect in {backoff}s...");
                 sleep(Duration::from_secs(backoff)).await;
 
                 match self.connect().await {
                     Ok(_) => {
-                        backoff = 1; // 成功重连 -> 重置退避
+                        backoff = 1;
                     }
                     Err(e) => {
                         warn!("Reconnect failed: {}", e);
-                        backoff = (backoff * 2).min(60); // 指数退避，最多 60s
+                        backoff = (backoff * 2).min(60);
                     }
                 }
             }

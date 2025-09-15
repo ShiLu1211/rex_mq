@@ -74,7 +74,7 @@ impl QuicServer {
             let server_clone = server.clone();
             async move {
                 let check_interval = Duration::from_secs(15); // 检查频率
-                let client_timeout = 30; // 客户端超时时间（秒）
+                let client_timeout = 45; // 客户端超时时间（秒）
                 let mut shutdown_rx = shutdown_rx;
 
                 loop {
@@ -123,7 +123,7 @@ impl QuicServer {
 }
 
 impl QuicServer {
-    async fn handle_connection(&self, conn: Connection) {
+    async fn handle_connection(self: Arc<Self>, conn: Connection) {
         let addr = conn.remote_address();
         info!("Handling new connection: {}", addr);
 
@@ -131,9 +131,15 @@ impl QuicServer {
             match conn.accept_uni().await {
                 Ok(mut rcv) => {
                     debug!("Accepted incoming stream");
-                    while let Ok(mut data) = RexData::read_from_quinn_stream(&mut rcv).await {
-                        self.handle_data(&mut data, &conn).await;
-                    }
+                    let server_clone = self.clone();
+                    let conn_clone = conn.clone();
+
+                    tokio::spawn(async move {
+                        while let Ok(mut data) = RexData::read_from_quinn_stream(&mut rcv).await {
+                            server_clone.handle_data(&mut data, &conn_clone).await;
+                        }
+                        debug!("Stream finished");
+                    });
                 }
                 Err(e) => {
                     warn!("Connection {} closed or error: {}", addr, e);
@@ -160,7 +166,7 @@ impl QuicServer {
         match data.header().command() {
             RexCommand::Title => {
                 let title = data.title().unwrap_or_default().to_string();
-                info!("Received title: {}", title);
+                debug!("Received title: {}", title);
 
                 let mut has_target = false;
 
@@ -199,7 +205,7 @@ impl QuicServer {
             }
             RexCommand::Group => {
                 let title = data.title().unwrap_or_default().to_string();
-                info!("Received group: {}", title);
+                debug!("Received group: {}", title);
 
                 let mut has_target = false;
 
@@ -248,7 +254,7 @@ impl QuicServer {
             }
             RexCommand::Cast => {
                 let title = data.title().unwrap_or_default().to_string();
-                info!("Received cast: {}", title);
+                debug!("Received cast: {}", title);
 
                 let mut has_target = false;
 
@@ -318,14 +324,18 @@ impl QuicServer {
                 }
             }
             RexCommand::Check => {
+                debug!("Received check");
                 if let Err(e) = self
                     .send_buf_once(conn, &data.set_command(RexCommand::CheckReturn).serialize())
                     .await
                 {
                     warn!("Error sending check return: {}", e);
+                } else {
+                    debug!("Sent check return");
                 }
             }
             RexCommand::RegTitle => {
+                debug!("Received reg title");
                 let title = data.data_as_string_lossy();
                 if let Some(client) = &source_client {
                     client.insert_title(title);
@@ -340,6 +350,7 @@ impl QuicServer {
                 }
             }
             RexCommand::DelTitle => {
+                debug!("Received del title");
                 let title = data.data_as_string_lossy();
                 if let Some(client) = &source_client {
                     client.remove_title(&title);

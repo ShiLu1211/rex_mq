@@ -24,3 +24,5 @@ fix client heartbeat update timestamp when send ok or recv
 
 - 2025.9.14 add bench \
 todo find why client reconnect when nothing recv and send
+
+- 2025.9.15 fix recv block on cannot new stream to read

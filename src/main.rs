@@ -185,7 +185,10 @@ pub async fn start_bench(args: BenchArgs) -> Result<()> {
 #[tokio::main]
 async fn main() {
     // 初始化日志
-    // tracing_subscriber::fmt::init();
+    #[cfg(debug_assertions)]
+    {
+        tracing_subscriber::fmt::init();
+    }
     let cli = Cli::parse();
 
     if let Some(subcommand) = cli.command {
