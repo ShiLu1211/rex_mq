@@ -1,10 +1,9 @@
-#![allow(dead_code)]
 use std::io;
-use std::mem;
 use std::string::FromUtf8Error;
 
 use anyhow::Result;
 use bytes::{Buf, BufMut, BytesMut};
+use crc32fast::Hasher as Crc32Hasher;
 use thiserror::Error;
 
 use crate::command::RexCommand;
@@ -127,7 +126,7 @@ pub struct RexHeader {
 impl RexHeader {
     pub fn new(command: RexCommand, source: usize, target: usize) -> Self {
         Self {
-            header_len: mem::size_of::<RexHeader>(),
+            header_len: FIXED_HEADER_LEN,
             header_ext_len: 0,
             data_len: 0,
             command,
@@ -144,7 +143,7 @@ impl RexHeader {
         retcode: RetCode,
     ) -> Self {
         Self {
-            header_len: mem::size_of::<RexHeader>(),
+            header_len: FIXED_HEADER_LEN,
             header_ext_len: 0,
             data_len: 0,
             command,
@@ -203,6 +202,24 @@ impl RexHeader {
     pub fn total_size(&self) -> usize {
         self.header_len + self.header_ext_len + self.data_len
     }
+}
+
+// ===== 新的显式编码帧格式 =====
+// 小端序，字段顺序固定：
+// magic(u32) | version(u16) | flags(u16) |
+// ext_len(u32) | data_len(u32) |
+// command(u32) | source(u64) | target(u64) | retcode(u32) |
+// [ext bytes] | [data bytes] | crc32(u32)
+const MAGIC: u32 = 0x5245584D; // 'REXM'
+const VERSION: u16 = 1;
+const FIXED_HEADER_LEN: usize = 4 + 2 + 2 + 4 + 4 + 4 + 8 + 8 + 4; // 不含crc
+const CRC_LEN: usize = 4;
+
+fn compute_crc32(ext: &[u8], data: &[u8]) -> u32 {
+    let mut hasher = Crc32Hasher::new();
+    hasher.update(ext);
+    hasher.update(data);
+    hasher.finalize()
 }
 
 #[derive(Debug, Clone)]
@@ -417,27 +434,42 @@ impl RexData {
         self.header.set_data_len(self.data.len());
     }
 
-    // 序列化整个数据包
+    // 序列化整个数据包（显式编码 + CRC）
     pub fn serialize(&self) -> BytesMut {
-        let mut buf = BytesMut::new();
-
-        // 序列化主头部
-        let header_bytes = unsafe {
-            std::slice::from_raw_parts(
-                &self.header as *const RexHeader as *const u8,
-                mem::size_of::<RexHeader>(),
-            )
+        let ext_bytes = if let Some(ref ext) = self.header_ext {
+            ext.serialize()
+        } else {
+            BytesMut::new()
         };
-        buf.put_slice(header_bytes);
+        let ext_len = ext_bytes.len() as u32;
+        let data_len = self.data.len() as u32;
 
-        // 序列化扩展头部
-        if let Some(ref ext) = self.header_ext {
-            let ext_bytes = ext.serialize();
+        let crc = compute_crc32(&ext_bytes, &self.data);
+
+        let mut buf =
+            BytesMut::with_capacity(FIXED_HEADER_LEN + ext_bytes.len() + self.data.len() + CRC_LEN);
+
+        // 固定头
+        buf.put_u32_le(MAGIC);
+        buf.put_u16_le(VERSION);
+        buf.put_u16_le(0); // flags 预留
+        buf.put_u32_le(ext_len);
+        buf.put_u32_le(data_len);
+        buf.put_u32_le(self.header.command.as_u32());
+        buf.put_u64_le(self.header.source as u64);
+        buf.put_u64_le(self.header.target as u64);
+        buf.put_u32_le(self.header.retcode.as_u32());
+
+        // 扩展与数据
+        if !ext_bytes.is_empty() {
             buf.put_slice(&ext_bytes);
         }
+        if !self.data.is_empty() {
+            buf.put_slice(&self.data);
+        }
 
-        // 序列化数据部分
-        buf.put_slice(&self.data);
+        // CRC32
+        buf.put_u32_le(crc);
 
         buf
     }
@@ -458,90 +490,136 @@ impl RexData {
         self
     }
 
-    // 反序列化数据包
+    // 反序列化数据包（显式编码 + CRC 校验）
     pub fn deserialize(mut buf: BytesMut) -> Result<Self, RexError> {
-        let header_size = mem::size_of::<RexHeader>();
-
-        // 检查最小长度
-        if buf.len() < header_size {
+        if buf.len() < FIXED_HEADER_LEN + CRC_LEN {
             return Err(RexError::InsufficientData {
-                expected: header_size,
+                expected: FIXED_HEADER_LEN + CRC_LEN,
                 actual: buf.len(),
             });
         }
 
-        // 反序列化主头部
-        let header_bytes = buf.split_to(header_size);
-        let header = unsafe { std::ptr::read(header_bytes.as_ptr() as *const RexHeader) };
-
-        // 验证命令有效性
-        let command_value = header.command.as_u32();
+        // 固定头
+        let magic = buf.get_u32_le();
+        if magic != MAGIC {
+            return Err(RexError::DataCorrupted);
+        }
+        let version = buf.get_u16_le();
+        if version != VERSION {
+            return Err(RexError::VersionMismatch);
+        }
+        let _flags = buf.get_u16_le();
+        let ext_len = buf.get_u32_le() as usize;
+        let data_len = buf.get_u32_le() as usize;
+        let command_value = buf.get_u32_le();
         RexCommand::from_u32(command_value).ok_or(RexError::InvalidCommand { command_value })?;
-
-        // 验证返回码有效性
-        let retcode_value = header.retcode.as_u32();
+        let source = buf.get_u64_le() as usize;
+        let target = buf.get_u64_le() as usize;
+        let retcode_value = buf.get_u32_le();
         RetCode::from_u32(retcode_value).ok_or(RexError::InvalidRetCode { retcode_value })?;
 
-        // 反序列化扩展头部
-        let header_ext = if header.header_ext_len > 0 {
-            if buf.len() < header.header_ext_len {
-                return Err(RexError::InsufficientData {
-                    expected: header.header_ext_len,
-                    actual: buf.len(),
-                });
-            }
+        // 剩余应为 ext + data + crc
+        if buf.len() != ext_len + data_len + CRC_LEN {
+            return Err(RexError::DataLengthMismatch {
+                declared: ext_len + data_len + CRC_LEN,
+                actual: buf.len(),
+            });
+        }
 
-            let mut ext_buf = buf.split_to(header.header_ext_len);
+        let mut ext_buf = if ext_len > 0 {
+            buf.split_to(ext_len)
+        } else {
+            BytesMut::new()
+        };
+        let data_buf = if data_len > 0 {
+            buf.split_to(data_len)
+        } else {
+            BytesMut::new()
+        };
+        let crc_read = buf.get_u32_le();
+
+        let crc_calc = compute_crc32(&ext_buf, &data_buf);
+        if crc_calc != crc_read {
+            return Err(RexError::DataCorrupted);
+        }
+
+        let header_ext = if ext_len > 0 {
             Some(RexHeaderExt::deserialize(&mut ext_buf)?)
         } else {
             None
         };
 
-        // 检查数据长度
-        if buf.len() != header.data_len {
-            return Err(RexError::DataLengthMismatch {
-                declared: header.data_len,
-                actual: buf.len(),
-            });
-        }
+        let mut header =
+            RexHeader::new(RexCommand::from_u32(command_value).unwrap(), source, target);
+        header.set_header_ext_len(ext_len);
+        header.set_data_len(data_len);
+        header.set_retcode(RetCode::from_u32(retcode_value).unwrap());
 
         Ok(Self {
             header,
             header_ext,
-            data: buf,
+            data: data_buf,
         })
     }
 
-    // 从Quinn的RecvStream中读取数据包（异步版本）
+    // 从Quinn的RecvStream中读取数据包（异步版本，显式编码 + CRC）
     pub async fn read_from_quinn_stream(stream: &mut quinn::RecvStream) -> Result<Self, RexError> {
-        // 先读取主头部
-        let mut header_bytes = vec![0u8; mem::size_of::<RexHeader>()];
-        stream.read_exact(&mut header_bytes).await?;
+        // 读取固定头
+        let mut head = vec![0u8; FIXED_HEADER_LEN];
+        stream.read_exact(&mut head).await?;
+        let mut head_buf = BytesMut::from(&head[..]);
 
-        let header = unsafe { std::ptr::read(header_bytes.as_ptr() as *const RexHeader) };
-
-        // 验证命令
-        let command_value = header.command.as_u32();
+        let magic = head_buf.get_u32_le();
+        if magic != MAGIC {
+            return Err(RexError::DataCorrupted);
+        }
+        let version = head_buf.get_u16_le();
+        if version != VERSION {
+            return Err(RexError::VersionMismatch);
+        }
+        let _flags = head_buf.get_u16_le();
+        let ext_len = head_buf.get_u32_le() as usize;
+        let data_len = head_buf.get_u32_le() as usize;
+        let command_value = head_buf.get_u32_le();
         RexCommand::from_u32(command_value).ok_or(RexError::InvalidCommand { command_value })?;
-
-        // 验证返回码
-        let retcode_value = header.retcode.as_u32();
+        let source = head_buf.get_u64_le() as usize;
+        let target = head_buf.get_u64_le() as usize;
+        let retcode_value = head_buf.get_u32_le();
         RetCode::from_u32(retcode_value).ok_or(RexError::InvalidRetCode { retcode_value })?;
 
-        // 读取扩展头部
-        let header_ext = if header.header_ext_len > 0 {
-            let mut ext_bytes = vec![0u8; header.header_ext_len];
+        // 读取扩展与数据
+        let mut ext_bytes = vec![0u8; ext_len];
+        if ext_len > 0 {
             stream.read_exact(&mut ext_bytes).await?;
+        }
+        let mut data_bytes = vec![0u8; data_len];
+        if data_len > 0 {
+            stream.read_exact(&mut data_bytes).await?;
+        }
 
+        // 读取CRC
+        let mut crc_buf = [0u8; 4];
+        stream.read_exact(&mut crc_buf).await?;
+        let mut crc_reader = BytesMut::from(&crc_buf[..]);
+        let crc_read = crc_reader.get_u32_le();
+
+        let crc_calc = compute_crc32(&ext_bytes, &data_bytes);
+        if crc_calc != crc_read {
+            return Err(RexError::DataCorrupted);
+        }
+
+        let mut header =
+            RexHeader::new(RexCommand::from_u32(command_value).unwrap(), source, target);
+        header.set_header_ext_len(ext_len);
+        header.set_data_len(data_len);
+        header.set_retcode(RetCode::from_u32(retcode_value).unwrap());
+
+        let header_ext = if ext_len > 0 {
             let mut ext_buf = BytesMut::from(&ext_bytes[..]);
             Some(RexHeaderExt::deserialize(&mut ext_buf)?)
         } else {
             None
         };
-
-        // 读取数据部分
-        let mut data_bytes = vec![0u8; header.data_len];
-        stream.read_exact(&mut data_bytes).await?;
 
         Ok(Self {
             header,
@@ -650,6 +728,9 @@ pub enum RexError {
     #[error("数据过大: {size} 字节超过限制 {limit} 字节")]
     DataTooLarge { size: usize, limit: usize },
 
+    #[error("数据损坏或CRC校验失败")]
+    DataCorrupted,
+
     #[error("IO错误: {source}")]
     IoError {
         #[from]
@@ -667,6 +748,9 @@ pub enum RexError {
         #[from]
         source: quinn::ReadExactError,
     },
+
+    #[error("协议版本不匹配")]
+    VersionMismatch,
 }
 
 // RexData的构建器模式

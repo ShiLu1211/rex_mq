@@ -89,7 +89,8 @@ async fn main() -> Result<()> {
     sleep(Duration::from_secs(1)).await;
 
     let _server = QuicServer::open(server_addr).await?;
-
+    sleep(Duration::from_secs(1)).await;
+    info!("port refused success");
     Ok(())
 }
 
