@@ -6,7 +6,7 @@ use bytes::{Buf, BufMut, BytesMut};
 use crc32fast::Hasher as Crc32Hasher;
 use thiserror::Error;
 
-use crate::command::RexCommand;
+use crate::RexCommand;
 
 // 定义返回码枚举
 #[repr(u32)]

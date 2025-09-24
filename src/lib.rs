@@ -1,19 +1,16 @@
 mod client;
 mod client_handler;
-mod command;
-mod common;
-mod data;
+pub mod common;
 mod handler;
 mod quic;
+mod rex_data;
 mod sender;
 mod tcp;
 
 pub use crate::{
     client::RexClient,
     client_handler::RexClientHandler,
-    command::RexCommand,
-    common::*,
-    data::{RetCode, RexData, RexDataBuilder},
-    quic::{QuicClient, QuicServer},
-    tcp::{TcpClient, TcpServer},
+    quic::{QuicClient, QuicSender, QuicServer},
+    rex_data::{RetCode, RexCommand, RexData, RexDataBuilder},
+    tcp::{TcpClient, TcpSender, TcpServer},
 };

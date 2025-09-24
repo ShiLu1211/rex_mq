@@ -23,12 +23,8 @@ use tokio::{sync::RwLock, time::sleep};
 use tracing::{debug, info, warn};
 
 use crate::{
-    client::RexClient,
-    client_handler::RexClientHandler,
-    command::RexCommand,
+    QuicSender, RexClient, RexClientHandler, RexCommand, RexData,
     common::{new_uuid, now_secs},
-    data::RexData,
-    quic::QuicSender,
 };
 
 pub struct QuicClient {

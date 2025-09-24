@@ -12,8 +12,7 @@ use dashmap::DashSet;
 use itertools::Itertools;
 
 use crate::{
-    common::{new_uuid, now_secs},
-    force_set_value,
+    common::{force_set_value, new_uuid, now_secs},
     sender::RexSender,
 };
 

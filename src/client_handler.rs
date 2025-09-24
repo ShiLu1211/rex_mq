@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::{client::RexClient, data::RexData};
+use crate::{client::RexClient, rex_data::RexData};
 
 #[async_trait]
 pub trait RexClientHandler: Send + Sync {

@@ -28,3 +28,5 @@ todo find why client reconnect when nothing recv and send
 - 2025.9.15 fix recv block on cannot new stream to read
 
 - 2025.9.23 add crc check and remove unsafe
+
+- 2025.9.24 add tcp and perf data

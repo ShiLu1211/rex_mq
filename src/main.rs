@@ -12,8 +12,8 @@ use rand::{Rng, distr::Alphanumeric, rng};
 use tokio::{sync::Mutex, time::sleep};
 
 use rex_mq::{
-    QuicClient, QuicServer, RexClient, RexClientHandler, RexCommand, RexData, now_micros,
-    timestamp, timestamp_data,
+    QuicClient, QuicServer, RexClient, RexClientHandler, RexCommand, RexData,
+    common::{now_micros, timestamp, timestamp_data},
 };
 
 #[derive(clap::Parser)]
