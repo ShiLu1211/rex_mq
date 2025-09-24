@@ -1,7 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
-use bytes::BytesMut;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 
 use rex_mq::{QuicClient, QuicServer, RexClient, RexClientHandler, RexCommand, RexData};
@@ -26,8 +25,10 @@ impl TestClient {
     }
 
     pub async fn send(&self, command: RexCommand, title: &str, data: &[u8]) -> Result<()> {
-        let mut rex_data =
-            RexData::new_with_title(command, 0, 0, title.into(), BytesMut::from(data));
+        let mut rex_data = RexData::builder(command)
+            .title(title.to_string())
+            .data(data.into())
+            .build();
         self.send_data(&mut rex_data).await
     }
 

@@ -42,3 +42,9 @@ pub fn timestamp_data(data: Vec<u8>) -> Vec<u8> {
 pub fn timestamp(data: &[u8]) -> u128 {
     u128::from_le_bytes(data[0..16].try_into().unwrap())
 }
+
+pub fn force_set_value<T>(p: *const T, v: T) {
+    unsafe {
+        std::ptr::write(p as *mut T, v);
+    }
+}

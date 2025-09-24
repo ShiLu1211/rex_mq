@@ -10,10 +10,10 @@ use anyhow::Result;
 use bytes::BytesMut;
 use dashmap::DashSet;
 use itertools::Itertools;
-use tokio::sync::RwLock;
 
 use crate::{
     common::{new_uuid, now_secs},
+    force_set_value,
     sender::RexSender,
 };
 
@@ -21,23 +21,18 @@ pub struct RexClient {
     id: usize,
     local_addr: SocketAddr,
     titles: DashSet<String>,
-    sender: RwLock<Arc<dyn RexSender>>,
+    sender: Arc<dyn RexSender>,
 
     last_recv: AtomicU64,
 }
 
 impl RexClient {
-    pub fn new(
-        id: usize,
-        local_addr: SocketAddr,
-        title: String,
-        sender: Arc<dyn RexSender>,
-    ) -> Self {
+    pub fn new(id: usize, local_addr: SocketAddr, title: &str, sender: Arc<dyn RexSender>) -> Self {
         RexClient {
             id,
             local_addr,
             titles: title.split(';').map(|s| s.to_string()).collect(),
-            sender: RwLock::new(sender),
+            sender,
             last_recv: AtomicU64::new(now_secs()),
         }
     }
@@ -47,13 +42,13 @@ impl RexClient {
             id: new_uuid(),
             local_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
             titles: title.split(';').map(|s| s.to_string()).collect(),
-            sender: RwLock::new(sender),
+            sender,
             last_recv: AtomicU64::new(now_secs()),
         }
     }
 
     pub async fn send_buf(&self, buf: &BytesMut) -> Result<()> {
-        if let Err(e) = self.sender.write().await.send_buf(buf).await {
+        if let Err(e) = self.sender.send_buf(buf).await {
             return Err(e);
         } else {
             self.update_last_recv();
@@ -62,15 +57,23 @@ impl RexClient {
     }
 
     pub async fn close(&self) -> Result<()> {
-        self.sender.write().await.close().await
+        self.sender.close().await
     }
 
     pub fn id(&self) -> usize {
         self.id
     }
 
-    pub async fn set_sender(&self, sender: Arc<dyn RexSender>) {
-        *self.sender.write().await = sender;
+    pub fn set_id(&self, id: usize) {
+        force_set_value(&self.id, id);
+    }
+
+    pub fn sender(&self) -> Arc<dyn RexSender> {
+        self.sender.clone()
+    }
+
+    pub fn set_sender(&self, sender: Arc<dyn RexSender>) {
+        force_set_value(&self.sender, sender);
     }
 
     pub fn title_str(&self) -> String {
@@ -95,5 +98,9 @@ impl RexClient {
 
     pub fn last_recv(&self) -> u64 {
         self.last_recv.load(Ordering::SeqCst)
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
     }
 }

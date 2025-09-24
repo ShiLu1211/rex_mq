@@ -8,7 +8,8 @@ use std::{
 };
 
 use anyhow::Result;
-use quinn::{Connection, Endpoint, ServerConfig};
+use bytes::{Buf, BytesMut};
+use quinn::{Connection, Endpoint, RecvStream, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::sync::{Mutex, RwLock, oneshot};
 use tracing::{debug, info, warn};
@@ -129,16 +130,16 @@ impl QuicServer {
 
         loop {
             match conn.accept_uni().await {
-                Ok(mut rcv) => {
-                    debug!("Accepted incoming stream");
+                Ok(rcv) => {
+                    debug!("Accepted incoming stream from {}", addr);
                     let server_clone = self.clone();
                     let conn_clone = conn.clone();
 
                     tokio::spawn(async move {
-                        while let Ok(mut data) = RexData::read_from_quinn_stream(&mut rcv).await {
-                            server_clone.handle_data(&mut data, &conn_clone).await;
+                        if let Err(e) = server_clone.handle_stream(rcv, &conn_clone).await {
+                            warn!("Error handling stream from {}: {}", addr, e);
                         }
-                        debug!("Stream finished");
+                        debug!("Stream from {} finished", addr);
                     });
                 }
                 Err(e) => {
@@ -148,10 +149,109 @@ impl QuicServer {
             }
         }
 
-        // 从 conns 里移除
+        // 从连接列表中移除
         let mut conns = self.conns.lock().await;
         conns.retain(|c| c.stable_id() != conn.stable_id());
         info!("Connection {} removed from list", addr);
+    }
+
+    async fn handle_stream(&self, mut stream: RecvStream, conn: &Connection) -> Result<()> {
+        // 方法1: 如果你知道最大消息大小，可以一次性读取
+        // 这种方式适合 QUIC 的消息边界特性
+        // match self.handle_stream_read_to_end(&mut stream, conn).await {
+        //     Ok(_) => return Ok(()),
+        //     Err(e) => {
+        //         debug!("Read-to-end failed, trying streaming approach: {}", e);
+        //         // 如果失败，尝试流式读取
+        //     }
+        // }
+
+        // 方法2: 流式读取（适合大消息或未知大小的消息）
+        self.handle_stream_buffered(&mut stream, conn).await
+    }
+
+    #[allow(dead_code)]
+    async fn handle_stream_read_to_end(
+        &self,
+        stream: &mut RecvStream,
+        conn: &Connection,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // QUIC 流有明确的结束标识，适合一次性读取
+        const MAX_MESSAGE_SIZE: usize = 1024 * 1024; // 1MB 限制
+
+        let data = stream.read_to_end(MAX_MESSAGE_SIZE).await?;
+        if data.is_empty() {
+            return Ok(()); // 空流
+        }
+
+        let buf = BytesMut::from(&data[..]);
+        let (mut rex_data, consumed) = RexData::deserialize(buf)?;
+
+        debug!(
+            "Received complete message: command={:?}, size={} bytes",
+            rex_data.header().command(),
+            consumed
+        );
+
+        self.handle_data(&mut rex_data, conn).await;
+        Ok(())
+    }
+
+    async fn handle_stream_buffered(
+        &self,
+        stream: &mut RecvStream,
+        conn: &Connection,
+    ) -> Result<()> {
+        let mut buffer = BytesMut::new();
+        let mut temp_buf = vec![0u8; 4096];
+
+        loop {
+            match stream.read(&mut temp_buf).await {
+                Ok(Some(n)) => {
+                    buffer.extend_from_slice(&temp_buf[..n]);
+
+                    // 尝试解析完整的数据包
+                    while let Some(parse_result) = RexData::try_deserialize(&buffer) {
+                        match parse_result {
+                            Ok((mut data, consumed_bytes)) => {
+                                debug!(
+                                    "Parsed message: command={:?}, consumed {} bytes",
+                                    data.header().command(),
+                                    consumed_bytes
+                                );
+
+                                buffer.advance(consumed_bytes);
+                                self.handle_data(&mut data, conn).await;
+                            }
+                            Err(e) => {
+                                warn!("Error parsing data from stream: {}", e);
+                                buffer.clear();
+                                return Err(e.into());
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {
+                    // 流结束
+                    debug!("Stream ended");
+                    break;
+                }
+                Err(e) => {
+                    warn!("Error reading from stream: {}", e);
+                    return Err(e.into());
+                }
+            }
+        }
+
+        // 处理缓冲区中剩余的不完整数据
+        if !buffer.is_empty() {
+            warn!(
+                "Stream ended with {} bytes of incomplete data",
+                buffer.len()
+            );
+        }
+
+        Ok(())
     }
 
     async fn handle_data(&self, data: &mut RexData, conn: &Connection) {
@@ -300,7 +400,7 @@ impl QuicServer {
                 };
                 let sender = Arc::new(QuicSender::new(snd));
                 if let Some(client) = &source_client {
-                    client.set_sender(sender.clone()).await;
+                    client.set_sender(sender.clone());
                     if let Err(e) = client
                         .send_buf(&data.set_command(RexCommand::LoginReturn).serialize())
                         .await
@@ -311,7 +411,7 @@ impl QuicServer {
                     let client = Arc::new(RexClient::new(
                         data.header().source(),
                         conn.remote_address(),
-                        String::from_utf8_lossy(data.data()).to_string(),
+                        &data.data_as_string_lossy(),
                         sender,
                     ));
                     self.add_client(client.clone()).await;

@@ -161,15 +161,15 @@ pub async fn start_bench(args: BenchArgs) -> Result<()> {
         let mut data = if args.bench {
             let msg_bytes = Bytes::from(msg);
             let msg_bytesmut = BytesMut::from(msg_bytes);
-            RexData::new_with_title(command, 0, 0, title.clone(), msg_bytesmut)
+            RexData::builder(command)
+                .title(title.clone())
+                .data(msg_bytesmut)
+                .build()
         } else {
-            RexData::new_with_title(
-                command,
-                0,
-                0,
-                title.clone(),
-                cnt.to_string().as_bytes().into(),
-            )
+            RexData::builder(command)
+                .title(title.clone())
+                .data(cnt.to_string().as_bytes().into())
+                .build()
         };
 
         if client.send_data(&mut data).await.is_err() {};

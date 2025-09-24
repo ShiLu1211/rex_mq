@@ -10,7 +10,7 @@ use tokio::time::sleep;
 use tracing::info;
 
 use rex_mq::{
-    QuicClient, QuicServer, RexClient, RexClientHandler, RexCommand, RexData, RexDataBuilder,
+    RexClient, RexClientHandler, RexCommand, RexData, RexDataBuilder, TcpClient, TcpServer,
 };
 
 #[tokio::main]
@@ -22,19 +22,21 @@ async fn main() -> Result<()> {
     let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
 
     // 启动服务器
-    let server = QuicServer::open(server_addr).await?;
+    let server = TcpServer::open(server_addr).await?;
     info!("Server started on {}", server_addr);
 
     sleep(Duration::from_secs(1)).await;
 
     // 创建客户端（自动启动接收任务）
-    let client_r = QuicClient::new(server_addr, "one".into(), Arc::new(RcvClientHandler)).await?;
+    let client_r = TcpClient::new(server_addr, "one".into(), Arc::new(RcvClientHandler)).await?;
     let client_r = client_r.open().await?;
     info!("Client connected to server");
 
-    let client_s = QuicClient::new(server_addr, "".into(), Arc::new(SndClientHandler)).await?;
+    let client_s = TcpClient::new(server_addr, "".into(), Arc::new(SndClientHandler)).await?;
     let client_s = client_s.open().await?;
     info!("Client connected to server");
+
+    sleep(Duration::from_secs(1)).await;
 
     // 客户端持续接收消息（后台任务已启动）
 
@@ -88,7 +90,7 @@ async fn main() -> Result<()> {
     drop(server);
     sleep(Duration::from_secs(1)).await;
 
-    let _server = QuicServer::open(server_addr).await?;
+    let _server = TcpServer::open(server_addr).await?;
     sleep(Duration::from_secs(1)).await;
     info!("port refused success");
     Ok(())

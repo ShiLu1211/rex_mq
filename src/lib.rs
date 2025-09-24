@@ -6,6 +6,7 @@ mod data;
 mod handler;
 mod quic;
 mod sender;
+mod tcp;
 
 pub use crate::{
     client::RexClient,
@@ -14,4 +15,5 @@ pub use crate::{
     common::*,
     data::{RetCode, RexData, RexDataBuilder},
     quic::{QuicClient, QuicServer},
+    tcp::{TcpClient, TcpServer},
 };

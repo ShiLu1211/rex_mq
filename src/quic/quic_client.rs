@@ -8,8 +8,9 @@ use std::{
 };
 
 use anyhow::Result;
+use bytes::{Buf, BytesMut};
 use quinn::{
-    ClientConfig, Connection, Endpoint, crypto::rustls::QuicClientConfig,
+    ClientConfig, Connection, Endpoint, RecvStream, crypto::rustls::QuicClientConfig,
     rustls::crypto::CryptoProvider,
 };
 use rustls::{
@@ -154,14 +155,14 @@ impl QuicClient {
             *conn_guard = Some(conn);
 
             if let Some(existing_client) = client_guard.as_ref() {
-                existing_client.set_sender(Arc::new(sender)).await;
+                existing_client.set_sender(Arc::new(sender));
             } else {
                 let id = new_uuid();
                 let local_addr = self.ep.local_addr()?;
                 let new_client = Arc::new(RexClient::new(
                     id,
                     local_addr,
-                    self.title.read().await.clone(),
+                    &self.title.read().await,
                     Arc::new(sender),
                 ));
                 *client_guard = Some(new_client);
@@ -204,7 +205,7 @@ impl QuicClient {
 
             if let Some(conn) = conn {
                 match conn.accept_uni().await {
-                    Ok(mut rcv) => {
+                    Ok(rcv) => {
                         debug!("Accepted incoming stream from server");
                         backoff = 1;
 
@@ -213,19 +214,8 @@ impl QuicClient {
 
                         let self_clone = self.clone();
                         tokio::spawn(async move {
-                            loop {
-                                match RexData::read_from_quinn_stream(&mut rcv).await {
-                                    Ok(data) => {
-                                        if let Some(client) = self_clone.get_client().await {
-                                            self_clone.handle_received_data(&client, &data).await;
-                                        }
-                                    }
-                                    Err(e) => {
-                                        warn!("Error reading from stream: {}", e);
-                                        // 🔥 单个流出错不应该影响整体连接状态
-                                        break;
-                                    }
-                                }
+                            if let Err(e) = self_clone.handle_stream(rcv).await {
+                                warn!("Error handling stream : {}", e);
                             }
                             debug!("Stream task ended");
                         });
@@ -267,6 +257,100 @@ impl QuicClient {
         }
 
         info!("Receiver task ended");
+    }
+
+    async fn handle_stream(&self, mut stream: RecvStream) -> Result<()> {
+        // 方法1: 如果你知道最大消息大小，可以一次性读取
+        // 这种方式适合 QUIC 的消息边界特性
+        // match self.handle_stream_read_to_end(&mut stream, conn).await {
+        //     Ok(_) => return Ok(()),
+        //     Err(e) => {
+        //         debug!("Read-to-end failed, trying streaming approach: {}", e);
+        //         // 如果失败，尝试流式读取
+        //     }
+        // }
+
+        // 方法2: 流式读取（适合大消息或未知大小的消息）
+        self.handle_stream_buffered(&mut stream).await
+    }
+
+    #[allow(dead_code)]
+    async fn handle_stream_read_to_end(
+        &self,
+        stream: &mut RecvStream,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // QUIC 流有明确的结束标识，适合一次性读取
+        const MAX_MESSAGE_SIZE: usize = 1024 * 1024; // 1MB 限制
+
+        let data = stream.read_to_end(MAX_MESSAGE_SIZE).await?;
+        if data.is_empty() {
+            return Ok(()); // 空流
+        }
+
+        let buf = BytesMut::from(&data[..]);
+        let (rex_data, consumed) = RexData::deserialize(buf)?;
+
+        debug!(
+            "Received complete message: command={:?}, size={} bytes",
+            rex_data.header().command(),
+            consumed
+        );
+
+        self.handle_data(&rex_data).await;
+        Ok(())
+    }
+
+    async fn handle_stream_buffered(&self, stream: &mut RecvStream) -> Result<()> {
+        let mut buffer = BytesMut::new();
+        let mut temp_buf = vec![0u8; 4096];
+
+        loop {
+            match stream.read(&mut temp_buf).await {
+                Ok(Some(n)) => {
+                    buffer.extend_from_slice(&temp_buf[..n]);
+
+                    // 尝试解析完整的数据包
+                    while let Some(parse_result) = RexData::try_deserialize(&buffer) {
+                        match parse_result {
+                            Ok((data, consumed_bytes)) => {
+                                debug!(
+                                    "Parsed message: command={:?}, consumed {} bytes",
+                                    data.header().command(),
+                                    consumed_bytes
+                                );
+
+                                buffer.advance(consumed_bytes);
+                                self.handle_data(&data).await;
+                            }
+                            Err(e) => {
+                                warn!("Error parsing data from stream: {}", e);
+                                buffer.clear();
+                                return Err(e.into());
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {
+                    // 流结束
+                    debug!("Stream ended");
+                    break;
+                }
+                Err(e) => {
+                    warn!("Error reading from stream: {}", e);
+                    return Err(e.into());
+                }
+            }
+        }
+
+        // 处理缓冲区中剩余的不完整数据
+        if !buffer.is_empty() {
+            warn!(
+                "Stream ended with {} bytes of incomplete data",
+                buffer.len()
+            );
+        }
+
+        Ok(())
     }
 
     async fn heartbeat_task(&self, interval: u64) {
@@ -355,7 +439,11 @@ impl QuicClient {
         }
     }
 
-    async fn handle_received_data(&self, client: &Arc<RexClient>, data: &RexData) {
+    async fn handle_data(&self, data: &RexData) {
+        let Some(client) = self.get_client().await else {
+            warn!("No client available for handling data");
+            return;
+        };
         let handler = self.client_handler.clone();
         match data.header().command() {
             RexCommand::LoginReturn => {
