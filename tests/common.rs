@@ -5,7 +5,7 @@ use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tracing::info;
 
 use rex_mq::{
-    ClientInner, QuicClient, QuicServer, RexClientHandler,
+    QuicClient, QuicServer, RexClientHandler, RexClientInner,
     protocol::{RexCommand, RexData},
 };
 
@@ -46,7 +46,7 @@ struct TestClientHandler {
 
 #[async_trait::async_trait]
 impl RexClientHandler for TestClientHandler {
-    async fn login_ok(&self, client: Arc<ClientInner>, _data: &RexData) -> Result<()> {
+    async fn login_ok(&self, client: Arc<RexClientInner>, _data: &RexData) -> Result<()> {
         info!(
             "login ok, client id: [{}], title: [{}]",
             client.id(),
@@ -55,7 +55,7 @@ impl RexClientHandler for TestClientHandler {
         Ok(())
     }
 
-    async fn handle(&self, _client: Arc<ClientInner>, data: &RexData) -> Result<()> {
+    async fn handle(&self, _client: Arc<RexClientInner>, data: &RexData) -> Result<()> {
         let mut msg = data.data();
         if msg.len() > 16 {
             msg = &msg[..16];

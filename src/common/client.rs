@@ -16,7 +16,7 @@ use crate::{
     utils::{force_set_value, new_uuid, now_secs},
 };
 
-pub struct ClientInner {
+pub struct RexClientInner {
     id: usize,
     local_addr: SocketAddr,
     titles: DashSet<String>,
@@ -25,9 +25,9 @@ pub struct ClientInner {
     last_recv: AtomicU64,
 }
 
-impl ClientInner {
+impl RexClientInner {
     pub fn new(id: usize, local_addr: SocketAddr, title: &str, sender: Arc<dyn RexSender>) -> Self {
-        ClientInner {
+        RexClientInner {
             id,
             local_addr,
             titles: title.split(';').map(|s| s.to_string()).collect(),
@@ -37,7 +37,7 @@ impl ClientInner {
     }
 
     pub fn from_title(title: String, sender: Arc<dyn RexSender>) -> Self {
-        ClientInner {
+        RexClientInner {
             id: new_uuid(),
             local_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
             titles: title.split(';').map(|s| s.to_string()).collect(),

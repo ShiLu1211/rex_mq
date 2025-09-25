@@ -12,7 +12,8 @@ use rand::{Rng, distr::Alphanumeric, rng};
 use tokio::{sync::Mutex, time::sleep};
 
 use rex_mq::{
-    ClientInner, QuicClient, QuicServer, RexClientHandler,
+    RexClient, RexClientConfig, RexClientHandler, RexClientInner, RexServer, RexServerConfig,
+    TcpClient, TcpServer,
     protocol::{RexCommand, RexData},
     utils::{now_micros, timestamp, timestamp_data},
 };
@@ -105,7 +106,8 @@ pub struct BenchArgs {
 
 pub async fn start_server(args: ServerArgs) -> Result<()> {
     let address = args.address.parse::<SocketAddr>()?;
-    let _server = QuicServer::open(address).await?;
+    let config = RexServerConfig::from_addr(address);
+    let _server = TcpServer::open(config).await?;
 
     loop {
         sleep(Duration::from_millis(1000)).await;
@@ -114,12 +116,12 @@ pub async fn start_server(args: ServerArgs) -> Result<()> {
 
 pub async fn start_recv(args: RecvArgs) -> Result<()> {
     let address = args.address.parse::<SocketAddr>()?;
-    let client = QuicClient::new(
+    let config = RexClientConfig::new(
         address,
         args.titles,
         Arc::new(RcvClientHandler::new(args.bench)),
-    )
-    .await?;
+    );
+    let client = TcpClient::new(config)?;
     let _client = client.open().await?;
 
     if args.bench {
@@ -134,14 +136,16 @@ pub async fn start_recv(args: RecvArgs) -> Result<()> {
 
 pub async fn start_send(args: SendArgs) -> Result<()> {
     let address = args.address.parse::<SocketAddr>()?;
-    let client = QuicClient::new(address, "".to_string(), Arc::new(SndClientHandler)).await?;
+    let config = RexClientConfig::new(address, "".to_string(), Arc::new(SndClientHandler));
+    let client = TcpClient::new(config)?;
     let _client = client.open().await?;
     Ok(())
 }
 
 pub async fn start_bench(args: BenchArgs) -> Result<()> {
     let address = args.address.parse::<SocketAddr>()?;
-    let client = QuicClient::new(address, "".to_string(), Arc::new(SndClientHandler)).await?;
+    let config = RexClientConfig::new(address, "".to_string(), Arc::new(SndClientHandler));
+    let client = TcpClient::new(config)?;
     let client = client.open().await?;
 
     let command = match args.typ.as_str() {
@@ -216,7 +220,7 @@ pub async fn disp_metric() {
             record.clone()
         };
         println!(
-            "tps:{} mean:{} min:{} p50:{} p90:{} p95:{} p98:{} p99:{} max:{}",
+            "tps:{} mean:{:.3} min:{} p50:{} p90:{} p95:{} p98:{} p99:{} max:{}",
             hist.len(),
             hist.mean(),
             hist.min(),
@@ -246,12 +250,12 @@ impl RcvClientHandler {
 
 #[async_trait::async_trait]
 impl RexClientHandler for RcvClientHandler {
-    async fn login_ok(&self, client: Arc<ClientInner>, _data: &RexData) -> Result<()> {
+    async fn login_ok(&self, client: Arc<RexClientInner>, _data: &RexData) -> Result<()> {
         println!("recv client login ok: [{}]", client.id());
         Ok(())
     }
 
-    async fn handle(&self, _client: Arc<ClientInner>, data: &RexData) -> Result<()> {
+    async fn handle(&self, _client: Arc<RexClientInner>, data: &RexData) -> Result<()> {
         if self.bench {
             let command = data.header().command();
             if command == RexCommand::Title
@@ -274,12 +278,12 @@ struct SndClientHandler;
 
 #[async_trait::async_trait]
 impl RexClientHandler for SndClientHandler {
-    async fn login_ok(&self, client: Arc<ClientInner>, _data: &RexData) -> Result<()> {
+    async fn login_ok(&self, client: Arc<RexClientInner>, _data: &RexData) -> Result<()> {
         println!("send client login ok: [{}]", client.id());
         Ok(())
     }
 
-    async fn handle(&self, _client: Arc<ClientInner>, data: &RexData) -> Result<()> {
+    async fn handle(&self, _client: Arc<RexClientInner>, data: &RexData) -> Result<()> {
         println!("send received: {}", data.data_as_string_lossy());
         Ok(())
     }

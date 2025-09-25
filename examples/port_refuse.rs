@@ -9,7 +9,7 @@ use tokio::time::sleep;
 use tracing::info;
 
 use rex_mq::{
-    ClientInner, QuicClient, QuicServer, RexClientHandler,
+    QuicClient, QuicServer, RexClientHandler, RexClientInner,
     protocol::{RexCommand, RexData, RexDataBuilder},
 };
 
@@ -98,12 +98,12 @@ struct RcvClientHandler;
 
 #[async_trait::async_trait]
 impl RexClientHandler for RcvClientHandler {
-    async fn login_ok(&self, client: Arc<ClientInner>, _data: &RexData) -> Result<()> {
+    async fn login_ok(&self, client: Arc<RexClientInner>, _data: &RexData) -> Result<()> {
         info!("RcvHandler: Login OK for client ID {}", client.id());
         Ok(())
     }
 
-    async fn handle(&self, client: Arc<ClientInner>, data: &RexData) -> Result<()> {
+    async fn handle(&self, client: Arc<RexClientInner>, data: &RexData) -> Result<()> {
         info!(
             "RcvHandler: Received data for client ID {}: {:?}",
             client.id(),
@@ -117,12 +117,12 @@ struct SndClientHandler;
 
 #[async_trait::async_trait]
 impl RexClientHandler for SndClientHandler {
-    async fn login_ok(&self, client: Arc<ClientInner>, _data: &RexData) -> Result<()> {
+    async fn login_ok(&self, client: Arc<RexClientInner>, _data: &RexData) -> Result<()> {
         info!("SndHandler: Login OK for client ID {}", client.id());
         Ok(())
     }
 
-    async fn handle(&self, client: Arc<ClientInner>, data: &RexData) -> Result<()> {
+    async fn handle(&self, client: Arc<RexClientInner>, data: &RexData) -> Result<()> {
         info!(
             "SndHandler: Received data for client ID {}: {:?}",
             client.id(),

@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -16,68 +15,45 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    ClientInner, RexClientHandler,
+    ConnectionState, RexClient, RexClientConfig, RexClientInner,
     protocol::{RexCommand, RexData},
     utils::{new_uuid, now_secs},
 };
 
 use super::TcpSender;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ConnectionState {
-    Disconnected,
-    Connecting,
-    Connected,
-    Reconnecting,
-}
-
 pub struct TcpClient {
     // connection
-    client: RwLock<Option<Arc<ClientInner>>>,
+    client: RwLock<Option<Arc<RexClientInner>>>,
     connection_state: Arc<Mutex<ConnectionState>>,
 
     // config
-    server_addr: SocketAddr,
-    title: RwLock<String>,
-    client_handler: Arc<dyn RexClientHandler>,
+    config: RexClientConfig,
 
     // state management
     shutdown_tx: broadcast::Sender<()>,
     last_heartbeat: AtomicU64,
 
-    // heartbeat config
-    idle_timeout: u64,
-    pong_wait: u64,
-    max_reconnect_attempts: u32,
-
     // data buffer for incomplete packets
     read_buffer: Arc<Mutex<BytesMut>>,
 }
 
-impl TcpClient {
-    pub async fn new(
-        server_addr: SocketAddr,
-        title: String,
-        handler: Arc<dyn RexClientHandler>,
-    ) -> Result<Arc<Self>> {
+#[async_trait::async_trait]
+impl RexClient for TcpClient {
+    fn new(config: RexClientConfig) -> Result<Arc<Self>> {
         let (shutdown_tx, _) = broadcast::channel(4);
 
         Ok(Arc::new(Self {
             client: RwLock::new(None),
             connection_state: Arc::new(Mutex::new(ConnectionState::Disconnected)),
-            server_addr,
-            title: RwLock::new(title),
-            client_handler: handler,
+            config,
             shutdown_tx,
             last_heartbeat: AtomicU64::new(now_secs()),
-            idle_timeout: 10,
-            pong_wait: 5,
-            max_reconnect_attempts: 10,
             read_buffer: Arc::new(Mutex::new(BytesMut::new())),
         }))
     }
 
-    pub async fn open(self: Arc<Self>) -> Result<Arc<Self>> {
+    async fn open(self: Arc<Self>) -> Result<Arc<Self>> {
         // 初始连接
         self.connect_with_retry().await?;
 
@@ -116,7 +92,7 @@ impl TcpClient {
         Ok(self)
     }
 
-    pub async fn send_data(&self, data: &mut RexData) -> Result<()> {
+    async fn send_data(&self, data: &mut RexData) -> Result<()> {
         let state = *self.connection_state.lock().await;
 
         if state != ConnectionState::Connected {
@@ -130,7 +106,7 @@ impl TcpClient {
         }
     }
 
-    pub async fn close(&self) {
+    async fn close(&self) {
         info!("Shutting down TcpClient...");
 
         // 发送关闭信号
@@ -149,7 +125,7 @@ impl TcpClient {
         info!("TcpClient shutdown complete");
     }
 
-    pub async fn get_connection_state(&self) -> ConnectionState {
+    async fn get_connection_state(&self) -> ConnectionState {
         *self.connection_state.lock().await
     }
 }
@@ -166,12 +142,12 @@ impl TcpClient {
                 Ok(_) => {
                     info!(
                         "Connected to {} after {} attempts",
-                        self.server_addr, attempts
+                        self.config.server_addr, attempts
                     );
                     return Ok(());
                 }
                 Err(e) => {
-                    if attempts >= self.max_reconnect_attempts {
+                    if attempts >= self.config.max_reconnect_attempts {
                         error!("Failed to connect after {} attempts: {}", attempts, e);
                         return Err(e);
                     }
@@ -190,16 +166,16 @@ impl TcpClient {
     async fn connect(self: &Arc<Self>) -> Result<()> {
         *self.connection_state.lock().await = ConnectionState::Connecting;
 
-        info!("Connecting TCP to {}", self.server_addr);
+        info!("Connecting TCP to {}", self.config.server_addr);
 
-        let socket = if self.server_addr.is_ipv4() {
+        let socket = if self.config.server_addr.is_ipv4() {
             TcpSocket::new_v4()?
         } else {
             TcpSocket::new_v6()?
         };
         socket.set_nodelay(true)?;
 
-        let stream = socket.connect(self.server_addr).await?;
+        let stream = socket.connect(self.config.server_addr).await?;
         let local_addr = stream.local_addr()?;
         let (rx, tx) = stream.into_split();
 
@@ -212,10 +188,10 @@ impl TcpClient {
                 existing_client.set_sender(sender.clone());
             } else {
                 let id = new_uuid();
-                let new_client = Arc::new(ClientInner::new(
+                let new_client = Arc::new(RexClientInner::new(
                     id,
                     local_addr,
-                    &self.title.read().await,
+                    &self.config.title().await,
                     sender.clone(),
                 ));
                 *client_guard = Some(new_client);
@@ -380,7 +356,7 @@ impl TcpClient {
             let last_recv = client.last_recv();
             let idle_time = now_secs().saturating_sub(last_recv);
 
-            if idle_time < self.idle_timeout {
+            if idle_time < self.config.idle_timeout {
                 continue;
             }
 
@@ -396,7 +372,7 @@ impl TcpClient {
 
             // 等待心跳响应
             let before_ping = last_recv;
-            sleep(Duration::from_secs(self.pong_wait)).await;
+            sleep(Duration::from_secs(self.config.pong_wait)).await;
             let after_ping = client.last_recv();
 
             if after_ping <= before_ping {
@@ -412,7 +388,7 @@ impl TcpClient {
     async fn login(self: &Arc<Self>) -> Result<()> {
         if let Some(client) = self.get_client().await {
             let mut data = RexData::builder(RexCommand::Login)
-                .data_from_string(self.title.read().await.clone())
+                .data_from_string(self.config.title().await.clone())
                 .build();
             self.send_data_with_client(&client, &mut data).await?;
             info!("Login request sent");
@@ -426,13 +402,13 @@ impl TcpClient {
         }
     }
 
-    async fn handle_received_data(&self, client: &Arc<ClientInner>, data: &RexData) {
+    async fn handle_received_data(&self, client: &Arc<RexClientInner>, data: &RexData) {
         debug!(
             "Handling received data: command={:?}",
             data.header().command()
         );
 
-        let handler = self.client_handler.clone();
+        let handler = self.config.client_handler.clone();
 
         match data.header().command() {
             RexCommand::LoginReturn => {
@@ -444,13 +420,13 @@ impl TcpClient {
             RexCommand::RegTitleReturn => {
                 let title = data.data_as_string_lossy();
                 client.insert_title(title.clone());
-                *self.title.write().await = client.title_str();
+                self.config.set_title(client.title_str()).await;
                 info!("Title registered: {}", title);
             }
             RexCommand::DelTitleReturn => {
                 let title = data.data_as_string_lossy();
                 client.remove_title(&title);
-                *self.title.write().await = client.title_str();
+                self.config.set_title(client.title_str()).await;
                 info!("Title removed: {}", title);
             }
             RexCommand::Title
@@ -473,13 +449,13 @@ impl TcpClient {
         client.update_last_recv();
     }
 
-    async fn get_client(&self) -> Option<Arc<ClientInner>> {
+    async fn get_client(&self) -> Option<Arc<RexClientInner>> {
         self.client.read().await.clone()
     }
 
     async fn send_data_with_client(
         &self,
-        client: &Arc<ClientInner>,
+        client: &Arc<RexClientInner>,
         data: &mut RexData,
     ) -> Result<()> {
         data.set_source(client.id());

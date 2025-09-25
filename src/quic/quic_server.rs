@@ -15,7 +15,7 @@ use tokio::sync::{Mutex, RwLock, oneshot};
 use tracing::{debug, info, warn};
 
 use crate::{
-    ClientInner, QuicSender,
+    QuicSender, RexClientInner,
     protocol::{RetCode, RexCommand, RexData},
     utils::now_secs,
 };
@@ -23,7 +23,7 @@ use crate::{
 pub struct QuicServer {
     ep: Endpoint,
     conns: Mutex<Vec<Connection>>,
-    clients: RwLock<Vec<Arc<ClientInner>>>,
+    clients: RwLock<Vec<Arc<RexClientInner>>>,
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
 }
 
@@ -307,7 +307,7 @@ impl QuicServer {
 
                 let mut has_target = false;
 
-                let matching_clients: Vec<Arc<ClientInner>> = self
+                let matching_clients: Vec<Arc<RexClientInner>> = self
                     .clients
                     .read()
                     .await
@@ -406,7 +406,7 @@ impl QuicServer {
                         warn!("Error sending login return: {}", e);
                     };
                 } else {
-                    let client = Arc::new(ClientInner::new(
+                    let client = Arc::new(RexClientInner::new(
                         data.header().source(),
                         conn.remote_address(),
                         &data.data_as_string_lossy(),
@@ -476,7 +476,7 @@ impl QuicServer {
         Ok(())
     }
 
-    async fn add_client(&self, client: Arc<ClientInner>) {
+    async fn add_client(&self, client: Arc<RexClientInner>) {
         let mut clients = self.clients.write().await;
         clients.push(client);
     }
@@ -490,7 +490,7 @@ impl QuicServer {
         }
     }
 
-    async fn find_client_by_id(&self, id: usize) -> Option<Arc<ClientInner>> {
+    async fn find_client_by_id(&self, id: usize) -> Option<Arc<RexClientInner>> {
         let clients = self.clients.read().await;
         clients.iter().find(|client| client.id() == id).cloned()
     }

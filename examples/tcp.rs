@@ -9,7 +9,8 @@ use tokio::time::sleep;
 use tracing::info;
 
 use rex_mq::{
-    ClientInner, RexClientHandler, TcpClient, TcpServer,
+    RexClient, RexClientConfig, RexClientHandler, RexClientInner, RexServer, RexServerConfig,
+    TcpClient, TcpServer,
     protocol::{RexCommand, RexData, RexDataBuilder},
 };
 
@@ -22,17 +23,20 @@ async fn main() -> Result<()> {
     let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
 
     // 启动服务器
-    let server = TcpServer::open(server_addr).await?;
+    let config = RexServerConfig::from_addr(server_addr);
+    let server = TcpServer::open(config).await?;
     info!("Server started on {}", server_addr);
 
     sleep(Duration::from_secs(1)).await;
 
     // 创建客户端（自动启动接收任务）
-    let client_r = TcpClient::new(server_addr, "one".into(), Arc::new(RcvClientHandler)).await?;
+    let config = RexClientConfig::new(server_addr, "one".into(), Arc::new(RcvClientHandler));
+    let client_r = TcpClient::new(config)?;
     let client_r = client_r.open().await?;
     info!("Client connected to server");
 
-    let client_s = TcpClient::new(server_addr, "".into(), Arc::new(SndClientHandler)).await?;
+    let config = RexClientConfig::new(server_addr, "".into(), Arc::new(SndClientHandler));
+    let client_s = TcpClient::new(config)?;
     let client_s = client_s.open().await?;
     info!("Client connected to server");
 
@@ -90,7 +94,8 @@ async fn main() -> Result<()> {
     drop(server);
     sleep(Duration::from_secs(1)).await;
 
-    let _server = TcpServer::open(server_addr).await?;
+    let config = RexServerConfig::from_addr(server_addr);
+    let _server = TcpServer::open(config).await?;
     sleep(Duration::from_secs(1)).await;
     info!("port refused success");
     Ok(())
@@ -100,12 +105,12 @@ struct RcvClientHandler;
 
 #[async_trait::async_trait]
 impl RexClientHandler for RcvClientHandler {
-    async fn login_ok(&self, client: Arc<ClientInner>, _data: &RexData) -> Result<()> {
+    async fn login_ok(&self, client: Arc<RexClientInner>, _data: &RexData) -> Result<()> {
         info!("RcvHandler: Login OK for client ID {}", client.id());
         Ok(())
     }
 
-    async fn handle(&self, client: Arc<ClientInner>, data: &RexData) -> Result<()> {
+    async fn handle(&self, client: Arc<RexClientInner>, data: &RexData) -> Result<()> {
         info!(
             "RcvHandler: Received data for client ID {}: {:?}",
             client.id(),
@@ -119,12 +124,12 @@ struct SndClientHandler;
 
 #[async_trait::async_trait]
 impl RexClientHandler for SndClientHandler {
-    async fn login_ok(&self, client: Arc<ClientInner>, _data: &RexData) -> Result<()> {
+    async fn login_ok(&self, client: Arc<RexClientInner>, _data: &RexData) -> Result<()> {
         info!("SndHandler: Login OK for client ID {}", client.id());
         Ok(())
     }
 
-    async fn handle(&self, client: Arc<ClientInner>, data: &RexData) -> Result<()> {
+    async fn handle(&self, client: Arc<RexClientInner>, data: &RexData) -> Result<()> {
         info!(
             "SndHandler: Received data for client ID {}: {:?}",
             client.id(),

@@ -23,7 +23,7 @@ use tokio::{sync::RwLock, time::sleep};
 use tracing::{debug, info, warn};
 
 use crate::{
-    ClientInner, QuicSender, RexClientHandler,
+    QuicSender, RexClientHandler, RexClientInner,
     protocol::{RexCommand, RexData},
     utils::{new_uuid, now_secs},
 };
@@ -33,7 +33,7 @@ pub struct QuicClient {
 
     // Connection和Client需要在重连时替换
     conn: RwLock<Option<Connection>>,
-    client: RwLock<Option<Arc<ClientInner>>>,
+    client: RwLock<Option<Arc<RexClientInner>>>,
 
     // 连接配置（重连时复用）
     server_addr: SocketAddr,
@@ -156,7 +156,7 @@ impl QuicClient {
             } else {
                 let id = new_uuid();
                 let local_addr = self.ep.local_addr()?;
-                let new_client = Arc::new(ClientInner::new(
+                let new_client = Arc::new(RexClientInner::new(
                     id,
                     local_addr,
                     &self.title.read().await,
@@ -480,14 +480,14 @@ impl QuicClient {
         client.update_last_recv();
     }
 
-    async fn get_client(&self) -> Option<Arc<ClientInner>> {
+    async fn get_client(&self) -> Option<Arc<RexClientInner>> {
         let client_guard = self.client.read().await;
         client_guard.clone()
     }
 
     async fn send_data_with_client(
         &self,
-        client: &Arc<ClientInner>,
+        client: &Arc<RexClientInner>,
         data: &mut RexData,
     ) -> Result<()> {
         data.set_source(client.id());

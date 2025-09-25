@@ -17,23 +17,26 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    ClientInner, TcpSender,
+    RexClientInner, RexServer, RexServerConfig, TcpSender,
     protocol::{RetCode, RexCommand, RexData},
     utils::{new_uuid, now_secs},
 };
 
 pub struct TcpServer {
+    config: RexServerConfig,
     listener: Arc<TcpListener>,
-    clients: RwLock<Vec<Arc<ClientInner>>>,
+    clients: RwLock<Vec<Arc<RexClientInner>>>,
     shutdown_tx: Arc<broadcast::Sender<()>>,
 }
-
-impl TcpServer {
-    pub async fn open(addr: SocketAddr) -> Result<Arc<Self>> {
+#[async_trait::async_trait]
+impl RexServer for TcpServer {
+    async fn open(config: RexServerConfig) -> Result<Arc<Self>> {
+        let addr = config.bind_addr;
         let listener = TcpListener::bind(addr).await?;
 
         let (shutdown_tx, _) = broadcast::channel(4);
         let server = Arc::new(TcpServer {
+            config,
             listener: Arc::new(listener),
             clients: RwLock::new(vec![]),
             shutdown_tx: Arc::new(shutdown_tx),
@@ -65,8 +68,8 @@ impl TcpServer {
             let server_clone = server.clone();
             let mut shutdown_rx = server_clone.shutdown_tx.subscribe();
             async move {
-                let check_interval = Duration::from_secs(15); // 检查频率
-                let client_timeout = 45; // 客户端超时时间（秒）
+                let check_interval = Duration::from_secs(server_clone.config.check_interval); // 检查频率
+                let client_timeout = server_clone.config.client_timeout; // 客户端超时时间（秒）
 
                 loop {
                     tokio::select! {
@@ -85,7 +88,7 @@ impl TcpServer {
         Ok(server)
     }
 
-    pub async fn close(&self) {
+    async fn close(&self) {
         // Send shutdown signal to all tasks
         if let Err(e) = self.shutdown_tx.send(()) {
             warn!("Error sending shutdown signal: {}", e);
@@ -93,32 +96,6 @@ impl TcpServer {
 
         self.close_clients().await;
         info!("Shutdown complete");
-    }
-
-    // 清理不活跃的客户端
-    async fn cleanup_inactive_clients(&self, timeout_secs: u64) {
-        let mut clients = self.clients.write().await;
-        let now = now_secs();
-        let initial_count = clients.len();
-
-        clients.retain(|client| {
-            let last_active = client.last_recv();
-            if now - last_active > timeout_secs {
-                warn!(
-                    "Client {} (addr: {}) timed out, removing...",
-                    client.id(),
-                    client.local_addr()
-                );
-                false
-            } else {
-                true
-            }
-        });
-
-        let removed_count = initial_count - clients.len();
-        if removed_count > 0 {
-            info!("Cleaned up {} inactive clients", removed_count);
-        }
     }
 }
 
@@ -132,7 +109,7 @@ impl TcpServer {
 
         let (reader, writer) = stream.into_split();
         let sender = Arc::new(TcpSender::new(writer));
-        let peer = Arc::new(ClientInner::new(new_uuid(), peer_addr, "", sender));
+        let peer = Arc::new(RexClientInner::new(new_uuid(), peer_addr, "", sender));
 
         // 为每个连接启动处理任务
         tokio::spawn({
@@ -151,7 +128,7 @@ impl TcpServer {
 
     async fn handle_connection_inner(
         self: Arc<Self>,
-        peer: Arc<ClientInner>,
+        peer: Arc<RexClientInner>,
         mut reader: OwnedReadHalf,
     ) {
         let peer_addr = peer.local_addr();
@@ -219,7 +196,7 @@ impl TcpServer {
         }
     }
 
-    async fn handle_data(&self, data: &mut RexData, peer: Arc<ClientInner>) {
+    async fn handle_data(&self, data: &mut RexData, peer: Arc<RexClientInner>) {
         let client_id = data.header().source();
         let source_client = self.find_client_by_id(client_id).await;
 
@@ -264,7 +241,7 @@ impl TcpServer {
         &self,
         data: &mut RexData,
         client_id: usize,
-        source_client: &Option<Arc<ClientInner>>,
+        source_client: &Option<Arc<RexClientInner>>,
     ) {
         let title = data.title().unwrap_or_default().to_string();
         debug!("Received title message: {}", title);
@@ -303,7 +280,7 @@ impl TcpServer {
         &self,
         data: &mut RexData,
         client_id: usize,
-        source_client: &Option<Arc<ClientInner>>,
+        source_client: &Option<Arc<RexClientInner>>,
     ) {
         let title = data.title().unwrap_or_default().to_string();
         debug!("Received group message: {}", title);
@@ -353,7 +330,7 @@ impl TcpServer {
         &self,
         data: &mut RexData,
         client_id: usize,
-        source_client: &Option<Arc<ClientInner>>,
+        source_client: &Option<Arc<RexClientInner>>,
     ) {
         let title = data.title().unwrap_or_default().to_string();
         debug!("Received cast message: {}", title);
@@ -406,8 +383,8 @@ impl TcpServer {
     async fn handle_login_message(
         &self,
         data: &mut RexData,
-        source_client: &Option<Arc<ClientInner>>,
-        peer: Arc<ClientInner>,
+        source_client: &Option<Arc<RexClientInner>>,
+        peer: Arc<RexClientInner>,
     ) {
         debug!("Received login message");
 
@@ -435,7 +412,7 @@ impl TcpServer {
     async fn handle_check_message(
         &self,
         data: &mut RexData,
-        source_client: &Option<Arc<ClientInner>>,
+        source_client: &Option<Arc<RexClientInner>>,
     ) {
         debug!("Received check message");
 
@@ -451,7 +428,7 @@ impl TcpServer {
     async fn handle_reg_title_message(
         &self,
         data: &mut RexData,
-        source_client: &Option<Arc<ClientInner>>,
+        source_client: &Option<Arc<RexClientInner>>,
     ) {
         let title = data.data_as_string_lossy();
         debug!("Received reg title: {}", title);
@@ -470,7 +447,7 @@ impl TcpServer {
     async fn handle_del_title_message(
         &self,
         data: &mut RexData,
-        source_client: &Option<Arc<ClientInner>>,
+        source_client: &Option<Arc<RexClientInner>>,
     ) {
         let title = data.data_as_string_lossy();
         debug!("Received del title: {}", title);
@@ -486,7 +463,11 @@ impl TcpServer {
     }
 
     // 辅助方法：查找目标客户端（第一个匹配）
-    async fn find_target_client(&self, title: &str, exclude_id: usize) -> Option<Arc<ClientInner>> {
+    async fn find_target_client(
+        &self,
+        title: &str,
+        exclude_id: usize,
+    ) -> Option<Arc<RexClientInner>> {
         let clients = self.clients.read().await;
         clients
             .iter()
@@ -495,7 +476,11 @@ impl TcpServer {
     }
 
     // 辅助方法：查找所有匹配的客户端
-    async fn find_matching_clients(&self, title: &str, exclude_id: usize) -> Vec<Arc<ClientInner>> {
+    async fn find_matching_clients(
+        &self,
+        title: &str,
+        exclude_id: usize,
+    ) -> Vec<Arc<RexClientInner>> {
         let clients = self.clients.read().await;
         clients
             .iter()
@@ -505,7 +490,7 @@ impl TcpServer {
     }
 
     // 辅助方法：发送消息到客户端并处理错误
-    async fn send_to_client(&self, client: &Arc<ClientInner>, data: &BytesMut) -> Result<()> {
+    async fn send_to_client(&self, client: &Arc<RexClientInner>, data: &BytesMut) -> Result<()> {
         match client.send_buf(data).await {
             Ok(_) => Ok(()),
             Err(e) => {
@@ -523,7 +508,7 @@ impl TcpServer {
     // 辅助方法：发送响应
     async fn send_response(
         &self,
-        client: &Arc<ClientInner>,
+        client: &Arc<RexClientInner>,
         data: &mut RexData,
         command: RexCommand,
     ) {
@@ -538,7 +523,7 @@ impl TcpServer {
     // 辅助方法：发送错误响应
     async fn send_error_response(
         &self,
-        source_client: &Option<Arc<ClientInner>>,
+        source_client: &Option<Arc<RexClientInner>>,
         data: &mut RexData,
         command: RexCommand,
         retcode: RetCode,
@@ -557,7 +542,7 @@ impl TcpServer {
     }
 
     // 添加客户端
-    async fn add_client(&self, client: Arc<ClientInner>) {
+    async fn add_client(&self, client: Arc<RexClientInner>) {
         let mut clients = self.clients.write().await;
         clients.push(client);
         info!("Total clients: {}", clients.len());
@@ -602,8 +587,34 @@ impl TcpServer {
         info!("All clients closed");
     }
 
+    // 清理不活跃的客户端
+    async fn cleanup_inactive_clients(&self, timeout_secs: u64) {
+        let mut clients = self.clients.write().await;
+        let now = now_secs();
+        let initial_count = clients.len();
+
+        clients.retain(|client| {
+            let last_active = client.last_recv();
+            if now - last_active > timeout_secs {
+                warn!(
+                    "Client {} (addr: {}) timed out, removing...",
+                    client.id(),
+                    client.local_addr()
+                );
+                false
+            } else {
+                true
+            }
+        });
+
+        let removed_count = initial_count - clients.len();
+        if removed_count > 0 {
+            info!("Cleaned up {} inactive clients", removed_count);
+        }
+    }
+
     // 根据ID查找客户端
-    async fn find_client_by_id(&self, id: usize) -> Option<Arc<ClientInner>> {
+    async fn find_client_by_id(&self, id: usize) -> Option<Arc<RexClientInner>> {
         let clients = self.clients.read().await;
         clients.iter().find(|client| client.id() == id).cloned()
     }
