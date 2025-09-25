@@ -1,10 +1,9 @@
 use anyhow::Result;
-use async_trait::async_trait;
 use bytes::BytesMut;
 use quinn::SendStream;
 use tokio::{io::AsyncWriteExt, sync::Mutex};
 
-use crate::sender::RexSender;
+use crate::RexSender;
 
 pub struct QuicSender {
     tx: Mutex<SendStream>,
@@ -16,7 +15,7 @@ impl QuicSender {
     }
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl RexSender for QuicSender {
     async fn send_buf(&self, buf: &BytesMut) -> Result<()> {
         let mut tx = self.tx.lock().await;

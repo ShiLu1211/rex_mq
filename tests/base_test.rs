@@ -6,7 +6,7 @@ mod tests {
     use std::time::Duration;
 
     use anyhow::Result;
-    use rex_mq::{RetCode, RexCommand};
+    use rex_mq::protocol::{RetCode, RexCommand};
     use tokio::time::sleep;
 
     use crate::common::TestFactory;

@@ -16,8 +16,9 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    RexClient, RexClientHandler, RexCommand, RexData,
-    common::{new_uuid, now_secs},
+    ClientInner, RexClientHandler,
+    protocol::{RexCommand, RexData},
+    utils::{new_uuid, now_secs},
 };
 
 use super::TcpSender;
@@ -32,7 +33,7 @@ pub enum ConnectionState {
 
 pub struct TcpClient {
     // connection
-    client: RwLock<Option<Arc<RexClient>>>,
+    client: RwLock<Option<Arc<ClientInner>>>,
     connection_state: Arc<Mutex<ConnectionState>>,
 
     // config
@@ -211,7 +212,7 @@ impl TcpClient {
                 existing_client.set_sender(sender.clone());
             } else {
                 let id = new_uuid();
-                let new_client = Arc::new(RexClient::new(
+                let new_client = Arc::new(ClientInner::new(
                     id,
                     local_addr,
                     &self.title.read().await,
@@ -425,7 +426,7 @@ impl TcpClient {
         }
     }
 
-    async fn handle_received_data(&self, client: &Arc<RexClient>, data: &RexData) {
+    async fn handle_received_data(&self, client: &Arc<ClientInner>, data: &RexData) {
         debug!(
             "Handling received data: command={:?}",
             data.header().command()
@@ -472,13 +473,13 @@ impl TcpClient {
         client.update_last_recv();
     }
 
-    async fn get_client(&self) -> Option<Arc<RexClient>> {
+    async fn get_client(&self) -> Option<Arc<ClientInner>> {
         self.client.read().await.clone()
     }
 
     async fn send_data_with_client(
         &self,
-        client: &Arc<RexClient>,
+        client: &Arc<ClientInner>,
         data: &mut RexData,
     ) -> Result<()> {
         data.set_source(client.id());

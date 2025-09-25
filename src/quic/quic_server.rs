@@ -14,12 +14,16 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::sync::{Mutex, RwLock, oneshot};
 use tracing::{debug, info, warn};
 
-use crate::{QuicSender, RetCode, RexClient, RexCommand, RexData, common::now_secs};
+use crate::{
+    ClientInner, QuicSender,
+    protocol::{RetCode, RexCommand, RexData},
+    utils::now_secs,
+};
 
 pub struct QuicServer {
     ep: Endpoint,
     conns: Mutex<Vec<Connection>>,
-    clients: RwLock<Vec<Arc<RexClient>>>,
+    clients: RwLock<Vec<Arc<ClientInner>>>,
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
 }
 
@@ -303,7 +307,7 @@ impl QuicServer {
 
                 let mut has_target = false;
 
-                let matching_clients: Vec<Arc<RexClient>> = self
+                let matching_clients: Vec<Arc<ClientInner>> = self
                     .clients
                     .read()
                     .await
@@ -402,7 +406,7 @@ impl QuicServer {
                         warn!("Error sending login return: {}", e);
                     };
                 } else {
-                    let client = Arc::new(RexClient::new(
+                    let client = Arc::new(ClientInner::new(
                         data.header().source(),
                         conn.remote_address(),
                         &data.data_as_string_lossy(),
@@ -472,7 +476,7 @@ impl QuicServer {
         Ok(())
     }
 
-    async fn add_client(&self, client: Arc<RexClient>) {
+    async fn add_client(&self, client: Arc<ClientInner>) {
         let mut clients = self.clients.write().await;
         clients.push(client);
     }
@@ -486,7 +490,7 @@ impl QuicServer {
         }
     }
 
-    async fn find_client_by_id(&self, id: usize) -> Option<Arc<RexClient>> {
+    async fn find_client_by_id(&self, id: usize) -> Option<Arc<ClientInner>> {
         let clients = self.clients.read().await;
         clients.iter().find(|client| client.id() == id).cloned()
     }

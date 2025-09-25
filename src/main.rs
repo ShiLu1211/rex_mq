@@ -12,8 +12,9 @@ use rand::{Rng, distr::Alphanumeric, rng};
 use tokio::{sync::Mutex, time::sleep};
 
 use rex_mq::{
-    QuicClient, QuicServer, RexClient, RexClientHandler, RexCommand, RexData,
-    common::{now_micros, timestamp, timestamp_data},
+    ClientInner, QuicClient, QuicServer, RexClientHandler,
+    protocol::{RexCommand, RexData},
+    utils::{now_micros, timestamp, timestamp_data},
 };
 
 #[derive(clap::Parser)]
@@ -245,12 +246,12 @@ impl RcvClientHandler {
 
 #[async_trait::async_trait]
 impl RexClientHandler for RcvClientHandler {
-    async fn login_ok(&self, client: Arc<RexClient>, _data: &RexData) -> Result<()> {
+    async fn login_ok(&self, client: Arc<ClientInner>, _data: &RexData) -> Result<()> {
         println!("recv client login ok: [{}]", client.id());
         Ok(())
     }
 
-    async fn handle(&self, _client: Arc<RexClient>, data: &RexData) -> Result<()> {
+    async fn handle(&self, _client: Arc<ClientInner>, data: &RexData) -> Result<()> {
         if self.bench {
             let command = data.header().command();
             if command == RexCommand::Title
@@ -273,12 +274,12 @@ struct SndClientHandler;
 
 #[async_trait::async_trait]
 impl RexClientHandler for SndClientHandler {
-    async fn login_ok(&self, client: Arc<RexClient>, _data: &RexData) -> Result<()> {
+    async fn login_ok(&self, client: Arc<ClientInner>, _data: &RexData) -> Result<()> {
         println!("send client login ok: [{}]", client.id());
         Ok(())
     }
 
-    async fn handle(&self, _client: Arc<RexClient>, data: &RexData) -> Result<()> {
+    async fn handle(&self, _client: Arc<ClientInner>, data: &RexData) -> Result<()> {
         println!("send received: {}", data.data_as_string_lossy());
         Ok(())
     }

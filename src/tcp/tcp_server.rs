@@ -17,13 +17,14 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    RetCode, RexClient, RexCommand, RexData, TcpSender,
-    common::{new_uuid, now_secs},
+    ClientInner, TcpSender,
+    protocol::{RetCode, RexCommand, RexData},
+    utils::{new_uuid, now_secs},
 };
 
 pub struct TcpServer {
     listener: Arc<TcpListener>,
-    clients: RwLock<Vec<Arc<RexClient>>>,
+    clients: RwLock<Vec<Arc<ClientInner>>>,
     shutdown_tx: Arc<broadcast::Sender<()>>,
 }
 
@@ -131,7 +132,7 @@ impl TcpServer {
 
         let (reader, writer) = stream.into_split();
         let sender = Arc::new(TcpSender::new(writer));
-        let peer = Arc::new(RexClient::new(new_uuid(), peer_addr, "", sender));
+        let peer = Arc::new(ClientInner::new(new_uuid(), peer_addr, "", sender));
 
         // 为每个连接启动处理任务
         tokio::spawn({
@@ -150,7 +151,7 @@ impl TcpServer {
 
     async fn handle_connection_inner(
         self: Arc<Self>,
-        peer: Arc<RexClient>,
+        peer: Arc<ClientInner>,
         mut reader: OwnedReadHalf,
     ) {
         let peer_addr = peer.local_addr();
@@ -218,7 +219,7 @@ impl TcpServer {
         }
     }
 
-    async fn handle_data(&self, data: &mut RexData, peer: Arc<RexClient>) {
+    async fn handle_data(&self, data: &mut RexData, peer: Arc<ClientInner>) {
         let client_id = data.header().source();
         let source_client = self.find_client_by_id(client_id).await;
 
@@ -263,7 +264,7 @@ impl TcpServer {
         &self,
         data: &mut RexData,
         client_id: usize,
-        source_client: &Option<Arc<RexClient>>,
+        source_client: &Option<Arc<ClientInner>>,
     ) {
         let title = data.title().unwrap_or_default().to_string();
         debug!("Received title message: {}", title);
@@ -302,7 +303,7 @@ impl TcpServer {
         &self,
         data: &mut RexData,
         client_id: usize,
-        source_client: &Option<Arc<RexClient>>,
+        source_client: &Option<Arc<ClientInner>>,
     ) {
         let title = data.title().unwrap_or_default().to_string();
         debug!("Received group message: {}", title);
@@ -352,7 +353,7 @@ impl TcpServer {
         &self,
         data: &mut RexData,
         client_id: usize,
-        source_client: &Option<Arc<RexClient>>,
+        source_client: &Option<Arc<ClientInner>>,
     ) {
         let title = data.title().unwrap_or_default().to_string();
         debug!("Received cast message: {}", title);
@@ -405,8 +406,8 @@ impl TcpServer {
     async fn handle_login_message(
         &self,
         data: &mut RexData,
-        source_client: &Option<Arc<RexClient>>,
-        peer: Arc<RexClient>,
+        source_client: &Option<Arc<ClientInner>>,
+        peer: Arc<ClientInner>,
     ) {
         debug!("Received login message");
 
@@ -434,7 +435,7 @@ impl TcpServer {
     async fn handle_check_message(
         &self,
         data: &mut RexData,
-        source_client: &Option<Arc<RexClient>>,
+        source_client: &Option<Arc<ClientInner>>,
     ) {
         debug!("Received check message");
 
@@ -450,7 +451,7 @@ impl TcpServer {
     async fn handle_reg_title_message(
         &self,
         data: &mut RexData,
-        source_client: &Option<Arc<RexClient>>,
+        source_client: &Option<Arc<ClientInner>>,
     ) {
         let title = data.data_as_string_lossy();
         debug!("Received reg title: {}", title);
@@ -469,7 +470,7 @@ impl TcpServer {
     async fn handle_del_title_message(
         &self,
         data: &mut RexData,
-        source_client: &Option<Arc<RexClient>>,
+        source_client: &Option<Arc<ClientInner>>,
     ) {
         let title = data.data_as_string_lossy();
         debug!("Received del title: {}", title);
@@ -485,7 +486,7 @@ impl TcpServer {
     }
 
     // 辅助方法：查找目标客户端（第一个匹配）
-    async fn find_target_client(&self, title: &str, exclude_id: usize) -> Option<Arc<RexClient>> {
+    async fn find_target_client(&self, title: &str, exclude_id: usize) -> Option<Arc<ClientInner>> {
         let clients = self.clients.read().await;
         clients
             .iter()
@@ -494,7 +495,7 @@ impl TcpServer {
     }
 
     // 辅助方法：查找所有匹配的客户端
-    async fn find_matching_clients(&self, title: &str, exclude_id: usize) -> Vec<Arc<RexClient>> {
+    async fn find_matching_clients(&self, title: &str, exclude_id: usize) -> Vec<Arc<ClientInner>> {
         let clients = self.clients.read().await;
         clients
             .iter()
@@ -504,7 +505,7 @@ impl TcpServer {
     }
 
     // 辅助方法：发送消息到客户端并处理错误
-    async fn send_to_client(&self, client: &Arc<RexClient>, data: &BytesMut) -> Result<()> {
+    async fn send_to_client(&self, client: &Arc<ClientInner>, data: &BytesMut) -> Result<()> {
         match client.send_buf(data).await {
             Ok(_) => Ok(()),
             Err(e) => {
@@ -522,7 +523,7 @@ impl TcpServer {
     // 辅助方法：发送响应
     async fn send_response(
         &self,
-        client: &Arc<RexClient>,
+        client: &Arc<ClientInner>,
         data: &mut RexData,
         command: RexCommand,
     ) {
@@ -537,7 +538,7 @@ impl TcpServer {
     // 辅助方法：发送错误响应
     async fn send_error_response(
         &self,
-        source_client: &Option<Arc<RexClient>>,
+        source_client: &Option<Arc<ClientInner>>,
         data: &mut RexData,
         command: RexCommand,
         retcode: RetCode,
@@ -556,7 +557,7 @@ impl TcpServer {
     }
 
     // 添加客户端
-    async fn add_client(&self, client: Arc<RexClient>) {
+    async fn add_client(&self, client: Arc<ClientInner>) {
         let mut clients = self.clients.write().await;
         clients.push(client);
         info!("Total clients: {}", clients.len());
@@ -602,7 +603,7 @@ impl TcpServer {
     }
 
     // 根据ID查找客户端
-    async fn find_client_by_id(&self, id: usize) -> Option<Arc<RexClient>> {
+    async fn find_client_by_id(&self, id: usize) -> Option<Arc<ClientInner>> {
         let clients = self.clients.read().await;
         clients.iter().find(|client| client.id() == id).cloned()
     }

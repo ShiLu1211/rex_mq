@@ -2,9 +2,12 @@ use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
-
-use rex_mq::{QuicClient, QuicServer, RexClient, RexClientHandler, RexCommand, RexData};
 use tracing::info;
+
+use rex_mq::{
+    ClientInner, QuicClient, QuicServer, RexClientHandler,
+    protocol::{RexCommand, RexData},
+};
 
 pub struct TestClient {
     client: Arc<QuicClient>,
@@ -43,7 +46,7 @@ struct TestClientHandler {
 
 #[async_trait::async_trait]
 impl RexClientHandler for TestClientHandler {
-    async fn login_ok(&self, client: Arc<RexClient>, _data: &RexData) -> Result<()> {
+    async fn login_ok(&self, client: Arc<ClientInner>, _data: &RexData) -> Result<()> {
         info!(
             "login ok, client id: [{}], title: [{}]",
             client.id(),
@@ -52,7 +55,7 @@ impl RexClientHandler for TestClientHandler {
         Ok(())
     }
 
-    async fn handle(&self, _client: Arc<RexClient>, data: &RexData) -> Result<()> {
+    async fn handle(&self, _client: Arc<ClientInner>, data: &RexData) -> Result<()> {
         let mut msg = data.data();
         if msg.len() > 16 {
             msg = &msg[..16];

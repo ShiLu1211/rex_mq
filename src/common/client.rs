@@ -12,11 +12,11 @@ use dashmap::DashSet;
 use itertools::Itertools;
 
 use crate::{
-    common::{force_set_value, new_uuid, now_secs},
-    sender::RexSender,
+    RexSender,
+    utils::{force_set_value, new_uuid, now_secs},
 };
 
-pub struct RexClient {
+pub struct ClientInner {
     id: usize,
     local_addr: SocketAddr,
     titles: DashSet<String>,
@@ -25,9 +25,9 @@ pub struct RexClient {
     last_recv: AtomicU64,
 }
 
-impl RexClient {
+impl ClientInner {
     pub fn new(id: usize, local_addr: SocketAddr, title: &str, sender: Arc<dyn RexSender>) -> Self {
-        RexClient {
+        ClientInner {
             id,
             local_addr,
             titles: title.split(';').map(|s| s.to_string()).collect(),
@@ -37,7 +37,7 @@ impl RexClient {
     }
 
     pub fn from_title(title: String, sender: Arc<dyn RexSender>) -> Self {
-        RexClient {
+        ClientInner {
             id: new_uuid(),
             local_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
             titles: title.split(';').map(|s| s.to_string()).collect(),
