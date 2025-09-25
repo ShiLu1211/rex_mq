@@ -240,7 +240,7 @@ impl TcpServer {
     async fn handle_title_message(
         &self,
         data: &mut RexData,
-        client_id: usize,
+        client_id: u128,
         source_client: &Option<Arc<RexClientInner>>,
     ) {
         let title = data.title().unwrap_or_default().to_string();
@@ -279,7 +279,7 @@ impl TcpServer {
     async fn handle_group_message(
         &self,
         data: &mut RexData,
-        client_id: usize,
+        client_id: u128,
         source_client: &Option<Arc<RexClientInner>>,
     ) {
         let title = data.title().unwrap_or_default().to_string();
@@ -329,7 +329,7 @@ impl TcpServer {
     async fn handle_cast_message(
         &self,
         data: &mut RexData,
-        client_id: usize,
+        client_id: u128,
         source_client: &Option<Arc<RexClientInner>>,
     ) {
         let title = data.title().unwrap_or_default().to_string();
@@ -466,7 +466,7 @@ impl TcpServer {
     async fn find_target_client(
         &self,
         title: &str,
-        exclude_id: usize,
+        exclude_id: u128,
     ) -> Option<Arc<RexClientInner>> {
         let clients = self.clients.read().await;
         clients
@@ -479,7 +479,7 @@ impl TcpServer {
     async fn find_matching_clients(
         &self,
         title: &str,
-        exclude_id: usize,
+        exclude_id: u128,
     ) -> Vec<Arc<RexClientInner>> {
         let clients = self.clients.read().await;
         clients
@@ -549,7 +549,7 @@ impl TcpServer {
     }
 
     // 移除客户端
-    async fn remove_client(&self, client_id: usize) {
+    async fn remove_client(&self, client_id: u128) {
         let mut clients = self.clients.write().await;
         let initial_len = clients.len();
         clients.retain(|client| client.id() != client_id);
@@ -614,7 +614,7 @@ impl TcpServer {
     }
 
     // 根据ID查找客户端
-    async fn find_client_by_id(&self, id: usize) -> Option<Arc<RexClientInner>> {
+    async fn find_client_by_id(&self, id: u128) -> Option<Arc<RexClientInner>> {
         let clients = self.clients.read().await;
         clients.iter().find(|client| client.id() == id).cloned()
     }

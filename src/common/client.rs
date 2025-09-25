@@ -17,7 +17,7 @@ use crate::{
 };
 
 pub struct RexClientInner {
-    id: usize,
+    id: u128,
     local_addr: SocketAddr,
     titles: DashSet<String>,
     sender: Arc<dyn RexSender>,
@@ -26,7 +26,7 @@ pub struct RexClientInner {
 }
 
 impl RexClientInner {
-    pub fn new(id: usize, local_addr: SocketAddr, title: &str, sender: Arc<dyn RexSender>) -> Self {
+    pub fn new(id: u128, local_addr: SocketAddr, title: &str, sender: Arc<dyn RexSender>) -> Self {
         RexClientInner {
             id,
             local_addr,
@@ -59,11 +59,11 @@ impl RexClientInner {
         self.sender.close().await
     }
 
-    pub fn id(&self) -> usize {
+    pub fn id(&self) -> u128 {
         self.id
     }
 
-    pub fn set_id(&self, id: usize) {
+    pub fn set_id(&self, id: u128) {
         force_set_value(&self.id, id);
     }
 
@@ -73,6 +73,10 @@ impl RexClientInner {
 
     pub fn set_sender(&self, sender: Arc<dyn RexSender>) {
         force_set_value(&self.sender, sender);
+    }
+
+    pub fn title_list(&self) -> Vec<String> {
+        self.titles.iter().map(|s| s.to_string()).collect()
     }
 
     pub fn title_str(&self) -> String {

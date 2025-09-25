@@ -2,8 +2,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use uuid::Uuid;
 
-pub fn new_uuid() -> usize {
-    Uuid::new_v4().as_u128() as usize
+pub fn new_uuid() -> u128 {
+    Uuid::new_v4().as_u128()
 }
 
 pub fn now_secs() -> u64 {

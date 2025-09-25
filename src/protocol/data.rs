@@ -9,15 +9,15 @@ use crate::protocol::{RetCode, RexCommand, RexError};
 #[derive(Debug, Clone)]
 pub struct RexHeader {
     command: RexCommand,
-    source: usize,
-    target: usize,
+    source: u128,
+    target: u128,
     retcode: RetCode,
     ext_len: usize,
     data_len: usize,
 }
 
 impl RexHeader {
-    pub fn new(command: RexCommand, source: usize, target: usize) -> Self {
+    pub fn new(command: RexCommand, source: u128, target: u128) -> Self {
         Self {
             command,
             source,
@@ -32,10 +32,10 @@ impl RexHeader {
     pub fn command(&self) -> RexCommand {
         self.command
     }
-    pub fn source(&self) -> usize {
+    pub fn source(&self) -> u128 {
         self.source
     }
-    pub fn target(&self) -> usize {
+    pub fn target(&self) -> u128 {
         self.target
     }
     pub fn retcode(&self) -> RetCode {
@@ -132,7 +132,7 @@ pub struct RexData {
 impl RexData {
     // === 构造方法 ===
 
-    pub fn new(command: RexCommand, source: usize, target: usize, data: BytesMut) -> Self {
+    pub fn new(command: RexCommand, source: u128, target: u128, data: BytesMut) -> Self {
         let mut header = RexHeader::new(command, source, target);
         header.set_data_len(data.len());
 
@@ -145,8 +145,8 @@ impl RexData {
 
     pub fn with_title(
         command: RexCommand,
-        source: usize,
-        target: usize,
+        source: u128,
+        target: u128,
         title: String,
         data: BytesMut,
     ) -> Self {
@@ -164,8 +164,8 @@ impl RexData {
 
     pub fn with_retcode(
         command: RexCommand,
-        source: usize,
-        target: usize,
+        source: u128,
+        target: u128,
         retcode: RetCode,
         data: BytesMut,
     ) -> Self {
@@ -242,8 +242,8 @@ impl RexData {
         let ext_len = buf.get_u32_le() as usize;
         let data_len = buf.get_u32_le() as usize;
         let command_value = buf.get_u32_le();
-        let source = buf.get_u64_le() as usize;
-        let target = buf.get_u64_le() as usize;
+        let source = buf.get_u128_le();
+        let target = buf.get_u128_le();
         let retcode_value = buf.get_u32_le();
 
         let command = RexCommand::from_u32(command_value).ok_or(RexError::InvalidCommand)?;
@@ -348,12 +348,12 @@ impl RexData {
         self
     }
 
-    pub fn set_source(&mut self, source: usize) -> &mut Self {
+    pub fn set_source(&mut self, source: u128) -> &mut Self {
         self.header.source = source;
         self
     }
 
-    pub fn set_target(&mut self, target: usize) -> &mut Self {
+    pub fn set_target(&mut self, target: u128) -> &mut Self {
         self.header.target = target;
         self
     }
@@ -411,8 +411,8 @@ impl RexData {
 // 构建器
 pub struct RexDataBuilder {
     command: RexCommand,
-    source: usize,
-    target: usize,
+    source: u128,
+    target: u128,
     retcode: RetCode,
     title: Option<String>,
     data: BytesMut,
@@ -430,12 +430,12 @@ impl RexDataBuilder {
         }
     }
 
-    pub fn source(mut self, source: usize) -> Self {
+    pub fn source(mut self, source: u128) -> Self {
         self.source = source;
         self
     }
 
-    pub fn target(mut self, target: usize) -> Self {
+    pub fn target(mut self, target: u128) -> Self {
         self.target = target;
         self
     }

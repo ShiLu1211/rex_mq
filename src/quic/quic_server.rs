@@ -490,7 +490,7 @@ impl QuicServer {
         }
     }
 
-    async fn find_client_by_id(&self, id: usize) -> Option<Arc<RexClientInner>> {
+    async fn find_client_by_id(&self, id: u128) -> Option<Arc<RexClientInner>> {
         let clients = self.clients.read().await;
         clients.iter().find(|client| client.id() == id).cloned()
     }
