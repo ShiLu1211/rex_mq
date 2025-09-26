@@ -70,7 +70,7 @@ impl RexHeader {
 // 协议常量
 const MAGIC: u32 = 0x5245584D; // 'REXM'
 const VERSION: u16 = 1;
-const FIXED_HEADER_LEN: usize = 40; // 4+2+2+4+4+4+8+8+4
+const FIXED_HEADER_LEN: usize = 56; // 4+2+2+4+4+4+16+16+4
 
 // 计算CRC32
 fn compute_crc32(ext: &[u8], data: &[u8]) -> u32 {
@@ -200,8 +200,8 @@ impl RexData {
         buf.put_u32_le(ext_bytes.len() as u32);
         buf.put_u32_le(self.data.len() as u32);
         buf.put_u32_le(self.header.command.as_u32());
-        buf.put_u64_le(self.header.source as u64);
-        buf.put_u64_le(self.header.target as u64);
+        buf.put_u128_le(self.header.source);
+        buf.put_u128_le(self.header.target);
         buf.put_u32_le(self.header.retcode as u32);
 
         // 写入扩展和数据
