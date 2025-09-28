@@ -10,7 +10,7 @@ use tracing::info;
 
 use rex_mq::{
     RexClient, RexClientConfig, RexClientHandler, RexClientInner, RexServer, RexServerConfig,
-    TcpClient, TcpServer,
+    RexSystem, TcpClient, TcpServer,
     protocol::{RexCommand, RexData, RexDataBuilder},
 };
 
@@ -24,7 +24,8 @@ async fn main() -> Result<()> {
 
     // 启动服务器
     let config = RexServerConfig::from_addr(server_addr);
-    let server = TcpServer::open(config).await?;
+    let system = RexSystem::new("server".into());
+    let server = TcpServer::open(system.clone(), config).await?;
     info!("Server started on {}", server_addr);
 
     sleep(Duration::from_secs(1)).await;
@@ -95,9 +96,10 @@ async fn main() -> Result<()> {
     sleep(Duration::from_secs(1)).await;
 
     let config = RexServerConfig::from_addr(server_addr);
-    let _server = TcpServer::open(config).await?;
+    let _server = TcpServer::open(system.clone(), config).await?;
     sleep(Duration::from_secs(1)).await;
     info!("port refused success");
+    system.close().await;
     Ok(())
 }
 

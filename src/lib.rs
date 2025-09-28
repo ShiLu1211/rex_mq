@@ -11,5 +11,6 @@ pub use crate::{
     common::*,
     net::*,
     quic::{QuicClient, QuicSender, QuicServer},
+    system::RexSystem,
     tcp::{TcpClient, TcpSender, TcpServer},
 };

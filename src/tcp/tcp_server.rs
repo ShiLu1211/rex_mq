@@ -12,33 +12,33 @@ use bytes::{Buf, BytesMut};
 use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, TcpStream, tcp::OwnedReadHalf},
-    sync::{RwLock, broadcast},
+    sync::broadcast,
 };
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    RexClientInner, RexServer, RexServerConfig, TcpSender,
+    RexClientInner, RexServer, RexServerConfig, RexSystem, TcpSender,
     protocol::{RetCode, RexCommand, RexData},
     utils::{new_uuid, now_secs},
 };
 
 pub struct TcpServer {
+    system: Arc<RexSystem>,
     config: RexServerConfig,
     listener: Arc<TcpListener>,
-    clients: RwLock<Vec<Arc<RexClientInner>>>,
     shutdown_tx: Arc<broadcast::Sender<()>>,
 }
 #[async_trait::async_trait]
 impl RexServer for TcpServer {
-    async fn open(config: RexServerConfig) -> Result<Arc<Self>> {
+    async fn open(system: Arc<RexSystem>, config: RexServerConfig) -> Result<Arc<Self>> {
         let addr = config.bind_addr;
         let listener = TcpListener::bind(addr).await?;
 
         let (shutdown_tx, _) = broadcast::channel(4);
         let server = Arc::new(TcpServer {
+            system,
             config,
             listener: Arc::new(listener),
-            clients: RwLock::new(vec![]),
             shutdown_tx: Arc::new(shutdown_tx),
         });
 
@@ -74,7 +74,7 @@ impl RexServer for TcpServer {
                 loop {
                     tokio::select! {
                         _ = tokio::time::sleep(check_interval) => {
-                            server_clone.cleanup_inactive_clients(client_timeout).await;
+                            server_clone.cleanup_inactive_clients(client_timeout);
                         }
                         _ = shutdown_rx.recv() => {
                             info!("Cleanup task received shutdown signal, stopping.");
@@ -94,7 +94,6 @@ impl RexServer for TcpServer {
             warn!("Error sending shutdown signal: {}", e);
         }
 
-        self.close_clients().await;
         info!("Shutdown complete");
     }
 }
@@ -120,7 +119,7 @@ impl TcpServer {
                     .handle_connection_inner(peer_clone.clone(), reader)
                     .await;
                 // 连接断开时清理客户端
-                self.remove_client(peer_clone.id()).await;
+                self.remove_client(peer_clone.id());
                 info!("Connection {} closed and cleaned up", peer_addr);
             }
         });
@@ -198,7 +197,7 @@ impl TcpServer {
 
     async fn handle_data(&self, data: &mut RexData, peer: Arc<RexClientInner>) {
         let client_id = data.header().source();
-        let source_client = self.find_client_by_id(client_id).await;
+        let source_client = self.system.find_some_by_id(client_id);
 
         // 更新客户端活跃时间
         if let Some(client) = &source_client {
@@ -243,10 +242,10 @@ impl TcpServer {
         client_id: u128,
         source_client: &Option<Arc<RexClientInner>>,
     ) {
-        let title = data.title().unwrap_or_default().to_string();
+        let title = data.title().unwrap_or_default();
         debug!("Received title message: {}", title);
 
-        if let Some(target_client) = self.find_target_client(&title, client_id).await {
+        if let Some(target_client) = self.system.find_one_by_title(title, Some(client_id)) {
             data.set_target(target_client.id());
 
             if let Err(e) = self.send_to_client(&target_client, &data.serialize()).await {
@@ -282,10 +281,10 @@ impl TcpServer {
         client_id: u128,
         source_client: &Option<Arc<RexClientInner>>,
     ) {
-        let title = data.title().unwrap_or_default().to_string();
+        let title = data.title().unwrap_or_default();
         debug!("Received group message: {}", title);
 
-        let matching_clients = self.find_matching_clients(&title, client_id).await;
+        let matching_clients = self.system.find_all_by_title(title, Some(client_id));
 
         if matching_clients.is_empty() {
             warn!("No clients found for group title: {}", title);
@@ -332,10 +331,10 @@ impl TcpServer {
         client_id: u128,
         source_client: &Option<Arc<RexClientInner>>,
     ) {
-        let title = data.title().unwrap_or_default().to_string();
+        let title = data.title().unwrap_or_default();
         debug!("Received cast message: {}", title);
 
-        let matching_clients = self.find_matching_clients(&title, client_id).await;
+        let matching_clients = self.system.find_all_by_title(title, Some(client_id));
 
         if matching_clients.is_empty() {
             warn!("No clients found for cast title: {}", title);
@@ -375,7 +374,7 @@ impl TcpServer {
 
         // 清理发送失败的客户端
         for failed_client_id in failed_clients {
-            self.remove_client(failed_client_id).await;
+            self.remove_client(failed_client_id);
         }
     }
 
@@ -397,7 +396,7 @@ impl TcpServer {
             // 新客户端
             peer.set_id(data.header().source());
             peer.insert_title(data.data_as_string_lossy());
-            self.add_client(peer.clone()).await;
+            self.system.add_client(peer.clone());
             self.send_response(&peer, data, RexCommand::LoginReturn)
                 .await;
             info!(
@@ -462,33 +461,6 @@ impl TcpServer {
         }
     }
 
-    // 辅助方法：查找目标客户端（第一个匹配）
-    async fn find_target_client(
-        &self,
-        title: &str,
-        exclude_id: u128,
-    ) -> Option<Arc<RexClientInner>> {
-        let clients = self.clients.read().await;
-        clients
-            .iter()
-            .find(|client| client.has_title(title) && client.id() != exclude_id)
-            .cloned()
-    }
-
-    // 辅助方法：查找所有匹配的客户端
-    async fn find_matching_clients(
-        &self,
-        title: &str,
-        exclude_id: u128,
-    ) -> Vec<Arc<RexClientInner>> {
-        let clients = self.clients.read().await;
-        clients
-            .iter()
-            .filter(|client| client.has_title(title) && client.id() != exclude_id)
-            .cloned()
-            .collect()
-    }
-
     // 辅助方法：发送消息到客户端并处理错误
     async fn send_to_client(&self, client: &Arc<RexClientInner>, data: &BytesMut) -> Result<()> {
         match client.send_buf(data).await {
@@ -541,16 +513,9 @@ impl TcpServer {
         }
     }
 
-    // 添加客户端
-    async fn add_client(&self, client: Arc<RexClientInner>) {
-        let mut clients = self.clients.write().await;
-        clients.push(client);
-        info!("Total clients: {}", clients.len());
-    }
-
     // 移除客户端
-    async fn remove_client(&self, client_id: u128) {
-        let mut clients = self.clients.write().await;
+    fn remove_client(&self, client_id: u128) {
+        let mut clients = self.system.find_all();
         let initial_len = clients.len();
         clients.retain(|client| client.id() != client_id);
 
@@ -563,33 +528,9 @@ impl TcpServer {
         }
     }
 
-    // 关闭所有客户端
-    async fn close_clients(&self) {
-        let clients = self.clients.read().await;
-        let mut close_tasks = Vec::new();
-
-        for client in clients.iter() {
-            let client_clone = client.clone();
-            close_tasks.push(tokio::spawn(async move {
-                if let Err(e) = client_clone.close().await {
-                    warn!("Error closing client {}: {}", client_clone.id(), e);
-                }
-            }));
-        }
-
-        // 等待所有客户端关闭完成
-        for task in close_tasks {
-            if let Err(e) = task.await {
-                error!("Error waiting for client close task: {}", e);
-            }
-        }
-
-        info!("All clients closed");
-    }
-
     // 清理不活跃的客户端
-    async fn cleanup_inactive_clients(&self, timeout_secs: u64) {
-        let mut clients = self.clients.write().await;
+    fn cleanup_inactive_clients(&self, timeout_secs: u64) {
+        let mut clients = self.system.find_all();
         let now = now_secs();
         let initial_count = clients.len();
 
@@ -611,11 +552,5 @@ impl TcpServer {
         if removed_count > 0 {
             info!("Cleaned up {} inactive clients", removed_count);
         }
-    }
-
-    // 根据ID查找客户端
-    async fn find_client_by_id(&self, id: u128) -> Option<Arc<RexClientInner>> {
-        let clients = self.clients.read().await;
-        clients.iter().find(|client| client.id() == id).cloned()
     }
 }
