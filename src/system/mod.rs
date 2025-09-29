@@ -42,6 +42,35 @@ impl RexSystem {
         }
     }
 
+    pub fn register_title(&self, client_id: u128, title: &str) {
+        if let Some(client) = self.clients.get(&client_id) {
+            // 更新 client 自身的 title 列表
+            client.insert_title(title.to_string());
+
+            // 更新系统的映射
+            self.title_to_client
+                .entry(title.to_string())
+                .or_default()
+                .insert(client_id);
+        }
+    }
+
+    pub fn unregister_title(&self, client_id: u128, title: &str) {
+        if let Some(client) = self.clients.get(&client_id) {
+            // 更新 client 自身的 title 列表
+            client.remove_title(title);
+
+            // 更新系统的映射
+            if let Some(clients) = self.title_to_client.get_mut(title) {
+                clients.remove(&client_id);
+                if clients.is_empty() {
+                    // 没有 client 了，就把这个 title 清理掉
+                    self.title_to_client.remove(title);
+                }
+            }
+        }
+    }
+
     pub fn find_all(&self) -> Vec<Arc<RexClientInner>> {
         self.clients
             .iter()

@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
 
     // 启动服务器
     let config = RexServerConfig::from_addr(server_addr);
-    let system = RexSystem::new("server".into());
+    let system = RexSystem::new("server");
     let server = TcpServer::open(system.clone(), config).await?;
     info!("Server started on {}", server_addr);
 

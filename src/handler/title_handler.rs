@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::{
     RexClientInner, RexSystem,
@@ -11,9 +11,10 @@ use crate::{
 pub async fn handle(
     system: &Arc<RexSystem>,
     source_client: &Arc<RexClientInner>,
-    mut data: RexData,
+    data: &mut RexData,
 ) -> Result<()> {
     let title = data.title().unwrap_or_default();
+    debug!("Received title message: {}", title);
     let client_id = data.header().source();
 
     let mut success = false;

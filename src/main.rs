@@ -44,7 +44,7 @@ pub enum Commands {
 pub struct ServerArgs {
     /// ip:port
     #[arg(short, long)]
-    pub address: String,
+    address: String,
     /// 服务端id
     #[arg(short, long)]
     server_id: String,
