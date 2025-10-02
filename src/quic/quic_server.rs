@@ -8,20 +8,22 @@ use std::{
 };
 
 use anyhow::Result;
-use quinn::{Connection, Endpoint, ServerConfig};
+use bytes::{Buf, BytesMut};
+use quinn::{Connection, Endpoint, RecvStream, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::sync::{Mutex, RwLock, oneshot};
 use tracing::{debug, info, warn};
 
 use crate::{
-    client::RexClient, command::RexCommand, common::now_secs, data::RexData,
-    quic_sender::QuicSender,
+    QuicSender, RexClientInner,
+    protocol::{RetCode, RexCommand, RexData},
+    utils::now_secs,
 };
 
 pub struct QuicServer {
     ep: Endpoint,
     conns: Mutex<Vec<Connection>>,
-    clients: RwLock<Vec<Arc<RexClient>>>,
+    clients: RwLock<Vec<Arc<RexClientInner>>>,
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
 }
 
@@ -71,7 +73,7 @@ impl QuicServer {
             let server_clone = server.clone();
             async move {
                 let check_interval = Duration::from_secs(15); // 检查频率
-                let client_timeout = 30; // 客户端超时时间（秒）
+                let client_timeout = 45; // 客户端超时时间（秒）
                 let mut shutdown_rx = shutdown_rx;
 
                 loop {
@@ -120,30 +122,134 @@ impl QuicServer {
 }
 
 impl QuicServer {
-    async fn handle_connection(&self, conn: Connection) {
-        info!("Handling new connection");
+    async fn handle_connection(self: Arc<Self>, conn: Connection) {
+        let addr = conn.remote_address();
+        info!("Handling new connection: {}", addr);
+
         loop {
             match conn.accept_uni().await {
-                Ok(mut rcv) => {
-                    debug!("Accepted incoming stream");
-                    // 使用长度前缀帧协议，在一个流上可以读多条消息
-                    loop {
-                        let mut data = match RexData::read_from_quinn_stream(&mut rcv).await {
-                            Ok(data) => data,
-                            Err(e) => {
-                                warn!("Error reading from stream: {}", e);
-                                break;
-                            }
-                        };
-                        self.handle_data(&mut data, &conn).await;
-                    }
+                Ok(rcv) => {
+                    debug!("Accepted incoming stream from {}", addr);
+                    let server_clone = self.clone();
+                    let conn_clone = conn.clone();
+
+                    tokio::spawn(async move {
+                        if let Err(e) = server_clone.handle_stream(rcv, &conn_clone).await {
+                            warn!("Error handling stream from {}: {}", addr, e);
+                        }
+                        debug!("Stream from {} finished", addr);
+                    });
                 }
                 Err(e) => {
-                    warn!("Error accepting stream: {}", e);
+                    warn!("Connection {} closed or error: {}", addr, e);
                     break;
                 }
             }
         }
+
+        // 从连接列表中移除
+        let mut conns = self.conns.lock().await;
+        conns.retain(|c| c.stable_id() != conn.stable_id());
+        info!("Connection {} removed from list", addr);
+    }
+
+    async fn handle_stream(&self, mut stream: RecvStream, conn: &Connection) -> Result<()> {
+        // 方法1: 如果你知道最大消息大小，可以一次性读取
+        // 这种方式适合 QUIC 的消息边界特性
+        // match self.handle_stream_read_to_end(&mut stream, conn).await {
+        //     Ok(_) => return Ok(()),
+        //     Err(e) => {
+        //         debug!("Read-to-end failed, trying streaming approach: {}", e);
+        //         // 如果失败，尝试流式读取
+        //     }
+        // }
+
+        // 方法2: 流式读取（适合大消息或未知大小的消息）
+        self.handle_stream_buffered(&mut stream, conn).await
+    }
+
+    #[allow(dead_code)]
+    async fn handle_stream_read_to_end(
+        &self,
+        stream: &mut RecvStream,
+        conn: &Connection,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // QUIC 流有明确的结束标识，适合一次性读取
+        const MAX_MESSAGE_SIZE: usize = 1024 * 1024; // 1MB 限制
+
+        let data = stream.read_to_end(MAX_MESSAGE_SIZE).await?;
+        if data.is_empty() {
+            return Ok(()); // 空流
+        }
+
+        let buf = BytesMut::from(&data[..]);
+        let (mut rex_data, consumed) = RexData::deserialize(buf)?;
+
+        debug!(
+            "Received complete message: command={:?}, size={} bytes",
+            rex_data.header().command(),
+            consumed
+        );
+
+        self.handle_data(&mut rex_data, conn).await;
+        Ok(())
+    }
+
+    async fn handle_stream_buffered(
+        &self,
+        stream: &mut RecvStream,
+        conn: &Connection,
+    ) -> Result<()> {
+        let mut buffer = BytesMut::new();
+        let mut temp_buf = vec![0u8; 4096];
+
+        loop {
+            match stream.read(&mut temp_buf).await {
+                Ok(Some(n)) => {
+                    buffer.extend_from_slice(&temp_buf[..n]);
+
+                    // 尝试解析完整的数据包
+                    while let Some(parse_result) = RexData::try_deserialize(&buffer) {
+                        match parse_result {
+                            Ok((mut data, consumed_bytes)) => {
+                                debug!(
+                                    "Parsed message: command={:?}, consumed {} bytes",
+                                    data.header().command(),
+                                    consumed_bytes
+                                );
+
+                                buffer.advance(consumed_bytes);
+                                self.handle_data(&mut data, conn).await;
+                            }
+                            Err(e) => {
+                                warn!("Error parsing data from stream: {}", e);
+                                buffer.clear();
+                                return Err(e.into());
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {
+                    // 流结束
+                    debug!("Stream ended");
+                    break;
+                }
+                Err(e) => {
+                    warn!("Error reading from stream: {}", e);
+                    return Err(e.into());
+                }
+            }
+        }
+
+        // 处理缓冲区中剩余的不完整数据
+        if !buffer.is_empty() {
+            warn!(
+                "Stream ended with {} bytes of incomplete data",
+                buffer.len()
+            );
+        }
+
+        Ok(())
     }
 
     async fn handle_data(&self, data: &mut RexData, conn: &Connection) {
@@ -158,7 +264,7 @@ impl QuicServer {
         match data.header().command() {
             RexCommand::Title => {
                 let title = data.title().unwrap_or_default().to_string();
-                info!("Received title: {}", title);
+                debug!("Received title: {}", title);
 
                 let mut has_target = false;
 
@@ -181,16 +287,27 @@ impl QuicServer {
 
                 if !has_target {
                     warn!("No client found for title: {}", title);
+                    if let Some(client) = &source_client
+                        && let Err(e) = client
+                            .send_buf(
+                                &data
+                                    .set_command(RexCommand::TitleReturn)
+                                    .set_retcode(RetCode::NoTargetAvailable)
+                                    .serialize(),
+                            )
+                            .await
+                    {
+                        warn!("Error sending to client: {}", e);
+                    };
                 }
             }
-            RexCommand::TitleReturn => todo!(),
             RexCommand::Group => {
                 let title = data.title().unwrap_or_default().to_string();
-                info!("Received group: {}", title);
+                debug!("Received group: {}", title);
 
                 let mut has_target = false;
 
-                let matching_clients: Vec<Arc<RexClient>> = self
+                let matching_clients: Vec<Arc<RexClientInner>> = self
                     .clients
                     .read()
                     .await
@@ -213,17 +330,29 @@ impl QuicServer {
                     } else {
                         debug!("Sent group message to client ID: {}", client.id());
                         has_target = true;
+                        break;
                     }
                 }
 
                 if !has_target {
                     warn!("No client found for title: {}", title);
+                    if let Some(client) = &source_client
+                        && let Err(e) = client
+                            .send_buf(
+                                &data
+                                    .set_command(RexCommand::GroupReturn)
+                                    .set_retcode(RetCode::NoTargetAvailable)
+                                    .serialize(),
+                            )
+                            .await
+                    {
+                        warn!("Error sending to client: {}", e);
+                    };
                 }
             }
-            RexCommand::GroupReturn => todo!(),
             RexCommand::Cast => {
                 let title = data.title().unwrap_or_default().to_string();
-                info!("Received cast: {}", title);
+                debug!("Received cast: {}", title);
 
                 let mut has_target = false;
 
@@ -245,9 +374,20 @@ impl QuicServer {
 
                 if !has_target {
                     warn!("No client found for title: {}", title);
+                    if let Some(client) = &source_client
+                        && let Err(e) = client
+                            .send_buf(
+                                &data
+                                    .set_command(RexCommand::CastReturn)
+                                    .set_retcode(RetCode::NoTargetAvailable)
+                                    .serialize(),
+                            )
+                            .await
+                    {
+                        warn!("Error sending to client: {}", e);
+                    };
                 }
             }
-            RexCommand::CastReturn => todo!(),
             RexCommand::Login => {
                 let snd = match conn.open_uni().await {
                     Ok(snd) => snd,
@@ -258,7 +398,7 @@ impl QuicServer {
                 };
                 let sender = Arc::new(QuicSender::new(snd));
                 if let Some(client) = &source_client {
-                    client.set_sender(sender.clone()).await;
+                    client.set_sender(sender.clone());
                     if let Err(e) = client
                         .send_buf(&data.set_command(RexCommand::LoginReturn).serialize())
                         .await
@@ -266,10 +406,10 @@ impl QuicServer {
                         warn!("Error sending login return: {}", e);
                     };
                 } else {
-                    let client = Arc::new(RexClient::new(
+                    let client = Arc::new(RexClientInner::new(
                         data.header().source(),
                         conn.remote_address(),
-                        String::from_utf8_lossy(data.data()).to_string(),
+                        &data.data_as_string_lossy(),
                         sender,
                     ));
                     self.add_client(client.clone()).await;
@@ -281,28 +421,19 @@ impl QuicServer {
                     };
                 }
             }
-            RexCommand::LoginReturn => todo!(),
             RexCommand::Check => {
-                let mut snd = match conn.open_uni().await {
-                    Ok(snd) => snd,
-                    Err(e) => {
-                        warn!("Error opening uni stream: {}", e);
-                        return;
-                    }
-                };
-                if let Err(e) = snd
-                    .write_all(&data.set_command(RexCommand::CheckReturn).serialize())
+                debug!("Received check");
+                if let Err(e) = self
+                    .send_buf_once(conn, &data.set_command(RexCommand::CheckReturn).serialize())
                     .await
                 {
                     warn!("Error sending check return: {}", e);
-                };
-                debug!("Sent check return to {}", conn.remote_address());
-                if let Err(e) = snd.finish() {
-                    warn!("Error finishing check return: {}", e);
+                } else {
+                    debug!("Sent check return");
                 }
             }
-            RexCommand::CheckReturn => todo!(),
             RexCommand::RegTitle => {
+                debug!("Received reg title");
                 let title = data.data_as_string_lossy();
                 if let Some(client) = &source_client {
                     client.insert_title(title);
@@ -316,8 +447,8 @@ impl QuicServer {
                     warn!("No client found for registration");
                 }
             }
-            RexCommand::RegTitleReturn => todo!(),
             RexCommand::DelTitle => {
+                debug!("Received del title");
                 let title = data.data_as_string_lossy();
                 if let Some(client) = &source_client {
                     client.remove_title(&title);
@@ -331,11 +462,21 @@ impl QuicServer {
                     warn!("No client found for registration");
                 }
             }
-            RexCommand::DelTitleReturn => todo!(),
+            _ => {
+                debug!("Received command: {:?}", data.header().command());
+            }
         }
     }
 
-    async fn add_client(&self, client: Arc<RexClient>) {
+    /// 新开一个连接，发送后就关闭
+    async fn send_buf_once(&self, conn: &Connection, buf: &[u8]) -> Result<()> {
+        let mut snd = conn.open_uni().await?;
+        snd.write_all(buf).await?;
+        snd.finish()?;
+        Ok(())
+    }
+
+    async fn add_client(&self, client: Arc<RexClientInner>) {
         let mut clients = self.clients.write().await;
         clients.push(client);
     }
@@ -349,7 +490,7 @@ impl QuicServer {
         }
     }
 
-    async fn find_client_by_id(&self, id: usize) -> Option<Arc<RexClient>> {
+    async fn find_client_by_id(&self, id: u128) -> Option<Arc<RexClientInner>> {
         let clients = self.clients.read().await;
         clients.iter().find(|client| client.id() == id).cloned()
     }

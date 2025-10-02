@@ -1,16 +1,74 @@
-## changelog
+# RexMq
+## structure
+```
+.
+├── Cargo.toml
+├── CHANGELOG.md
+├── examples
+│   ├── port_refuse.rs
+│   └── tcp.rs
+├── README.md
+├── src
+│   ├── common // 基础配置
+│   │   ├── client_config.rs
+│   │   ├── client_handler.rs
+│   │   ├── client.rs
+│   │   ├── mod.rs
+│   │   └── server_config.rs
+│   ├── handler // handlers
+│   │   └── mod.rs
+│   ├── lib.rs
+│   ├── main.rs
+│   ├── net // 非协议相关trait
+│   │   ├── client.rs
+│   │   ├── mod.rs
+│   │   ├── sender.rs
+│   │   ├── server.rs
+│   │   └── types.rs
+│   ├── protocol // 数据格式
+│   │   ├── command.rs
+│   │   ├── data.rs
+│   │   ├── error.rs
+│   │   ├── mod.rs
+│   │   └── retcode.rs
+│   ├── quic 
+│   │   ├── mod.rs
+│   │   ├── quic_client.rs
+│   │   ├── quic_sender.rs
+│   │   └── quic_server.rs
+│   ├── system // 管理client
+│   │   ├── mod.rs
+│   │   └── system.rs
+│   ├── tcp
+│   │   ├── mod.rs
+│   │   ├── tcp_client.rs
+│   │   ├── tcp_sender.rs
+│   │   └── tcp_server.rs
+│   └── utils // 工具
+│       └── mod.rs
+└── tests
+    ├── base_test.rs
+    ├── common.rs
+    └── connect_test.rs
+```
 
-- 2025.8.28 init quinn project to debug refuse port error
+## example
+``` bash
+cargo run (-r) server -a [127.0.0.1:8881]
 
-- 2025.8.29 refactor quinn project \
-help by quinn, actively drop objects
+cargo run (-r) recv -a [127.0.0.1:8881] -t [one] (-b)
 
-- 2025.8.31 change to long connection
+cargo run (-r) bench -a [127.0.0.1:8881] -y [title] -t [one] -i [100] (-b)
+```
 
-- 2025.9.1 data impl \
-login and trans data by title \
-client handler impl
+## tests
+``` bash
+cargo test --tests
+cargo run --example port_refuse
+```
 
-- 2025.9.2 client heartbeat impl
+## docs
+```
+tcp len 1024 tps 5w latency 70us(wsl)
 
-- 2025.9.3 server check heartbeat and remove node
+```

@@ -1,5 +1,5 @@
 [package]
-name = "quinn_test"
+name = "rex_mq"
 version = "0.1.0"
 edition = "2024"
 
@@ -17,3 +17,21 @@ tracing-subscriber = "0.3"
 async-trait = "0.1"
 thiserror = "2.0"
 itertools = "0.14"
+clap = { version = "4.5", features = ["derive"] }
+hdrhistogram = "7.5"
+rand = "0.9"
+crc32fast = "1.5"
+
+[profile.dev]
+opt-level = 0 # 编译快，调试方便
+debug = true
+lto = false
+
+[profile.release]
+opt-level = 3 # 高优化
+debug = false
+lto = "thin"
+
+[profile.bench]
+inherits = "release"
+debug = true         # 保留符号方便分析

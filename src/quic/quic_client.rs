@@ -8,8 +8,9 @@ use std::{
 };
 
 use anyhow::Result;
+use bytes::{Buf, BytesMut};
 use quinn::{
-    ClientConfig, Connection, Endpoint, crypto::rustls::QuicClientConfig,
+    ClientConfig, Connection, Endpoint, RecvStream, crypto::rustls::QuicClientConfig,
     rustls::crypto::CryptoProvider,
 };
 use rustls::{
@@ -22,12 +23,9 @@ use tokio::{sync::RwLock, time::sleep};
 use tracing::{debug, info, warn};
 
 use crate::{
-    client::RexClient,
-    client_handler::RexClientHandler,
-    command::RexCommand,
-    common::{new_uuid, now_secs},
-    data::RexData,
-    quic_sender::QuicSender,
+    QuicSender, RexClientHandler, RexClientInner,
+    protocol::{RexCommand, RexData},
+    utils::{new_uuid, now_secs},
 };
 
 pub struct QuicClient {
@@ -35,7 +33,7 @@ pub struct QuicClient {
 
     // Connection和Client需要在重连时替换
     conn: RwLock<Option<Connection>>,
-    client: RwLock<Option<Arc<RexClient>>>,
+    client: RwLock<Option<Arc<RexClientInner>>>,
 
     // 连接配置（重连时复用）
     server_addr: SocketAddr,
@@ -43,8 +41,11 @@ pub struct QuicClient {
     client_config: ClientConfig,
     client_handler: Arc<dyn RexClientHandler>,
 
+    // 状态
     status: AtomicBool,
+    shutdown: AtomicBool,
 
+    // 心跳
     idle_timeout: u64,
     pong_wait: u64,
 }
@@ -71,6 +72,7 @@ impl QuicClient {
             client_config,
             client_handler: handler,
             status: AtomicBool::new(false),
+            shutdown: AtomicBool::new(false),
             idle_timeout: 10,
             pong_wait: 5,
         }))
@@ -110,6 +112,7 @@ impl QuicClient {
     }
 
     pub async fn close(&self) {
+        self.shutdown.store(true, Ordering::SeqCst);
         if let Some(client) = self.get_client().await
             && let Err(e) = client.close().await
         {
@@ -149,14 +152,14 @@ impl QuicClient {
             *conn_guard = Some(conn);
 
             if let Some(existing_client) = client_guard.as_ref() {
-                existing_client.set_sender(Arc::new(sender)).await;
+                existing_client.set_sender(Arc::new(sender));
             } else {
                 let id = new_uuid();
                 let local_addr = self.ep.local_addr()?;
-                let new_client = Arc::new(RexClient::new(
+                let new_client = Arc::new(RexClientInner::new(
                     id,
                     local_addr,
-                    self.title.read().await.clone(),
+                    &self.title.read().await,
                     Arc::new(sender),
                 ));
                 *client_guard = Some(new_client);
@@ -182,10 +185,16 @@ impl QuicClient {
     }
 
     // 🔥 核心方法：持续接收服务器消息
-    async fn receiving_task(&self) {
+    async fn receiving_task(self: Arc<Self>) {
         info!("Starting receiver task");
+        let mut backoff = 1;
 
         loop {
+            if self.shutdown.load(Ordering::SeqCst) {
+                info!("Shutdown requested, stop receiving_task");
+                break;
+            }
+
             let conn = {
                 let conn_guard = self.conn.read().await;
                 conn_guard.clone()
@@ -193,40 +202,53 @@ impl QuicClient {
 
             if let Some(conn) = conn {
                 match conn.accept_uni().await {
-                    Ok(mut rcv) => {
+                    Ok(rcv) => {
                         debug!("Accepted incoming stream from server");
+                        backoff = 1;
 
-                        // 处理单个流的所有消息
-                        loop {
-                            let data = match RexData::read_from_quinn_stream(&mut rcv).await {
-                                Ok(data) => data,
-                                Err(e) => {
-                                    warn!("Error reading from stream: {}", e);
-                                    break;
-                                }
-                            };
+                        // 🔥 关键：一旦成功接收流，立即设置状态为连接正常
+                        self.status.store(true, Ordering::SeqCst);
 
-                            if let Some(client) = self.get_client().await {
-                                self.handle_received_data(&client, &data).await;
+                        let self_clone = self.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = self_clone.handle_stream(rcv).await {
+                                warn!("Error handling stream : {}", e);
                             }
-                        }
+                            debug!("Stream task ended");
+                        });
                     }
                     Err(e) => {
                         warn!("Error accepting stream: {}", e);
                         self.status.store(false, Ordering::SeqCst);
-                        break;
+
+                        // 🔥 accept_uni 失败才需要重连
+                        info!("Attempting to reconnect in {backoff}s...");
+                        sleep(Duration::from_secs(backoff)).await;
+
+                        match self.connect().await {
+                            Ok(_) => {
+                                backoff = 1;
+                            }
+                            Err(e) => {
+                                warn!("Reconnect failed: {}", e);
+                                backoff = (backoff * 2).min(60);
+                            }
+                        }
                     }
                 }
-            }
+            } else {
+                // 无连接时尝试重连
+                info!("No connection, attempting to reconnect in {backoff}s...");
+                sleep(Duration::from_secs(backoff)).await;
 
-            if !self.status.load(Ordering::SeqCst) {
-                info!("Attempting to reconnect...");
-                if let Err(e) = self.connect().await {
-                    warn!("Connection error: {}", e);
-                    sleep(Duration::from_secs(1)).await;
-                    continue;
-                } else {
-                    sleep(Duration::from_millis(100)).await;
+                match self.connect().await {
+                    Ok(_) => {
+                        backoff = 1;
+                    }
+                    Err(e) => {
+                        warn!("Reconnect failed: {}", e);
+                        backoff = (backoff * 2).min(60);
+                    }
                 }
             }
         }
@@ -234,8 +256,108 @@ impl QuicClient {
         info!("Receiver task ended");
     }
 
-    async fn heartbeat_task(&self, interval: u64) {
+    async fn handle_stream(&self, mut stream: RecvStream) -> Result<()> {
+        // 方法1: 如果你知道最大消息大小，可以一次性读取
+        // 这种方式适合 QUIC 的消息边界特性
+        // match self.handle_stream_read_to_end(&mut stream, conn).await {
+        //     Ok(_) => return Ok(()),
+        //     Err(e) => {
+        //         debug!("Read-to-end failed, trying streaming approach: {}", e);
+        //         // 如果失败，尝试流式读取
+        //     }
+        // }
+
+        // 方法2: 流式读取（适合大消息或未知大小的消息）
+        self.handle_stream_buffered(&mut stream).await
+    }
+
+    #[allow(dead_code)]
+    async fn handle_stream_read_to_end(
+        &self,
+        stream: &mut RecvStream,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // QUIC 流有明确的结束标识，适合一次性读取
+        const MAX_MESSAGE_SIZE: usize = 1024 * 1024; // 1MB 限制
+
+        let data = stream.read_to_end(MAX_MESSAGE_SIZE).await?;
+        if data.is_empty() {
+            return Ok(()); // 空流
+        }
+
+        let buf = BytesMut::from(&data[..]);
+        let (rex_data, consumed) = RexData::deserialize(buf)?;
+
+        debug!(
+            "Received complete message: command={:?}, size={} bytes",
+            rex_data.header().command(),
+            consumed
+        );
+
+        self.handle_data(&rex_data).await;
+        Ok(())
+    }
+
+    async fn handle_stream_buffered(&self, stream: &mut RecvStream) -> Result<()> {
+        let mut buffer = BytesMut::new();
+        let mut temp_buf = vec![0u8; 4096];
+
         loop {
+            match stream.read(&mut temp_buf).await {
+                Ok(Some(n)) => {
+                    buffer.extend_from_slice(&temp_buf[..n]);
+
+                    // 尝试解析完整的数据包
+                    while let Some(parse_result) = RexData::try_deserialize(&buffer) {
+                        match parse_result {
+                            Ok((data, consumed_bytes)) => {
+                                debug!(
+                                    "Parsed message: command={:?}, consumed {} bytes",
+                                    data.header().command(),
+                                    consumed_bytes
+                                );
+
+                                buffer.advance(consumed_bytes);
+                                self.handle_data(&data).await;
+                            }
+                            Err(e) => {
+                                warn!("Error parsing data from stream: {}", e);
+                                buffer.clear();
+                                return Err(e.into());
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {
+                    // 流结束
+                    debug!("Stream ended");
+                    break;
+                }
+                Err(e) => {
+                    warn!("Error reading from stream: {}", e);
+                    return Err(e.into());
+                }
+            }
+        }
+
+        // 处理缓冲区中剩余的不完整数据
+        if !buffer.is_empty() {
+            warn!(
+                "Stream ended with {} bytes of incomplete data",
+                buffer.len()
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn heartbeat_task(&self, interval: u64) {
+        let mut backoff = 1;
+        loop {
+            if self.shutdown.load(Ordering::SeqCst) {
+                info!("Shutdown requested, stop heartbeat task");
+                break;
+            }
+
             sleep(Duration::from_secs(interval)).await;
             let Some(client) = self.get_client().await else {
                 warn!("No client available for heartbeat");
@@ -245,6 +367,7 @@ impl QuicClient {
             let last = client.last_recv();
             let idle = now_secs().saturating_sub(last);
             if idle < self.idle_timeout {
+                backoff = 1; // 有数据 -> 重置退避
                 // 最近已经收到数据，不需要发心跳
                 continue;
             }
@@ -264,7 +387,14 @@ impl QuicClient {
                         if let Err(e) = s.write_all(&ping).await {
                             warn!("Heartbeat write failed: {}", e);
                             let _ = s.finish();
-                            let _ = self.connect().await;
+                            // 重连带退避
+                            sleep(Duration::from_secs(backoff)).await;
+                            if let Err(e) = self.connect().await {
+                                warn!("Reconnect after heartbeat failed: {}", e);
+                                backoff = (backoff * 2).min(60);
+                            } else {
+                                backoff = 1;
+                            }
                             continue;
                         }
                         let _ = s.finish();
@@ -275,15 +405,30 @@ impl QuicClient {
                         sleep(Duration::from_secs(self.pong_wait)).await;
                         let after = client.last_recv();
                         if after <= before {
-                            warn!("No response after heartbeat, trigger reconnect");
-                            let _ = self.connect().await;
+                            warn!(
+                                "No response after heartbeat, trigger reconnect in {backoff}s..."
+                            );
+                            sleep(Duration::from_secs(backoff)).await;
+                            if let Err(e) = self.connect().await {
+                                warn!("Reconnect after heartbeat failed: {}", e);
+                                backoff = (backoff * 2).min(60);
+                            } else {
+                                backoff = 1;
+                            }
                         } else {
                             debug!("Pong (or other data) received, connection healthy");
+                            backoff = 1;
                         }
                     }
                     Err(e) => {
                         warn!("Heartbeat open_uni failed: {}", e);
-                        let _ = self.connect().await;
+                        sleep(Duration::from_secs(backoff)).await;
+                        if let Err(e) = self.connect().await {
+                            warn!("Reconnect after heartbeat failed: {}", e);
+                            backoff = (backoff * 2).min(60);
+                        } else {
+                            backoff = 1;
+                        }
                         continue;
                     }
                 }
@@ -291,7 +436,11 @@ impl QuicClient {
         }
     }
 
-    async fn handle_received_data(&self, client: &Arc<RexClient>, data: &RexData) {
+    async fn handle_data(&self, data: &RexData) {
+        let Some(client) = self.get_client().await else {
+            warn!("No client available for handling data");
+            return;
+        };
         let handler = self.client_handler.clone();
         match data.header().command() {
             RexCommand::LoginReturn => {
@@ -331,14 +480,14 @@ impl QuicClient {
         client.update_last_recv();
     }
 
-    async fn get_client(&self) -> Option<Arc<RexClient>> {
+    async fn get_client(&self) -> Option<Arc<RexClientInner>> {
         let client_guard = self.client.read().await;
         client_guard.clone()
     }
 
     async fn send_data_with_client(
         &self,
-        client: &Arc<RexClient>,
+        client: &Arc<RexClientInner>,
         data: &mut RexData,
     ) -> Result<()> {
         data.set_source(client.id());
