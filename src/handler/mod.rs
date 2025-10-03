@@ -1,10 +1,10 @@
-mod cast_handler;
-mod check_handler;
-mod del_title_handler;
-mod group_handler;
-mod login_handler;
-mod reg_title_handler;
-mod title_handler;
+mod cast;
+mod check;
+mod del_title;
+mod group;
+mod login;
+mod reg;
+mod title;
 
 use std::sync::Arc;
 
@@ -22,13 +22,13 @@ pub async fn handle(
     data: &mut RexData,
 ) -> Result<()> {
     match data.header().command() {
-        RexCommand::Title => title_handler::handle(system, client, data).await,
-        RexCommand::Group => group_handler::handle(system, client, data).await,
-        RexCommand::Cast => cast_handler::handle(system, client, data).await,
-        RexCommand::Login => login_handler::handle(system, client, data).await,
-        RexCommand::Check => check_handler::handle(system, client, data).await,
-        RexCommand::RegTitle => reg_title_handler::handle(system, client, data).await,
-        RexCommand::DelTitle => del_title_handler::handle(system, client, data).await,
+        RexCommand::Title => title::handle(system, client, data).await,
+        RexCommand::Group => group::handle(system, client, data).await,
+        RexCommand::Cast => cast::handle(system, client, data).await,
+        RexCommand::Login => login::handle(system, client, data).await,
+        RexCommand::Check => check::handle(system, client, data).await,
+        RexCommand::RegTitle => reg::handle(system, client, data).await,
+        RexCommand::DelTitle => del_title::handle(system, client, data).await,
         _ => {
             debug!("no handle command: {:?}", data.header().command());
             Ok(())

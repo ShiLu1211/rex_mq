@@ -46,7 +46,7 @@ pub struct ServerArgs {
     #[arg(short, long)]
     address: String,
     /// 服务端id
-    #[arg(short, long)]
+    #[arg(short, long, default_value = "rexd")]
     server_id: String,
 }
 

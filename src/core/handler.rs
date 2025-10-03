@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use super::RexClientInner;
+use crate::RexClientInner;
 use crate::protocol::RexData;
 
 #[async_trait::async_trait]
