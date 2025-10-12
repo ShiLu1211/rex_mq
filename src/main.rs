@@ -13,7 +13,7 @@ use tokio::{sync::Mutex, time::sleep};
 
 use rex_mq::{
     RexClient, RexClientConfig, RexClientHandler, RexClientInner, RexServer, RexServerConfig,
-    RexSystem, TcpClient, TcpServer,
+    RexSystem, RexSystemConfig, TcpClient, TcpServer,
     protocol::{RexCommand, RexData},
     utils::{now_micros, timestamp, timestamp_data},
 };
@@ -110,7 +110,7 @@ pub struct BenchArgs {
 pub async fn start_server(args: ServerArgs) -> Result<()> {
     let address = args.address.parse::<SocketAddr>()?;
     let config = RexServerConfig::from_addr(address);
-    let system = RexSystem::new(&args.server_id);
+    let system = RexSystem::new(RexSystemConfig::from_id(&args.server_id));
     let _server = TcpServer::open(system, config).await?;
 
     loop {

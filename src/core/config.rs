@@ -42,24 +42,18 @@ impl RexClientConfig {
 
 pub struct RexServerConfig {
     pub bind_addr: SocketAddr,
-    pub check_interval: u64,
-    pub client_timeout: u64,
+    pub read_buffer_size: usize,
+    pub max_buffer_size: usize,
+    pub max_concurrent_handlers: usize,
 }
 
 impl RexServerConfig {
-    pub fn new(bind_addr: SocketAddr, check_interval: u64, client_timeout: u64) -> Self {
-        Self {
-            bind_addr,
-            check_interval,
-            client_timeout,
-        }
-    }
-
     pub fn from_addr(bind_addr: SocketAddr) -> Self {
         Self {
             bind_addr,
-            check_interval: 15,
-            client_timeout: 45,
+            read_buffer_size: 8192,
+            max_buffer_size: 65536,
+            max_concurrent_handlers: 100,
         }
     }
 }

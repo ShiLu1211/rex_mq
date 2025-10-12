@@ -10,7 +10,7 @@ use tracing::info;
 
 use rex_mq::{
     RexClient, RexClientConfig, RexClientHandler, RexClientInner, RexServer, RexServerConfig,
-    RexSystem, TcpClient, TcpServer,
+    RexSystem, RexSystemConfig, TcpClient, TcpServer,
     protocol::{RexCommand, RexData, RexDataBuilder},
 };
 
@@ -24,7 +24,8 @@ async fn main() -> Result<()> {
 
     // 启动服务器
     let config = RexServerConfig::from_addr(server_addr);
-    let system = RexSystem::new("server");
+    let system_config = RexSystemConfig::from_id("server");
+    let system = RexSystem::new(system_config);
     let server = TcpServer::open(system.clone(), config).await?;
     info!("Server started on {}", server_addr);
 

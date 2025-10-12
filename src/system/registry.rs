@@ -1,24 +1,50 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use dashmap::{DashMap, DashSet};
 use rand::seq::IteratorRandom;
-use tracing::warn;
+use tokio::sync::broadcast;
+use tracing::{info, warn};
 
-use crate::RexClientInner;
+use crate::{RexClientInner, RexSystemConfig, utils::now_secs};
 
 pub struct RexSystem {
-    server_id: String,
+    pub config: RexSystemConfig,
     clients: DashMap<u128, Arc<RexClientInner>>,
     title_to_client: DashMap<String, DashSet<u128>>,
+    shutdown_tx: Arc<broadcast::Sender<()>>,
 }
 
 impl RexSystem {
-    pub fn new(server_id: &str) -> Arc<Self> {
-        Arc::new(Self {
-            server_id: server_id.to_string(),
+    pub fn new(config: RexSystemConfig) -> Arc<Self> {
+        let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1);
+        let system = Arc::new(Self {
+            config,
             clients: DashMap::new(),
             title_to_client: DashMap::new(),
-        })
+            shutdown_tx: Arc::new(shutdown_tx),
+        });
+
+        tokio::spawn({
+            let system_clone = system.clone();
+            async move {
+                let check_interval = Duration::from_secs(system_clone.config.check_interval); // 检查频率
+                let client_timeout = system_clone.config.client_timeout; // 客户端超时时间（秒）
+
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(check_interval) => {
+                            system_clone.cleanup_inactive_clients(client_timeout);
+                        }
+                        _ = shutdown_rx.recv() => {
+                            info!("Cleanup task received shutdown signal, stopping.");
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        system
     }
 
     pub fn add_client(&self, client: Arc<RexClientInner>) {
@@ -118,6 +144,8 @@ impl RexSystem {
     }
 
     pub async fn close(&self) {
+        let _ = self.shutdown_tx.send(());
+
         for client in self.clients.iter() {
             if let Err(e) = client.close().await {
                 warn!("close client error: {}", e);
@@ -126,5 +154,32 @@ impl RexSystem {
 
         self.clients.clear();
         self.title_to_client.clear();
+    }
+}
+
+impl RexSystem {
+    fn cleanup_inactive_clients(&self, timeout_secs: u64) {
+        let mut clients = self.find_all();
+        let now = now_secs();
+        let initial_count = clients.len();
+
+        clients.retain(|client| {
+            let last_active = client.last_recv();
+            if now - last_active > timeout_secs {
+                warn!(
+                    "Client {} (addr: {}) timed out, removing...",
+                    client.id(),
+                    client.local_addr()
+                );
+                false
+            } else {
+                true
+            }
+        });
+
+        let removed_count = initial_count - clients.len();
+        if removed_count > 0 {
+            info!("Cleaned up {} inactive clients", removed_count);
+        }
     }
 }
