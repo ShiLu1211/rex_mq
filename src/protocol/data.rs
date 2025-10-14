@@ -4,7 +4,10 @@ use anyhow::Result;
 use bytes::{Buf, BufMut, BytesMut};
 use crc32fast::Hasher as Crc32Hasher;
 
-use crate::protocol::{RetCode, RexCommand, RexError};
+use crate::{
+    RexError,
+    protocol::{RetCode, RexCommand},
+};
 
 #[derive(Debug, Clone)]
 pub struct RexHeader {

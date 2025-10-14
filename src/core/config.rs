@@ -39,3 +39,21 @@ impl RexClientConfig {
         *self.title.write().await = title;
     }
 }
+
+pub struct RexServerConfig {
+    pub bind_addr: SocketAddr,
+    pub read_buffer_size: usize,
+    pub max_buffer_size: usize,
+    pub max_concurrent_handlers: usize,
+}
+
+impl RexServerConfig {
+    pub fn from_addr(bind_addr: SocketAddr) -> Self {
+        Self {
+            bind_addr,
+            read_buffer_size: 8192,
+            max_buffer_size: 65536,
+            max_concurrent_handlers: 100,
+        }
+    }
+}
