@@ -254,12 +254,12 @@ impl RcvClientHandler {
 
 #[async_trait::async_trait]
 impl RexClientHandler for RcvClientHandler {
-    async fn login_ok(&self, client: Arc<RexClientInner>, _data: &RexData) -> Result<()> {
-        println!("recv client login ok: [{}]", client.id());
+    async fn login_ok(&self, client: Arc<RexClientInner>, _data: RexData) -> Result<()> {
+        println!("recv client login ok: [{:032X}]", client.id());
         Ok(())
     }
 
-    async fn handle(&self, _client: Arc<RexClientInner>, data: &RexData) -> Result<()> {
+    async fn handle(&self, _client: Arc<RexClientInner>, data: RexData) -> Result<()> {
         if self.bench {
             let command = data.header().command();
             if command == RexCommand::Title
@@ -282,12 +282,12 @@ struct SndClientHandler;
 
 #[async_trait::async_trait]
 impl RexClientHandler for SndClientHandler {
-    async fn login_ok(&self, client: Arc<RexClientInner>, _data: &RexData) -> Result<()> {
-        println!("send client login ok: [{}]", client.id());
+    async fn login_ok(&self, client: Arc<RexClientInner>, _data: RexData) -> Result<()> {
+        println!("send client login ok: [{:032X}]", client.id());
         Ok(())
     }
 
-    async fn handle(&self, _client: Arc<RexClientInner>, data: &RexData) -> Result<()> {
+    async fn handle(&self, _client: Arc<RexClientInner>, data: RexData) -> Result<()> {
         println!("send received: {}", data.data_as_string_lossy());
         Ok(())
     }

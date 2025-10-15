@@ -1,11 +1,12 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{cmp::min, net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
-use tracing::info;
+use tracing::{info, warn};
 
 use rex_mq::{
-    QuicClient, QuicServer, RexClientHandler, RexClientInner,
+    QuicClient, QuicServer, RexClient, RexClientConfig, RexClientHandler, RexClientInner,
+    RexServer, RexServerConfig, RexSystem, RexSystemConfig,
     protocol::{RexCommand, RexData},
 };
 
@@ -46,22 +47,26 @@ struct TestClientHandler {
 
 #[async_trait::async_trait]
 impl RexClientHandler for TestClientHandler {
-    async fn login_ok(&self, client: Arc<RexClientInner>, _data: &RexData) -> Result<()> {
+    async fn login_ok(&self, client: Arc<RexClientInner>, _data: RexData) -> Result<()> {
         info!(
-            "login ok, client id: [{}], title: [{}]",
+            "login ok, client id: [{:032X}], title: [{}]",
             client.id(),
             client.title_str()
         );
         Ok(())
     }
 
-    async fn handle(&self, _client: Arc<RexClientInner>, data: &RexData) -> Result<()> {
-        let mut msg = data.data();
-        if msg.len() > 16 {
-            msg = &msg[..16];
+    async fn handle(&self, _client: Arc<RexClientInner>, data: RexData) -> Result<()> {
+        let msg = data.data();
+        info!(
+            "recv from [{:032X}], data: {:?}, data_len: {}",
+            data.header().source(),
+            &msg[..min(16, msg.len())],
+            msg.len()
+        );
+        if let Err(e) = self.tx.send(data).await {
+            warn!("channel send data error: {}", e);
         }
-        info!("recv from [{}], data: {:?}", data.header().source(), msg);
-        self.tx.send(data.clone()).await?;
         Ok(())
     }
 }
@@ -83,14 +88,17 @@ impl TestFactory {
     }
 
     pub async fn create_server(&self) -> Result<Arc<QuicServer>> {
-        let server = QuicServer::open(self.server_addr).await?;
+        let system = RexSystem::new(RexSystemConfig::from_id("server"));
+        let config = RexServerConfig::from_addr(self.server_addr);
+        let server = QuicServer::open(system, config).await?;
         Ok(server)
     }
 
     pub async fn create_client(&self, title: &str) -> Result<TestClient> {
         let (tx, rx) = channel(10);
         let handler = Arc::new(TestClientHandler { tx });
-        let client = QuicClient::new(self.server_addr, title.into(), handler).await?;
+        let config = RexClientConfig::new(self.server_addr, title.into(), handler);
+        let client = QuicClient::new(config)?;
         let client = client.open().await?;
         Ok(TestClient::new(client, rx))
     }

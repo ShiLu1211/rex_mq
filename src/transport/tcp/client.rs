@@ -8,11 +8,11 @@ use anyhow::Result;
 use bytes::{Buf, BytesMut};
 use tokio::{
     io::AsyncReadExt,
-    net::TcpSocket,
+    net::{TcpSocket, tcp::OwnedReadHalf},
     sync::{Mutex, RwLock, broadcast},
     time::sleep,
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     ConnectionState, RexClient, RexClientConfig, RexClientInner,
@@ -33,9 +33,6 @@ pub struct TcpClient {
     // state management
     shutdown_tx: broadcast::Sender<()>,
     last_heartbeat: AtomicU64,
-
-    // data buffer for incomplete packets
-    read_buffer: Arc<Mutex<BytesMut>>,
 }
 
 #[async_trait::async_trait]
@@ -49,7 +46,6 @@ impl RexClient for TcpClient {
             config,
             shutdown_tx,
             last_heartbeat: AtomicU64::new(now_secs()),
-            read_buffer: Arc::new(Mutex::new(BytesMut::new())),
         }))
     }
 
@@ -148,7 +144,7 @@ impl TcpClient {
                 }
                 Err(e) => {
                     if attempts >= self.config.max_reconnect_attempts {
-                        error!("Failed to connect after {} attempts: {}", attempts, e);
+                        warn!("Failed to connect after {} attempts: {}", attempts, e);
                         return Err(e);
                     }
 
@@ -227,88 +223,55 @@ impl TcpClient {
         Ok(())
     }
 
-    async fn receive_data_task(self: &Arc<Self>, mut rx: tokio::net::tcp::OwnedReadHalf) {
-        let mut temp_buf = vec![0u8; 8192];
+    async fn receive_data_task(self: &Arc<Self>, mut rx: OwnedReadHalf) {
+        let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
+        let mut temp_buf = vec![0u8; self.config.read_buffer_size];
+        let mut total_read = 0;
 
         loop {
             match rx.read(&mut temp_buf).await {
-                Ok(0) => {
-                    info!("TCP connection closed by server");
-                    break;
-                }
                 Ok(n) => {
-                    if let Err(e) = self.process_received_data(&temp_buf[..n]).await {
-                        error!("Error processing received data: {}", e);
+                    total_read += n;
+                    debug!("Buffered read: {} bytes (total: {})", n, total_read);
+
+                    buffer.extend_from_slice(&temp_buf[..n]);
+
+                    // 尝试解析完整的数据包
+                    while let Some(parse_result) = RexData::try_deserialize(&buffer) {
+                        match parse_result {
+                            Ok((data, consumed_bytes)) => {
+                                debug!(
+                                    "Parsed message: command={:?}, consumed {} bytes",
+                                    data.header().command(),
+                                    consumed_bytes
+                                );
+
+                                buffer.advance(consumed_bytes);
+                                self.on_data(data).await;
+                            }
+                            Err(e) => {
+                                warn!("Data parsing error: {}, clearing buffer", e);
+                                buffer.clear();
+                                break;
+                            }
+                        }
+                    }
+
+                    // 检查缓冲区是否过大
+                    if buffer.len() > self.config.max_buffer_size {
+                        warn!(
+                            "Read buffer too large ({}KB), clearing",
+                            buffer.len() / 1024
+                        );
+                        buffer.clear();
                     }
                 }
                 Err(e) => {
-                    error!("TCP read error: {}", e);
+                    warn!("TCP read error: {}", e);
                     break;
                 }
             }
         }
-    }
-
-    async fn process_received_data(self: &Arc<Self>, new_data: &[u8]) -> Result<()> {
-        // 将新数据添加到缓冲区
-        {
-            let mut buffer = self.read_buffer.lock().await;
-            buffer.extend_from_slice(new_data);
-        }
-
-        // 尝试解析完整的数据包
-        loop {
-            let parse_result = {
-                let mut buffer = self.read_buffer.lock().await;
-
-                if buffer.is_empty() {
-                    break;
-                }
-
-                // 使用新的 try_deserialize 方法
-                match RexData::try_deserialize(&buffer) {
-                    Some(Ok((data, consumed_bytes))) => {
-                        // 成功解析，移除已消耗的字节
-                        buffer.advance(consumed_bytes);
-                        Some(Ok(data))
-                    }
-                    Some(Err(e)) => {
-                        // 解析错误，清理缓冲区以避免无限循环
-                        error!("Data parsing error: {}, clearing buffer", e);
-                        buffer.clear();
-                        Some(Err(e))
-                    }
-                    None => {
-                        // 数据不完整，需要更多数据
-                        // 检查缓冲区是否过大
-                        if buffer.len() > 64 * 1024 {
-                            warn!(
-                                "Read buffer too large ({}KB), clearing",
-                                buffer.len() / 1024
-                            );
-                            buffer.clear();
-                        }
-                        None
-                    }
-                }
-            };
-
-            match parse_result {
-                Some(Ok(data)) => {
-                    self.on_data(&data).await;
-                }
-                Some(Err(_)) => {
-                    // 错误已经在上面处理了
-                    break;
-                }
-                None => {
-                    // 需要更多数据
-                    break;
-                }
-            }
-        }
-
-        Ok(())
     }
 
     async fn connection_monitor_task(self: &Arc<Self>) {
@@ -325,7 +288,7 @@ impl TcpClient {
                     *self.connection_state.lock().await = ConnectionState::Reconnecting;
 
                     if let Err(e) = self.connect_with_retry().await {
-                        error!("Reconnection failed: {}", e);
+                        warn!("Reconnection failed: {}", e);
                         *self.connection_state.lock().await = ConnectionState::Disconnected;
                     }
                 }
@@ -396,13 +359,13 @@ impl TcpClient {
         Ok(())
     }
 
-    async fn on_data(&self, data: &RexData) {
+    async fn on_data(&self, data: RexData) {
         if let Some(client) = self.get_client().await {
             self.handle_received_data(&client, data).await;
         }
     }
 
-    async fn handle_received_data(&self, client: &Arc<RexClientInner>, data: &RexData) {
+    async fn handle_received_data(&self, client: &Arc<RexClientInner>, data: RexData) {
         debug!(
             "Handling received data: command={:?}",
             data.header().command()
@@ -434,8 +397,7 @@ impl TcpClient {
             | RexCommand::Group
             | RexCommand::GroupReturn
             | RexCommand::Cast
-            | RexCommand::CastReturn
-            | RexCommand::CheckReturn => {
+            | RexCommand::CastReturn => {
                 if let Err(e) = handler.handle(client.clone(), data).await {
                     warn!("Error in message handler: {}", e);
                 }

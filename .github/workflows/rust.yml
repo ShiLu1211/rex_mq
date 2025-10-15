@@ -21,4 +21,4 @@ jobs:
     - name: Run tests
       run: cargo test
     - name: Run
-      run: cargo run --example tcp
+      run: cargo run --example port_refuse

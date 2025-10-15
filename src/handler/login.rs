@@ -14,21 +14,24 @@ pub async fn handle(
     data: &mut RexData,
 ) -> Result<()> {
     let client_id = data.header().source();
-    debug!("[{}] Received login message", client_id);
+    debug!("[{:032X}] Received login message", client_id);
     let title = data.data_as_string_lossy();
 
     if let Some(client) = system.find_some_by_id(client_id) {
-        warn!("[{}] Client already exists", client_id);
+        warn!("[{:032X}] Client already exists", client_id);
         client.set_sender(source_client.sender());
         client.insert_title(title);
         if let Err(e) = client
             .send_buf(&data.set_command(RexCommand::LoginReturn).serialize())
             .await
         {
-            warn!("[{}] Send login return message error: {}", client_id, e);
+            warn!(
+                "[{:032X}] Send login return message error: {}",
+                client_id, e
+            );
         } else {
             info!(
-                "Client {} logged in with title: {}",
+                "Client [{:032X}] logged in with title: {}",
                 client_id,
                 data.data_as_string_lossy()
             );
@@ -43,10 +46,13 @@ pub async fn handle(
             .send_buf(&data.set_command(RexCommand::LoginReturn).serialize())
             .await
         {
-            warn!("[{}] Send login return message error: {}", client_id, e);
+            warn!(
+                "[{:032X}] Send login return message error: {}",
+                client_id, e
+            );
         } else {
             info!(
-                "New client {} logged in with title: {}",
+                "New client [{:032X}] logged in with title: {}",
                 source_client.id(),
                 data.data_as_string_lossy()
             );

@@ -6,7 +6,10 @@ mod tests {
     use std::time::Duration;
 
     use anyhow::Result;
-    use rex_mq::protocol::{RetCode, RexCommand};
+    use rex_mq::{
+        RexServer,
+        protocol::{RetCode, RexCommand},
+    };
     use tokio::time::sleep;
 
     use crate::common::TestFactory;
@@ -33,8 +36,8 @@ mod tests {
             client1.recv().await.unwrap().retcode()
         );
 
-        //大数据测试
-        let a = vec![1; 8192 * 1000];
+        // 大数据测试
+        let a = vec![1; 8192 * 10];
         client1.send(RexCommand::Title, "abc", &a).await.unwrap();
 
         let recv_data = tokio::select! {

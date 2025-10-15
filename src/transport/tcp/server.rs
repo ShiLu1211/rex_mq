@@ -10,8 +10,8 @@ use tokio::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    ConnectionGuard, RexClientInner, RexServer, RexServerConfig, RexSystem, TcpSender,
-    handler::handle, protocol::RexData, utils::new_uuid,
+    RexClientInner, RexServer, RexServerConfig, RexSystem, TcpSender, handler::handle,
+    protocol::RexData, utils::new_uuid,
 };
 
 pub struct TcpServer {
@@ -94,15 +94,12 @@ impl TcpServer {
             let server_clone = self.clone();
             async move {
                 let _permit = permit;
-                // 创建连接保护
-                let _guard = ConnectionGuard {
-                    system: server_clone.system.clone(),
-                    peer_id: peer.id(),
-                };
 
                 server_clone
                     .handle_connection_inner(peer.clone(), reader)
                     .await;
+
+                server_clone.system.remove_client(peer.id()).await;
 
                 info!("Connection {} closed and cleaned up", peer_addr);
             }
@@ -110,7 +107,7 @@ impl TcpServer {
     }
 
     async fn handle_connection_inner(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         peer: Arc<RexClientInner>,
         mut reader: OwnedReadHalf,
     ) {

@@ -30,7 +30,7 @@ pub async fn handle(
             )
             .await
         {
-            warn!("client [{}] error back: {}", client_id, e);
+            warn!("client [{:032X}] error back: {}", client_id, e);
         }
         return Ok(());
     }
@@ -43,7 +43,7 @@ pub async fn handle(
 
         if let Err(e) = client.send_buf(&data.serialize()).await {
             warn!(
-                "Failed to send cast message to client {}: {}",
+                "Failed to send cast message to client [{:032X}]: {}",
                 client.id(),
                 e
             );
@@ -61,7 +61,7 @@ pub async fn handle(
 
     // 清理发送失败的客户端
     for failed_client_id in failed_clients {
-        system.remove_client(failed_client_id);
+        system.remove_client(failed_client_id).await;
     }
 
     if success_count == 0
@@ -74,7 +74,7 @@ pub async fn handle(
             )
             .await
     {
-        warn!("client [{}] error back: {}", client_id, e);
+        warn!("client [{:032X}] error back: {}", client_id, e);
     }
     Ok(())
 }
