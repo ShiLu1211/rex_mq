@@ -22,7 +22,24 @@ pub struct QuicServer {
 
 #[async_trait::async_trait]
 impl RexServer for QuicServer {
-    async fn open(system: Arc<RexSystem>, config: RexServerConfig) -> Result<Arc<Self>> {
+    async fn close(&self) {
+        // Send shutdown signal to all tasks
+        if let Err(e) = self.shutdown_tx.send(()) {
+            warn!("Error sending shutdown signal: {}", e);
+        }
+        // Close endpoint
+        self.endpoint.close(0u32.into(), b"server shutdown");
+
+        // Wait a bit for graceful shutdown
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        self.endpoint.wait_idle().await;
+
+        info!("Shutdown complete");
+    }
+}
+
+impl QuicServer {
+    pub async fn open(system: Arc<RexSystem>, config: RexServerConfig) -> Result<Arc<Self>> {
         let addr = config.bind_addr;
 
         // 生成自签名证书
@@ -86,24 +103,7 @@ impl RexServer for QuicServer {
 
         Ok(server)
     }
-
-    async fn close(&self) {
-        // Send shutdown signal to all tasks
-        if let Err(e) = self.shutdown_tx.send(()) {
-            warn!("Error sending shutdown signal: {}", e);
-        }
-        // Close endpoint
-        self.endpoint.close(0u32.into(), b"server shutdown");
-
-        // Wait a bit for graceful shutdown
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        self.endpoint.wait_idle().await;
-
-        info!("Shutdown complete");
-    }
-}
-
-impl QuicServer {
+    
     async fn handle_connection(self: Arc<Self>, connection: Connection, peer_addr: SocketAddr) {
         info!("Handling QUIC connection from {}", peer_addr);
 

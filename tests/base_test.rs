@@ -6,23 +6,26 @@ mod tests {
     use std::time::Duration;
 
     use anyhow::Result;
-    use rex_mq::{
-        RexServer,
-        protocol::{RetCode, RexCommand},
-    };
+    use rex_mq::protocol::{RetCode, RexCommand};
     use tokio::time::sleep;
 
-    use crate::common::TestFactory;
+    use crate::common::{Protocol, TestFactory};
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn base_test() -> Result<()> {
+        base_test_inner(Protocol::Tcp).await?;
+        base_test_inner(Protocol::Quic).await?;
+        Ok(())
+    }
+
+    async fn base_test_inner(protocol: Protocol) -> Result<()> {
         let ss = TestFactory::default();
 
-        let server = ss.create_server().await?;
+        let server = ss.create_server(protocol).await?;
 
-        let mut client1 = ss.create_client("hello;bcd").await?;
-        let mut client2 = ss.create_client("hello;abc").await?;
-        let mut client3 = ss.create_client("hello;abc").await?;
+        let mut client1 = ss.create_client("hello;bcd", protocol).await?;
+        let mut client2 = ss.create_client("hello;abc", protocol).await?;
+        let mut client3 = ss.create_client("hello;abc", protocol).await?;
 
         sleep(Duration::from_secs(1)).await;
 
@@ -74,8 +77,8 @@ mod tests {
         client1.close().await;
         client2.close().await;
         client3.close().await;
-
         server.close().await;
+        ss.close().await;
         sleep(Duration::from_secs(1)).await;
         Ok(())
     }

@@ -23,12 +23,23 @@ pub struct TcpServer {
 }
 #[async_trait::async_trait]
 impl RexServer for TcpServer {
-    async fn open(system: Arc<RexSystem>, config: RexServerConfig) -> Result<Arc<Self>> {
+    async fn close(&self) {
+        // Send shutdown signal to all tasks
+        if let Err(e) = self.shutdown_tx.send(()) {
+            warn!("Error sending shutdown signal: {}", e);
+        }
+
+        info!("Shutdown complete");
+    }
+}
+
+impl TcpServer {
+    pub async fn open(system: Arc<RexSystem>, config: RexServerConfig) -> Result<Arc<Self>> {
         let addr = config.bind_addr;
         let listener = TcpListener::bind(addr).await?;
         let semaphore = Arc::new(Semaphore::new(config.max_concurrent_handlers));
 
-        let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1);
+        let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1 + config.max_concurrent_handlers);
         let server = Arc::new(TcpServer {
             system,
             config,
@@ -60,17 +71,6 @@ impl RexServer for TcpServer {
         Ok(server)
     }
 
-    async fn close(&self) {
-        // Send shutdown signal to all tasks
-        if let Err(e) = self.shutdown_tx.send(()) {
-            warn!("Error sending shutdown signal: {}", e);
-        }
-
-        info!("Shutdown complete");
-    }
-}
-
-impl TcpServer {
     async fn handle_connection(self: Arc<Self>, stream: TcpStream, peer_addr: SocketAddr) {
         info!("New connection from {}", peer_addr);
 
@@ -117,64 +117,78 @@ impl TcpServer {
         let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
         let mut temp_buf = vec![0u8; self.config.read_buffer_size];
 
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+
         loop {
-            // 从 TCP 流中读取数据
-            match reader.read(&mut temp_buf).await {
-                Ok(0) => {
-                    info!("Connection {} closed by client", peer_addr);
-                    break;
-                }
-                Ok(n) => {
-                    // 将读取的数据添加到缓冲区
-                    buffer.extend_from_slice(&temp_buf[..n]);
+            tokio::select! {
+                // 从 TCP 流中读取数据
+                result = reader.read(&mut temp_buf) => {
+                    match result {
+                        Ok(0) => {
+                            info!("Connection {} closed by client", peer_addr);
+                            break;
+                        }
+                        Ok(n) => {
+                            // 将读取的数据添加到缓冲区
+                            buffer.extend_from_slice(&temp_buf[..n]);
 
-                    // 尝试解析完整的数据包
-                    while let Some(parse_result) = RexData::try_deserialize(&buffer) {
-                        match parse_result {
-                            Ok((mut data, consumed_bytes)) => {
-                                debug!(
-                                    "Received data from {}: command={:?}, consumed {} bytes",
-                                    peer_addr,
-                                    data.header().command(),
-                                    consumed_bytes
-                                );
+                            // 尝试解析完整的数据包
+                            while let Some(parse_result) = RexData::try_deserialize(&buffer) {
+                                match parse_result {
+                                    Ok((mut data, consumed_bytes)) => {
+                                        debug!(
+                                            "Received data from {}: command={:?}, consumed {} bytes",
+                                            peer_addr,
+                                            data.header().command(),
+                                            consumed_bytes
+                                        );
 
-                                // 移除已消耗的字节
-                                buffer.advance(consumed_bytes);
+                                        // 移除已消耗的字节
+                                        buffer.advance(consumed_bytes);
 
-                                // 异步处理数据
-                                tokio::spawn({
-                                    let peer_clone = peer.clone();
-                                    let server_clone = self.clone();
-                                    async move {
-                                        if let Err(e) =
-                                            handle(&server_clone.system, &peer_clone, &mut data)
-                                                .await
-                                        {
+                                        // 异步处理数据
+                                        // tokio::spawn({
+                                        //     let peer_clone = peer.clone();
+                                        //     let server_clone = self.clone();
+                                        //     async move {
+                                        //         if let Err(e) =
+                                        //             handle(&server_clone.system, &peer_clone, &mut data)
+                                        //                 .await
+                                        //         {
+                                        //             warn!("Error handling data from {}: {}", peer_addr, e);
+                                        //         }
+                                        //     }
+                                        // });
+                                        if let Err(e) = handle(&self.system, &peer, &mut data).await {
                                             warn!("Error handling data from {}: {}", peer_addr, e);
                                         }
                                     }
-                                });
+                                    Err(e) => {
+                                        warn!(
+                                            "Error parsing data from {}: {}, clearing buffer",
+                                            peer_addr, e
+                                        );
+                                        buffer.clear();
+                                        break;
+                                    }
+                                }
                             }
-                            Err(e) => {
-                                warn!(
-                                    "Error parsing data from {}: {}, clearing buffer",
-                                    peer_addr, e
-                                );
+
+                            // 检查缓冲区大小，防止内存泄漏
+                            if buffer.len() > self.config.max_buffer_size {
+                                warn!("Buffer too large for connection {}, clearing", peer_addr);
                                 buffer.clear();
-                                break;
                             }
                         }
-                    }
-
-                    // 检查缓冲区大小，防止内存泄漏
-                    if buffer.len() > self.config.max_buffer_size {
-                        warn!("Buffer too large for connection {}, clearing", peer_addr);
-                        buffer.clear();
+                        Err(e) => {
+                            info!("Connection {} read error: {}", peer_addr, e);
+                            break;
+                        }
                     }
                 }
-                Err(e) => {
-                    info!("Connection {} read error: {}", peer_addr, e);
+                // 监听关闭信号
+                _ = shutdown_rx.recv() => {
+                    info!("Connection {} shutting down due to server shutdown", peer_addr);
                     break;
                 }
             }

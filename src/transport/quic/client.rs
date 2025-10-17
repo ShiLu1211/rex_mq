@@ -14,7 +14,7 @@ use rustls::{
     pki_types::{CertificateDer, ServerName, UnixTime},
 };
 use tokio::{
-    sync::{Mutex, RwLock, broadcast},
+    sync::{RwLock, broadcast},
     time::sleep,
 };
 use tracing::{debug, info, warn};
@@ -32,7 +32,7 @@ pub struct QuicClient {
     endpoint: Endpoint,
     connection: RwLock<Option<Connection>>,
     client: RwLock<Option<Arc<RexClientInner>>>,
-    connection_state: Arc<Mutex<ConnectionState>>,
+    connection_state: Arc<RwLock<ConnectionState>>,
 
     // config
     config: RexClientConfig,
@@ -45,7 +45,55 @@ pub struct QuicClient {
 
 #[async_trait::async_trait]
 impl RexClient for QuicClient {
-    fn new(config: RexClientConfig) -> Result<Arc<Self>> {
+    async fn send_data(&self, data: &mut RexData) -> Result<()> {
+        let state = *self.connection_state.read().await;
+
+        if state != ConnectionState::Connected {
+            return Err(anyhow::anyhow!("Client not connected (state: {:?})", state));
+        }
+
+        if let Some(client) = self.get_client().await {
+            self.send_data_with_client(&client, data).await
+        } else {
+            Err(anyhow::anyhow!("No active QUIC connection"))
+        }
+    }
+
+    async fn close(&self) {
+        info!("Shutting down QuicClient...");
+
+        // 发送关闭信号
+        let _ = self.shutdown_tx.send(());
+
+        // 关闭客户端连接
+        if let Some(client) = self.get_client().await
+            && let Err(e) = client.close().await
+        {
+            warn!("Error closing client connection: {}", e);
+        }
+
+        // 关闭QUIC连接
+        if let Some(conn) = self.connection.write().await.take() {
+            conn.close(0u32.into(), b"client shutdown");
+        }
+
+        // 关闭endpoint
+        self.endpoint.close(0u32.into(), b"client shutdown");
+        self.endpoint.wait_idle().await;
+
+        // 更新状态
+        *self.connection_state.write().await = ConnectionState::Disconnected;
+
+        info!("QuicClient shutdown complete");
+    }
+
+    async fn get_connection_state(&self) -> ConnectionState {
+        *self.connection_state.read().await
+    }
+}
+
+impl QuicClient {
+    pub fn new(config: RexClientConfig) -> Result<Arc<Self>> {
         let (shutdown_tx, _) = broadcast::channel(4);
 
         // 配置 QUIC 客户端
@@ -69,7 +117,7 @@ impl RexClient for QuicClient {
             endpoint,
             connection: RwLock::new(None),
             client: RwLock::new(None),
-            connection_state: Arc::new(Mutex::new(ConnectionState::Disconnected)),
+            connection_state: Arc::new(RwLock::new(ConnectionState::Disconnected)),
             config,
             client_config,
             shutdown_tx,
@@ -77,7 +125,7 @@ impl RexClient for QuicClient {
         }))
     }
 
-    async fn open(self: Arc<Self>) -> Result<Arc<Self>> {
+    pub async fn open(self: Arc<Self>) -> Result<Arc<Self>> {
         // 初始连接
         self.connect_with_retry().await?;
 
@@ -116,54 +164,6 @@ impl RexClient for QuicClient {
         Ok(self)
     }
 
-    async fn send_data(&self, data: &mut RexData) -> Result<()> {
-        let state = *self.connection_state.lock().await;
-
-        if state != ConnectionState::Connected {
-            return Err(anyhow::anyhow!("Client not connected (state: {:?})", state));
-        }
-
-        if let Some(client) = self.get_client().await {
-            self.send_data_with_client(&client, data).await
-        } else {
-            Err(anyhow::anyhow!("No active QUIC connection"))
-        }
-    }
-
-    async fn close(&self) {
-        info!("Shutting down QuicClient...");
-
-        // 发送关闭信号
-        let _ = self.shutdown_tx.send(());
-
-        // 关闭客户端连接
-        if let Some(client) = self.get_client().await
-            && let Err(e) = client.close().await
-        {
-            warn!("Error closing client connection: {}", e);
-        }
-
-        // 关闭QUIC连接
-        if let Some(conn) = self.connection.write().await.take() {
-            conn.close(0u32.into(), b"client shutdown");
-        }
-
-        // 关闭endpoint
-        self.endpoint.close(0u32.into(), b"client shutdown");
-        self.endpoint.wait_idle().await;
-
-        // 更新状态
-        *self.connection_state.lock().await = ConnectionState::Disconnected;
-
-        info!("QuicClient shutdown complete");
-    }
-
-    async fn get_connection_state(&self) -> ConnectionState {
-        *self.connection_state.lock().await
-    }
-}
-
-impl QuicClient {
     async fn connect_with_retry(self: &Arc<Self>) -> Result<()> {
         let mut attempts = 0;
         let mut backoff = 1;
@@ -197,7 +197,7 @@ impl QuicClient {
     }
 
     async fn connect(self: &Arc<Self>) -> Result<()> {
-        *self.connection_state.lock().await = ConnectionState::Connecting;
+        *self.connection_state.write().await = ConnectionState::Connecting;
 
         info!("Connecting QUIC to {}", self.config.server_addr);
 
@@ -252,7 +252,7 @@ impl QuicClient {
                 }
 
                 // 标记连接断开
-                *this.connection_state.lock().await = ConnectionState::Disconnected;
+                *this.connection_state.write().await = ConnectionState::Disconnected;
             }
         });
 
@@ -260,7 +260,7 @@ impl QuicClient {
         self.login().await?;
 
         // 更新连接状态
-        *self.connection_state.lock().await = ConnectionState::Connected;
+        *self.connection_state.write().await = ConnectionState::Connected;
         self.last_heartbeat.store(now_secs(), Ordering::Relaxed);
 
         Ok(())
@@ -358,16 +358,16 @@ impl QuicClient {
         loop {
             sleep(check_interval).await;
 
-            let current_state = *self.connection_state.lock().await;
+            let current_state = *self.connection_state.read().await;
 
             match current_state {
                 ConnectionState::Disconnected => {
                     info!("Connection lost, attempting to reconnect...");
-                    *self.connection_state.lock().await = ConnectionState::Reconnecting;
+                    *self.connection_state.write().await = ConnectionState::Reconnecting;
 
                     if let Err(e) = self.connect_with_retry().await {
                         warn!("Reconnection failed: {}", e);
-                        *self.connection_state.lock().await = ConnectionState::Disconnected;
+                        *self.connection_state.write().await = ConnectionState::Disconnected;
                     }
                 }
                 ConnectionState::Reconnecting => {
@@ -386,7 +386,7 @@ impl QuicClient {
         loop {
             sleep(heartbeat_interval).await;
 
-            if *self.connection_state.lock().await != ConnectionState::Connected {
+            if *self.connection_state.read().await != ConnectionState::Connected {
                 continue;
             }
 
@@ -416,7 +416,7 @@ impl QuicClient {
                     Ok(mut stream) => {
                         if let Err(e) = stream.write_all(&ping).await {
                             warn!("Heartbeat send failed: {}", e);
-                            *self.connection_state.lock().await = ConnectionState::Disconnected;
+                            *self.connection_state.write().await = ConnectionState::Disconnected;
                             continue;
                         }
                         let _ = stream.finish();
@@ -428,7 +428,7 @@ impl QuicClient {
 
                         if after_ping <= before_ping {
                             warn!("Heartbeat timeout, marking connection as lost");
-                            *self.connection_state.lock().await = ConnectionState::Disconnected;
+                            *self.connection_state.write().await = ConnectionState::Disconnected;
                         } else {
                             debug!("Heartbeat successful");
                             self.last_heartbeat.store(now_secs(), Ordering::Relaxed);
@@ -436,7 +436,7 @@ impl QuicClient {
                     }
                     Err(e) => {
                         warn!("Failed to open stream for heartbeat: {}", e);
-                        *self.connection_state.lock().await = ConnectionState::Disconnected;
+                        *self.connection_state.write().await = ConnectionState::Disconnected;
                     }
                 }
             }

@@ -23,7 +23,7 @@ pub async fn handle(
         data.set_target(target_client.id());
 
         info!(
-            "client [{:032X}] title to [{}] data_len[{}]",
+            "client [{:032X}] title to [{:032X}] data_len[{}]",
             client_id,
             target_client.id(),
             data.data().len()

@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use dashmap::{DashMap, DashSet};
 use rand::seq::IteratorRandom;
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::{RexClientInner, RexSystemConfig, utils::now_secs};
 
@@ -68,7 +68,7 @@ impl RexSystem {
             if let Err(e) = client.close().await {
                 warn!("close client [{:032X}] error: {}", client_id, e);
             } else {
-                debug!("client [{:032X}] removed", client_id);
+                info!("client [{:032X}] removed", client_id);
             }
         }
     }
