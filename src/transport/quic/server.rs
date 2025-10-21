@@ -103,7 +103,7 @@ impl QuicServer {
 
         Ok(server)
     }
-    
+
     async fn handle_connection(self: Arc<Self>, connection: Connection, peer_addr: SocketAddr) {
         info!("Handling QUIC connection from {}", peer_addr);
 

@@ -4,9 +4,9 @@ use anyhow::Result;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tracing::{info, warn};
 
-use rex_mq::{
-    QuicClient, QuicServer, RexClient, RexClientConfig, RexClientHandler, RexClientInner,
-    RexServer, RexServerConfig, RexSystem, RexSystemConfig, TcpClient, TcpServer,
+use crate::{
+    ConnectionState, QuicClient, QuicServer, RexClient, RexClientConfig, RexClientHandler,
+    RexClientInner, RexServer, RexServerConfig, RexSystem, RexSystemConfig, TcpClient, TcpServer,
     protocol::{RexCommand, RexData},
 };
 
@@ -40,6 +40,19 @@ impl TestClient {
             .data(data.into())
             .build();
         self.send_data(&mut rex_data).await
+    }
+
+    pub async fn get_connection_state(&self) -> ConnectionState {
+        self.client.get_connection_state().await
+    }
+
+    pub async fn wait_for_connected(&self) {
+        loop {
+            match self.get_connection_state().await {
+                ConnectionState::Connected => break,
+                _ => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+            }
+        }
     }
 
     pub async fn close(&self) {
@@ -121,7 +134,7 @@ impl TestFactory {
     }
 
     pub async fn create_client(&self, title: &str, protocol: Protocol) -> Result<TestClient> {
-        let (tx, rx) = channel(10);
+        let (tx, rx) = channel(100);
         let handler = Arc::new(TestClientHandler { tx });
         let config = RexClientConfig::new(self.server_addr, title.into(), handler);
         match protocol {

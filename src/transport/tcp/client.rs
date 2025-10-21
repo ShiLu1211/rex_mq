@@ -230,6 +230,10 @@ impl TcpClient {
 
         loop {
             match rx.read(&mut temp_buf).await {
+                Ok(0) => {
+                    info!("Peer closed connection gracefully");
+                    break;
+                }
                 Ok(n) => {
                     total_read += n;
                     debug!("Buffered read: {} bytes (total: {})", n, total_read);

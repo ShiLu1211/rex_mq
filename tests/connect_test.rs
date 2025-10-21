@@ -1,5 +1,3 @@
-mod common;
-
 #[cfg(test)]
 mod tests {
 
@@ -7,13 +5,12 @@ mod tests {
 
     use anyhow::Result;
     use rex_mq::protocol::RexCommand;
+    use rex_mq::utils::common::{Protocol, TestFactory};
     use tokio::time::sleep;
-
-    use crate::common::{Protocol, TestFactory};
 
     #[tokio::test]
     async fn connect_test() -> Result<()> {
-        // connect_test_inner(Protocol::Tcp).await?;
+        connect_test_inner(Protocol::Tcp).await?;
         connect_test_inner(Protocol::Quic).await?;
         Ok(())
     }
@@ -28,7 +25,8 @@ mod tests {
         let mut client1 = ss.create_client("one", protocol).await?;
         let client2 = ss.create_client("", protocol).await?;
 
-        sleep(Duration::from_secs(1)).await;
+        client1.wait_for_connected().await;
+        client2.wait_for_connected().await;
 
         //单播
         let a = [b'a'; 1024];
@@ -37,11 +35,12 @@ mod tests {
 
         server.close().await;
         drop(server);
-        sleep(Duration::from_secs(16)).await;
+        sleep(Duration::from_secs(1)).await;
 
         let server = ss.create_server(protocol).await?;
 
-        sleep(Duration::from_secs(15)).await;
+        client1.wait_for_connected().await;
+        client2.wait_for_connected().await;
 
         let a = [b'a'; 1024];
         client2.send(RexCommand::Title, "one", &a).await.unwrap();

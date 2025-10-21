@@ -1,5 +1,3 @@
-mod common;
-
 #[cfg(test)]
 mod tests {
 
@@ -7,9 +5,8 @@ mod tests {
 
     use anyhow::Result;
     use rex_mq::protocol::{RetCode, RexCommand};
+    use rex_mq::utils::common::{Protocol, TestFactory};
     use tokio::time::sleep;
-
-    use crate::common::{Protocol, TestFactory};
 
     #[tokio::test]
     async fn base_test() -> Result<()> {
@@ -27,7 +24,9 @@ mod tests {
         let mut client2 = ss.create_client("hello;abc", protocol).await?;
         let mut client3 = ss.create_client("hello;abc", protocol).await?;
 
-        sleep(Duration::from_secs(1)).await;
+        client1.wait_for_connected().await;
+        client2.wait_for_connected().await;
+        client3.wait_for_connected().await;
 
         //目标地址不可达
         client1
