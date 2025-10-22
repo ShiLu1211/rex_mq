@@ -181,7 +181,9 @@ pub async fn start_bench(args: BenchArgs) -> Result<()> {
                 .build()
         };
 
-        if client.send_data(&mut data).await.is_err() {};
+        if let Err(e) = client.send_data(&mut data).await {
+            eprintln!("send data error: {}", e);
+        }
 
         loop {
             if now.elapsed().as_micros() > args.interval {
