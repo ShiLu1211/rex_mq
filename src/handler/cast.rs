@@ -30,7 +30,7 @@ pub async fn handle(
             )
             .await
         {
-            warn!("client [{}] error back: {}", client_id, e);
+            warn!("client [{:032X}] error back: {}", client_id, e);
         }
         return Ok(());
     }
@@ -39,15 +39,15 @@ pub async fn handle(
     let mut failed_clients = Vec::new();
 
     for client in matching_clients {
-        data.set_target(client.id());
+        let client_id = client.id().await;
+        data.set_target(client_id);
 
         if let Err(e) = client.send_buf(&data.serialize()).await {
             warn!(
-                "Failed to send cast message to client {}: {}",
-                client.id(),
-                e
+                "Failed to send cast message to client [{:032X}]: {}",
+                client_id, e
             );
-            failed_clients.push(client.id());
+            failed_clients.push(client_id);
         } else {
             success_count += 1;
         }
@@ -61,7 +61,7 @@ pub async fn handle(
 
     // 清理发送失败的客户端
     for failed_client_id in failed_clients {
-        system.remove_client(failed_client_id);
+        system.remove_client(failed_client_id).await;
     }
 
     if success_count == 0
@@ -74,7 +74,7 @@ pub async fn handle(
             )
             .await
     {
-        warn!("client [{}] error back: {}", client_id, e);
+        warn!("client [{:032X}] error back: {}", client_id, e);
     }
     Ok(())
 }

@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
 use anyhow::Result;
 
-use crate::{RexClientConfig, protocol::RexData};
+use crate::protocol::RexData;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConnectionState {
@@ -13,11 +11,7 @@ pub enum ConnectionState {
 }
 
 #[async_trait::async_trait]
-pub trait RexClient {
-    fn new(config: RexClientConfig) -> Result<Arc<Self>>;
-
-    async fn open(self: Arc<Self>) -> Result<Arc<Self>>;
-
+pub trait RexClient: Send + Sync {
     async fn send_data(&self, data: &mut RexData) -> Result<()>;
 
     async fn close(&self);

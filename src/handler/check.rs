@@ -14,12 +14,15 @@ pub async fn handle(
     data: &mut RexData,
 ) -> Result<()> {
     let client_id = data.header().source();
-    debug!("[{}] Received check online", client_id);
+    debug!("[{:032X}] Received check online", client_id);
     if let Err(e) = source_client
         .send_buf(&data.set_command(RexCommand::CastReturn).serialize())
         .await
     {
-        warn!("[{}] Send check return message error: {}", client_id, e);
+        warn!(
+            "[{:032X}] Send check return message error: {}",
+            client_id, e
+        );
     }
     Ok(())
 }

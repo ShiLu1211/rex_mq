@@ -10,17 +10,18 @@ use anyhow::Result;
 use bytes::BytesMut;
 use dashmap::DashSet;
 use itertools::Itertools;
+use tokio::sync::RwLock;
 
 use crate::{
     RexSender,
-    utils::{force_set_value, new_uuid, now_secs},
+    utils::{new_uuid, now_secs},
 };
 
 pub struct RexClientInner {
-    id: u128,
+    id: RwLock<u128>,
     local_addr: SocketAddr,
     titles: DashSet<String>,
-    sender: Arc<dyn RexSender>,
+    sender: RwLock<Arc<dyn RexSender>>,
 
     last_recv: AtomicU64,
 }
@@ -28,53 +29,53 @@ pub struct RexClientInner {
 impl RexClientInner {
     pub fn new(id: u128, local_addr: SocketAddr, title: &str, sender: Arc<dyn RexSender>) -> Self {
         RexClientInner {
-            id,
+            id: RwLock::new(id),
             local_addr,
             titles: title.split(';').map(|s| s.to_string()).collect(),
-            sender,
+            sender: RwLock::new(sender),
             last_recv: AtomicU64::new(now_secs()),
         }
     }
 
     pub fn from_title(title: String, sender: Arc<dyn RexSender>) -> Self {
         RexClientInner {
-            id: new_uuid(),
+            id: RwLock::new(new_uuid()),
             local_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
             titles: title.split(';').map(|s| s.to_string()).collect(),
-            sender,
+            sender: RwLock::new(sender),
             last_recv: AtomicU64::new(now_secs()),
         }
     }
 
     pub async fn send_buf(&self, buf: &BytesMut) -> Result<()> {
-        if let Err(e) = self.sender.send_buf(buf).await {
-            return Err(e);
-        } else {
-            self.update_last_recv();
+        {
+            let sender = self.sender.read().await;
+            sender.send_buf(buf).await?;
         }
+        self.update_last_recv();
         Ok(())
     }
 
     pub async fn close(&self) -> Result<()> {
-        self.sender.close().await
+        let sender = self.sender.read().await;
+        sender.close().await
     }
 
-    pub fn id(&self) -> u128 {
-        self.id
+    pub async fn id(&self) -> u128 {
+        *self.id.read().await
     }
 
-    pub fn set_id(&self, id: u128) {
-        force_set_value(&self.id, id);
+    pub async fn set_id(&self, id: u128) {
+        *self.id.write().await = id;
     }
 
-    pub fn sender(&self) -> Arc<dyn RexSender> {
-        self.sender.clone()
+    pub async fn sender(&self) -> Arc<dyn RexSender> {
+        self.sender.read().await.clone()
     }
 
-    pub fn set_sender(&self, sender: Arc<dyn RexSender>) {
-        force_set_value(&self.sender, sender);
+    pub async fn set_sender(&self, sender: Arc<dyn RexSender>) {
+        *self.sender.write().await = sender;
     }
-
     pub fn title_list(&self) -> Vec<String> {
         self.titles.iter().map(|s| s.to_string()).collect()
     }
@@ -83,8 +84,13 @@ impl RexClientInner {
         self.titles.iter().map(|s| s.to_string()).join(";")
     }
 
+    /// 多个title用;分隔
     pub fn insert_title(&self, title: String) {
-        self.titles.insert(title);
+        for t in title.split(';') {
+            if !t.is_empty() {
+                self.titles.insert(t.to_string());
+            }
+        }
     }
 
     pub fn remove_title(&self, title: &str) {

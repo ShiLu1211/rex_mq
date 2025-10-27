@@ -125,7 +125,7 @@ impl RexHeaderExt {
 }
 
 // 主要数据结构
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RexData {
     header: RexHeader,
     header_ext: Option<RexHeaderExt>,

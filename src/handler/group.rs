@@ -33,7 +33,7 @@ pub async fn handle(
             )
             .await
         {
-            warn!("client [{}] error back: {}", client_id, e);
+            warn!("client [{:032X}] error back: {}", client_id, e);
         }
         return Ok(());
     }
@@ -43,10 +43,11 @@ pub async fn handle(
     let index = GROUP_ROUND_ROBIN_INDEX.fetch_add(1, Ordering::Relaxed) % matching_clients.len();
     let target_client = &matching_clients[index];
 
-    data.set_target(target_client.id());
+    let target_client_id = target_client.id().await;
+    data.set_target(target_client_id);
 
     if let Err(e) = target_client.send_buf(&data.serialize()).await {
-        warn!("client [{}] error: {}", target_client.id(), e);
+        warn!("client [{:032X}] error: {}", target_client_id, e);
         if let Err(e) = source_client
             .send_buf(
                 &data
@@ -56,7 +57,7 @@ pub async fn handle(
             )
             .await
         {
-            warn!("client [{}] error back: {}", client_id, e);
+            warn!("client [{:032X}] error back: {}", client_id, e);
         }
     }
     Ok(())

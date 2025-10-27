@@ -13,6 +13,9 @@ pub struct RexClientConfig {
     pub idle_timeout: u64,
     pub pong_wait: u64,
     pub max_reconnect_attempts: u32,
+
+    pub read_buffer_size: usize,
+    pub max_buffer_size: usize,
 }
 
 impl RexClientConfig {
@@ -28,6 +31,8 @@ impl RexClientConfig {
             idle_timeout: 10,
             pong_wait: 5,
             max_reconnect_attempts: 5,
+            read_buffer_size: 8192,
+            max_buffer_size: 8 * 1024 * 1024,
         }
     }
 
@@ -52,7 +57,7 @@ impl RexServerConfig {
         Self {
             bind_addr,
             read_buffer_size: 8192,
-            max_buffer_size: 65536,
+            max_buffer_size: 8 * 1024 * 1024,
             max_concurrent_handlers: 100,
         }
     }
