@@ -39,7 +39,10 @@ impl RexServer for QuicServer {
 }
 
 impl QuicServer {
-    pub async fn open(system: Arc<RexSystem>, config: RexServerConfig) -> Result<Arc<Self>> {
+    pub async fn open(
+        system: Arc<RexSystem>,
+        config: RexServerConfig,
+    ) -> Result<Arc<dyn RexServer>> {
         let addr = config.bind_addr;
 
         // 生成自签名证书
@@ -136,7 +139,8 @@ impl QuicServer {
                     .handle_connection_inner(peer.clone(), connection)
                     .await;
 
-                server_clone.system.remove_client(peer.id()).await;
+                let client_id = peer.id().await;
+                server_clone.system.remove_client(client_id).await;
 
                 info!("Connection {} closed and cleaned up", peer_addr);
             }
@@ -221,6 +225,8 @@ impl QuicServer {
                                 if let Err(e) = handle(&self.system, &peer, &mut data).await {
                                     warn!("Error handling data from {}: {}", peer_addr, e);
                                 }
+
+                                peer.update_last_recv();
                             }
                             Err(e) => {
                                 warn!(

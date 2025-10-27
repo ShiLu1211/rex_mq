@@ -221,7 +221,7 @@ impl QuicClient {
         {
             let mut client_guard = self.client.write().await;
             if let Some(existing_client) = client_guard.as_ref() {
-                existing_client.set_sender(sender.clone());
+                existing_client.set_sender(sender.clone()).await;
             } else {
                 let id = new_uuid();
                 let new_client = Arc::new(RexClientInner::new(
@@ -515,7 +515,8 @@ impl QuicClient {
         client: &Arc<RexClientInner>,
         data: &mut RexData,
     ) -> Result<()> {
-        data.set_source(client.id());
+        let client_id = client.id().await;
+        data.set_source(client_id);
         client.send_buf(&data.serialize()).await?;
         debug!(
             "QUIC data sent successfully: command={:?}",

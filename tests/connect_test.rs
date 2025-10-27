@@ -4,8 +4,9 @@ mod tests {
     use std::time::Duration;
 
     use anyhow::Result;
+    use rex_mq::Protocol;
     use rex_mq::protocol::RexCommand;
-    use rex_mq::utils::common::{Protocol, TestFactory};
+    use rex_mq::utils::common::TestFactory;
     use tokio::time::sleep;
 
     #[tokio::test]

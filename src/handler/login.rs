@@ -19,7 +19,7 @@ pub async fn handle(
 
     if let Some(client) = system.find_some_by_id(client_id) {
         warn!("[{:032X}] Client already exists", client_id);
-        client.set_sender(source_client.sender());
+        client.set_sender(source_client.sender().await).await;
         client.insert_title(title);
         if let Err(e) = client
             .send_buf(&data.set_command(RexCommand::LoginReturn).serialize())
@@ -37,10 +37,10 @@ pub async fn handle(
             );
         }
     } else {
-        source_client.set_id(client_id);
+        source_client.set_id(client_id).await;
         source_client.insert_title(title);
 
-        system.add_client(source_client.clone());
+        system.add_client(source_client.clone()).await;
 
         if let Err(e) = source_client
             .send_buf(&data.set_command(RexCommand::LoginReturn).serialize())
@@ -53,7 +53,7 @@ pub async fn handle(
         } else {
             info!(
                 "New client [{:032X}] logged in with title: {}",
-                source_client.id(),
+                source_client.id().await,
                 data.data_as_string_lossy()
             );
         }

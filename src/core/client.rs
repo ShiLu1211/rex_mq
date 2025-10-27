@@ -11,7 +11,7 @@ pub enum ConnectionState {
 }
 
 #[async_trait::async_trait]
-pub trait RexClient {
+pub trait RexClient: Send + Sync {
     async fn send_data(&self, data: &mut RexData) -> Result<()>;
 
     async fn close(&self);

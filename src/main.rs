@@ -257,7 +257,7 @@ impl RcvClientHandler {
 #[async_trait::async_trait]
 impl RexClientHandler for RcvClientHandler {
     async fn login_ok(&self, client: Arc<RexClientInner>, _data: RexData) -> Result<()> {
-        println!("recv client login ok: [{:032X}]", client.id());
+        println!("recv client login ok: [{:032X}]", client.id().await);
         Ok(())
     }
 
@@ -285,7 +285,7 @@ struct SndClientHandler;
 #[async_trait::async_trait]
 impl RexClientHandler for SndClientHandler {
     async fn login_ok(&self, client: Arc<RexClientInner>, _data: RexData) -> Result<()> {
-        println!("send client login ok: [{:032X}]", client.id());
+        println!("send client login ok: [{:032X}]", client.id().await);
         Ok(())
     }
 

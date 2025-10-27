@@ -34,7 +34,10 @@ impl RexServer for TcpServer {
 }
 
 impl TcpServer {
-    pub async fn open(system: Arc<RexSystem>, config: RexServerConfig) -> Result<Arc<Self>> {
+    pub async fn open(
+        system: Arc<RexSystem>,
+        config: RexServerConfig,
+    ) -> Result<Arc<dyn RexServer>> {
         let addr = config.bind_addr;
         let listener = TcpListener::bind(addr).await?;
         let semaphore = Arc::new(Semaphore::new(config.max_concurrent_handlers));
@@ -99,7 +102,8 @@ impl TcpServer {
                     .handle_connection_inner(peer.clone(), reader)
                     .await;
 
-                server_clone.system.remove_client(peer.id()).await;
+                let client_id = peer.id().await;
+                server_clone.system.remove_client(client_id).await;
 
                 info!("Connection {} closed and cleaned up", peer_addr);
             }
@@ -162,6 +166,8 @@ impl TcpServer {
                                         if let Err(e) = handle(&self.system, &peer, &mut data).await {
                                             warn!("Error handling data from {}: {}", peer_addr, e);
                                         }
+
+                                        peer.update_last_recv();
                                     }
                                     Err(e) => {
                                         warn!(

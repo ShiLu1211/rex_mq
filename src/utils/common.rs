@@ -5,16 +5,11 @@ use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tracing::{info, warn};
 
 use crate::{
-    ConnectionState, QuicClient, QuicServer, RexClient, RexClientConfig, RexClientHandler,
-    RexClientInner, RexServer, RexServerConfig, RexSystem, RexSystemConfig, TcpClient, TcpServer,
+    ConnectionState, Protocol, QuicClient, QuicServer, RexClient, RexClientConfig,
+    RexClientHandler, RexClientInner, RexServer, RexServerConfig, RexSystem, RexSystemConfig,
+    TcpClient, TcpServer,
     protocol::{RexCommand, RexData},
 };
-
-#[derive(Debug, Clone, Copy)]
-pub enum Protocol {
-    Tcp,
-    Quic,
-}
 
 pub struct TestClient {
     client: Arc<dyn RexClient>,
@@ -69,7 +64,7 @@ impl RexClientHandler for TestClientHandler {
     async fn login_ok(&self, client: Arc<RexClientInner>, _data: RexData) -> Result<()> {
         info!(
             "login ok, client id: [{:032X}], title: [{}]",
-            client.id(),
+            client.id().await,
             client.title_str()
         );
         Ok(())

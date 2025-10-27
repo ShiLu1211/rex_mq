@@ -33,7 +33,7 @@ impl RexSystem {
                 loop {
                     tokio::select! {
                         _ = tokio::time::sleep(check_interval) => {
-                            system_clone.cleanup_inactive_clients(client_timeout);
+                            system_clone.cleanup_inactive_clients(client_timeout).await;
                         }
                         _ = shutdown_rx.recv() => {
                             info!("Cleanup task received shutdown signal, stopping.");
@@ -47,14 +47,15 @@ impl RexSystem {
         system
     }
 
-    pub fn add_client(&self, client: Arc<RexClientInner>) {
-        self.id2client.insert(client.id(), client.clone());
+    pub async fn add_client(&self, client: Arc<RexClientInner>) {
+        let id = client.id().await;
+        self.id2client.insert(id, client.clone());
 
         for title in client.title_list() {
             self.title2ids
                 .entry(title.to_string())
                 .or_default()
-                .insert(client.id());
+                .insert(id);
         }
     }
 
@@ -163,28 +164,45 @@ impl RexSystem {
 }
 
 impl RexSystem {
-    fn cleanup_inactive_clients(&self, timeout_secs: u64) {
-        let mut clients = self.find_all();
+    async fn cleanup_inactive_clients(&self, timeout_secs: u64) {
         let now = now_secs();
-        let initial_count = clients.len();
+        let mut to_remove = Vec::new();
 
-        clients.retain(|client| {
+        // Step 1: 找出所有超时的 client
+        for entry in self.id2client.iter() {
+            let client = entry.value();
             let last_active = client.last_recv();
+
             if now - last_active > timeout_secs {
+                to_remove.push(*entry.key());
+            }
+        }
+
+        // Step 2: 异步逐个删除
+        for client_id in to_remove {
+            if let Some((_id, client)) = self.id2client.remove(&client_id) {
                 warn!(
                     "Client [{:032X}] (addr: {}) timed out, removing...",
-                    client.id(),
+                    client_id,
                     client.local_addr()
                 );
-                false
-            } else {
-                true
-            }
-        });
 
-        let removed_count = initial_count - clients.len();
-        if removed_count > 0 {
-            info!("Cleaned up {} inactive clients", removed_count);
+                if let Err(e) = client.close().await {
+                    warn!("close client [{:032X}] error: {}", client_id, e);
+                } else {
+                    info!("client [{:032X}] removed", client_id);
+                }
+
+                // 同步清理 title2ids 映射
+                for title in client.title_list() {
+                    if let Some(clients) = self.title2ids.get_mut(&title) {
+                        clients.remove(&client_id);
+                        if clients.is_empty() {
+                            self.title2ids.remove(&title);
+                        }
+                    }
+                }
+            }
         }
     }
 }

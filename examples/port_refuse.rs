@@ -5,8 +5,9 @@ use tokio::time::sleep;
 use tracing::info;
 
 use rex_mq::{
+    Protocol,
     protocol::{RexCommand, RexDataBuilder},
-    utils::common::{Protocol, TestFactory},
+    utils::common::TestFactory,
 };
 
 #[tokio::main]

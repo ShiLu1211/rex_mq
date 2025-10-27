@@ -39,15 +39,15 @@ pub async fn handle(
     let mut failed_clients = Vec::new();
 
     for client in matching_clients {
-        data.set_target(client.id());
+        let client_id = client.id().await;
+        data.set_target(client_id);
 
         if let Err(e) = client.send_buf(&data.serialize()).await {
             warn!(
                 "Failed to send cast message to client [{:032X}]: {}",
-                client.id(),
-                e
+                client_id, e
             );
-            failed_clients.push(client.id());
+            failed_clients.push(client_id);
         } else {
             success_count += 1;
         }
