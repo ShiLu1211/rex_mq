@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use strum::IntoEnumIterator;
 use tokio::time::sleep;
 use tracing::info;
 
@@ -12,8 +13,9 @@ use rex_mq::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    port_refuse(Protocol::Tcp).await?;
-    port_refuse(Protocol::Quic).await?;
+    for protocol in Protocol::iter() {
+        port_refuse(protocol).await?;
+    }
     Ok(())
 }
 

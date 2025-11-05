@@ -7,12 +7,14 @@ mod tests {
     use rex_mq::Protocol;
     use rex_mq::protocol::{RetCode, RexCommand};
     use rex_mq::utils::common::TestFactory;
+    use strum::IntoEnumIterator;
     use tokio::time::sleep;
 
     #[tokio::test]
     async fn base_test() -> Result<()> {
-        base_test_inner(Protocol::Tcp).await?;
-        base_test_inner(Protocol::Quic).await?;
+        for protocol in Protocol::iter() {
+            base_test_inner(protocol).await?;
+        }
         Ok(())
     }
 

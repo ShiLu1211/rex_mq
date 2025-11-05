@@ -21,6 +21,10 @@ clap = { version = "4.5", features = ["derive"] }
 hdrhistogram = "7.5"
 rand = "0.9"
 crc32fast = "1.5"
+tokio-tungstenite = "0.28"
+futures-util = "0.3"
+strum = "0.27"
+strum_macros = "0.27"
 
 [profile.dev]
 opt-level = 0 # 编译快，调试方便

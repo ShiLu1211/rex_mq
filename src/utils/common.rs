@@ -7,7 +7,7 @@ use tracing::{info, warn};
 use crate::{
     ConnectionState, Protocol, QuicClient, QuicServer, RexClient, RexClientConfig,
     RexClientHandler, RexClientInner, RexServer, RexServerConfig, RexSystem, RexSystemConfig,
-    TcpClient, TcpServer,
+    TcpClient, TcpServer, WebSocketClient, WebSocketServer,
     protocol::{RexCommand, RexData},
 };
 
@@ -116,16 +116,12 @@ impl TestFactory {
 
     pub async fn create_server(&self, protocol: Protocol) -> Result<Arc<dyn RexServer>> {
         let config = RexServerConfig::from_addr(self.server_addr);
-        match protocol {
-            Protocol::Tcp => {
-                let server = TcpServer::open(self.system.clone(), config).await?;
-                Ok(server)
-            }
-            Protocol::Quic => {
-                let server = QuicServer::open(self.system.clone(), config).await?;
-                Ok(server)
-            }
-        }
+        let server = match protocol {
+            Protocol::Tcp => TcpServer::open(self.system.clone(), config).await?,
+            Protocol::Quic => QuicServer::open(self.system.clone(), config).await?,
+            Protocol::WebSocket => WebSocketServer::open(self.system.clone(), config).await?,
+        };
+        Ok(server)
     }
 
     pub async fn create_client(&self, title: &str, protocol: Protocol) -> Result<TestClient> {
@@ -141,6 +137,12 @@ impl TestFactory {
             }
             Protocol::Quic => {
                 let client = QuicClient::new(config)?;
+                let client = client.open().await?;
+
+                Ok(TestClient::new(client, rx))
+            }
+            Protocol::WebSocket => {
+                let client = WebSocketClient::new(config)?;
                 let client = client.open().await?;
 
                 Ok(TestClient::new(client, rx))

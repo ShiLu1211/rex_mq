@@ -23,7 +23,7 @@ pub async fn handle(
         let target_client_id = target_client.id().await;
         data.set_target(target_client_id);
 
-        info!(
+        debug!(
             "client [{:032X}] title to [{:032X}] data_len[{}]",
             client_id,
             target_client_id,

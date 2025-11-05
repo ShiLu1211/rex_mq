@@ -7,12 +7,14 @@ mod tests {
     use rex_mq::Protocol;
     use rex_mq::protocol::RexCommand;
     use rex_mq::utils::common::TestFactory;
+    use strum::IntoEnumIterator;
     use tokio::time::sleep;
 
     #[tokio::test]
     async fn connect_test() -> Result<()> {
-        connect_test_inner(Protocol::Tcp).await?;
-        connect_test_inner(Protocol::Quic).await?;
+        for protocol in Protocol::iter() {
+            connect_test_inner(protocol).await?;
+        }
         Ok(())
     }
     /**

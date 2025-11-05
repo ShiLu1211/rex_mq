@@ -5,6 +5,7 @@ use anyhow::Result;
 
 use crate::{
     Protocol, QuicServer, RexServer, RexServerConfig, RexSystem, RexSystemConfig, TcpServer,
+    WebSocketServer,
 };
 
 pub struct AggregateServer {
@@ -33,6 +34,9 @@ impl AggregateServer {
         let server = match protocol {
             Protocol::Tcp => TcpServer::open(self.system.clone(), server_config).await?,
             Protocol::Quic => QuicServer::open(self.system.clone(), server_config).await?,
+            Protocol::WebSocket => {
+                WebSocketServer::open(self.system.clone(), server_config).await?
+            }
         };
         self.server_list.push(server);
         Ok(())
