@@ -76,25 +76,23 @@ impl RexClient for WebSocketClient {
 }
 
 impl WebSocketClient {
-    pub fn new(config: RexClientConfig) -> Result<Arc<Self>> {
+    pub async fn open(config: RexClientConfig) -> Result<Arc<dyn RexClient>> {
         let (shutdown_tx, _) = broadcast::channel(4);
 
-        Ok(Arc::new(Self {
+        let client = Arc::new(Self {
             client: RwLock::new(None),
             connection_state: Arc::new(RwLock::new(ConnectionState::Disconnected)),
             config,
             shutdown_tx,
             last_heartbeat: AtomicU64::new(now_secs()),
-        }))
-    }
+        });
 
-    pub async fn open(self: Arc<Self>) -> Result<Arc<Self>> {
         // 初始连接
-        self.connect_with_retry().await?;
+        client.connect_with_retry().await?;
 
         // 启动连接监控任务
         tokio::spawn({
-            let this = self.clone();
+            let this = client.clone();
             let mut shutdown_rx = this.shutdown_tx.subscribe();
             async move {
                 tokio::select! {
@@ -110,7 +108,7 @@ impl WebSocketClient {
 
         // 启动心跳任务
         tokio::spawn({
-            let this = self.clone();
+            let this = client.clone();
             let mut shutdown_rx = this.shutdown_tx.subscribe();
             async move {
                 tokio::select! {
@@ -124,7 +122,7 @@ impl WebSocketClient {
             }
         });
 
-        Ok(self)
+        Ok(client)
     }
 
     async fn connect_with_retry(self: &Arc<Self>) -> Result<()> {

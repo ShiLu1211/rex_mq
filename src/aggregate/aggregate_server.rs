@@ -3,10 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::{
-    Protocol, QuicServer, RexServer, RexServerConfig, RexSystem, RexSystemConfig, TcpServer,
-    WebSocketServer,
-};
+use crate::{Protocol, RexServer, RexServerConfig, RexSystem, RexSystemConfig, open_server};
 
 pub struct AggregateServer {
     system: Arc<RexSystem>,
@@ -31,13 +28,7 @@ impl AggregateServer {
         server_config: RexServerConfig,
         protocol: Protocol,
     ) -> Result<()> {
-        let server = match protocol {
-            Protocol::Tcp => TcpServer::open(self.system.clone(), server_config).await?,
-            Protocol::Quic => QuicServer::open(self.system.clone(), server_config).await?,
-            Protocol::WebSocket => {
-                WebSocketServer::open(self.system.clone(), server_config).await?
-            }
-        };
+        let server = open_server(self.system.clone(), server_config, protocol).await?;
         self.server_list.push(server);
         Ok(())
     }

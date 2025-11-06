@@ -5,9 +5,8 @@ use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tracing::{info, warn};
 
 use crate::{
-    ConnectionState, Protocol, QuicClient, QuicServer, RexClient, RexClientConfig,
-    RexClientHandler, RexClientInner, RexServer, RexServerConfig, RexSystem, RexSystemConfig,
-    TcpClient, TcpServer, WebSocketClient, WebSocketServer,
+    ConnectionState, Protocol, RexClient, RexClientConfig, RexClientHandler, RexClientInner,
+    RexServer, RexServerConfig, RexSystem, RexSystemConfig, open_client, open_server,
     protocol::{RexCommand, RexData},
 };
 
@@ -115,39 +114,17 @@ impl TestFactory {
     }
 
     pub async fn create_server(&self, protocol: Protocol) -> Result<Arc<dyn RexServer>> {
-        let config = RexServerConfig::from_addr(self.server_addr);
-        let server = match protocol {
-            Protocol::Tcp => TcpServer::open(self.system.clone(), config).await?,
-            Protocol::Quic => QuicServer::open(self.system.clone(), config).await?,
-            Protocol::WebSocket => WebSocketServer::open(self.system.clone(), config).await?,
-        };
-        Ok(server)
+        let server_config = RexServerConfig::from_addr(self.server_addr);
+        open_server(self.system.clone(), server_config, protocol).await
     }
 
     pub async fn create_client(&self, title: &str, protocol: Protocol) -> Result<TestClient> {
         let (tx, rx) = channel(100);
         let handler = Arc::new(TestClientHandler { tx });
         let config = RexClientConfig::new(self.server_addr, title.into(), handler);
-        match protocol {
-            Protocol::Tcp => {
-                let client = TcpClient::new(config)?;
-                let client = client.open().await?;
+        let client = open_client(config, protocol).await?;
 
-                Ok(TestClient::new(client, rx))
-            }
-            Protocol::Quic => {
-                let client = QuicClient::new(config)?;
-                let client = client.open().await?;
-
-                Ok(TestClient::new(client, rx))
-            }
-            Protocol::WebSocket => {
-                let client = WebSocketClient::new(config)?;
-                let client = client.open().await?;
-
-                Ok(TestClient::new(client, rx))
-            }
-        }
+        Ok(TestClient::new(client, rx))
     }
 
     pub async fn close(&self) {

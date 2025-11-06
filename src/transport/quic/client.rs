@@ -93,7 +93,7 @@ impl RexClient for QuicClient {
 }
 
 impl QuicClient {
-    pub fn new(config: RexClientConfig) -> Result<Arc<Self>> {
+    pub async fn open(config: RexClientConfig) -> Result<Arc<dyn RexClient>> {
         let (shutdown_tx, _) = broadcast::channel(4);
 
         // 配置 QUIC 客户端
@@ -113,7 +113,7 @@ impl QuicClient {
         // 创建 endpoint
         let endpoint = Endpoint::client("0.0.0.0:0".parse()?)?;
 
-        Ok(Arc::new(Self {
+        let client = Arc::new(Self {
             endpoint,
             connection: RwLock::new(None),
             client: RwLock::new(None),
@@ -122,16 +122,14 @@ impl QuicClient {
             client_config,
             shutdown_tx,
             last_heartbeat: AtomicU64::new(now_secs()),
-        }))
-    }
+        });
 
-    pub async fn open(self: Arc<Self>) -> Result<Arc<Self>> {
         // 初始连接
-        self.connect_with_retry().await?;
+        client.connect_with_retry().await?;
 
         // 启动连接监控任务
         tokio::spawn({
-            let this = self.clone();
+            let this = client.clone();
             let mut shutdown_rx = this.shutdown_tx.subscribe();
             async move {
                 tokio::select! {
@@ -147,7 +145,7 @@ impl QuicClient {
 
         // 启动心跳任务
         tokio::spawn({
-            let this = self.clone();
+            let this = client.clone();
             let mut shutdown_rx = this.shutdown_tx.subscribe();
             async move {
                 tokio::select! {
@@ -161,7 +159,7 @@ impl QuicClient {
             }
         });
 
-        Ok(self)
+        Ok(client)
     }
 
     async fn connect_with_retry(self: &Arc<Self>) -> Result<()> {

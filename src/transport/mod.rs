@@ -14,3 +14,14 @@ pub enum Protocol {
     Quic,
     WebSocket,
 }
+
+impl Protocol {
+    pub fn from(s: &str) -> Option<Self> {
+        match s {
+            "tcp" => Some(Protocol::Tcp),
+            "quic" => Some(Protocol::Quic),
+            "websocket" => Some(Protocol::WebSocket),
+            _ => None,
+        }
+    }
+}
