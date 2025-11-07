@@ -1,0 +1,19 @@
+[system]
+server_id = "rex-server"
+check_interval = 15
+client_timeout = 45
+
+[[endpoints]]
+protocol = "tcp"
+address = "0.0.0.0:8881"
+enabled = true
+
+[[endpoints]]
+protocol = "quic"
+address = "0.0.0.0:8882"
+enabled = true
+
+[[endpoints]]
+protocol = "websocket"
+address = "0.0.0.0:8883"
+enabled = true

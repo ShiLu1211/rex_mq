@@ -25,6 +25,8 @@ tokio-tungstenite = "0.28"
 futures-util = "0.3"
 strum = "0.27"
 strum_macros = "0.27"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.9"
 
 [profile.dev]
 opt-level = 0 # 编译快，调试方便

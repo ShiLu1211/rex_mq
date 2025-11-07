@@ -6,7 +6,7 @@ mod tests {
     use anyhow::Result;
     use rex_mq::Protocol;
     use rex_mq::protocol::{RetCode, RexCommand};
-    use rex_mq::utils::common::TestFactory;
+    use rex_mq::utils::common::TestEnv;
     use strum::IntoEnumIterator;
     use tokio::time::sleep;
 
@@ -19,17 +19,17 @@ mod tests {
     }
 
     async fn base_test_inner(protocol: Protocol) -> Result<()> {
-        let ss = TestFactory::default();
+        let mut ss = TestEnv::default();
 
-        let server = ss.create_server(protocol).await?;
+        let server = ss.start_server(protocol).await?;
 
-        let mut client1 = ss.create_client("hello;bcd", protocol).await?;
-        let mut client2 = ss.create_client("hello;abc", protocol).await?;
-        let mut client3 = ss.create_client("hello;abc", protocol).await?;
+        let mut client1 = ss.create_client(protocol, "hello;bcd").await?;
+        let mut client2 = ss.create_client(protocol, "hello;abc").await?;
+        let mut client3 = ss.create_client(protocol, "hello;abc").await?;
 
-        client1.wait_for_connected().await;
-        client2.wait_for_connected().await;
-        client3.wait_for_connected().await;
+        client1.wait_connected().await;
+        client2.wait_connected().await;
+        client3.wait_connected().await;
 
         //目标地址不可达
         client1
@@ -80,7 +80,7 @@ mod tests {
         client2.close().await;
         client3.close().await;
         server.close().await;
-        ss.close().await;
+        ss.shutdown().await;
         sleep(Duration::from_secs(1)).await;
         Ok(())
     }

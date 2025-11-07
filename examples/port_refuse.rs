@@ -5,11 +5,7 @@ use strum::IntoEnumIterator;
 use tokio::time::sleep;
 use tracing::info;
 
-use rex_mq::{
-    Protocol,
-    protocol::{RexCommand, RexDataBuilder},
-    utils::common::TestFactory,
-};
+use rex_mq::{Protocol, protocol::RexCommand, utils::common::TestEnv};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -20,15 +16,15 @@ async fn main() -> Result<()> {
 }
 
 async fn port_refuse(protocol: Protocol) -> Result<()> {
-    let ss: TestFactory = TestFactory::default();
+    let mut ss = TestEnv::default();
 
-    let server = ss.create_server(protocol).await?;
+    let server = ss.start_server(protocol).await?;
 
-    let client_r = ss.create_client("one", protocol).await?;
-    let client_s = ss.create_client("", protocol).await?;
+    let client_r = ss.create_client(protocol, "one").await?;
+    let client_s = ss.create_client(protocol, "").await?;
 
-    client_r.wait_for_connected().await;
-    client_s.wait_for_connected().await;
+    client_r.wait_connected().await;
+    client_s.wait_connected().await;
 
     // 客户端持续接收消息（后台任务已启动）
     let count = 5;
@@ -36,31 +32,37 @@ async fn port_refuse(protocol: Protocol) -> Result<()> {
     // 模拟用户交互：发送10条消息
     for i in 0..count {
         info!("USER: Sending message {}", i);
-        let mut data = RexDataBuilder::new(RexCommand::Title)
-            .title("one")
-            .data_from_string(format!("Hello from client: {}", i))
-            .build();
-        client_s.send_data(&mut data).await?;
+        client_s
+            .send(
+                RexCommand::Title,
+                "one",
+                format!("Hello from client: {}", i).as_bytes(),
+            )
+            .await?;
         sleep(Duration::from_secs(1)).await;
     }
 
     for i in 0..count {
         info!("USER: Sending message {}", i);
-        let mut data = RexDataBuilder::new(RexCommand::Group)
-            .title("one")
-            .data_from_string(format!("Hello from client: {}", i))
-            .build();
-        client_s.send_data(&mut data).await?;
+        client_s
+            .send(
+                RexCommand::Title,
+                "one",
+                format!("Hello from client: {}", i).as_bytes(),
+            )
+            .await?;
         sleep(Duration::from_secs(1)).await;
     }
 
     for i in 0..count {
         info!("USER: Sending message {}", i);
-        let mut data = RexDataBuilder::new(RexCommand::Cast)
-            .title("one")
-            .data_from_string(format!("Hello from client: {}", i))
-            .build();
-        client_s.send_data(&mut data).await?;
+        client_s
+            .send(
+                RexCommand::Title,
+                "one",
+                format!("Hello from client: {}", i).as_bytes(),
+            )
+            .await?;
         sleep(Duration::from_secs(1)).await;
     }
 
@@ -72,7 +74,7 @@ async fn port_refuse(protocol: Protocol) -> Result<()> {
     // 关闭连接
     client_s.close().await;
     client_r.close().await;
-    server.close().await;
+    ss.close_server(protocol).await;
 
     info!("Connections closed, waiting for port release...");
     drop(client_s);
@@ -80,10 +82,9 @@ async fn port_refuse(protocol: Protocol) -> Result<()> {
     drop(server);
     sleep(Duration::from_secs(1)).await;
 
-    let server = ss.create_server(protocol).await?;
+    let _server = ss.start_server(protocol).await?;
     info!("port refused success");
-    server.close().await;
-    ss.close().await;
+    ss.shutdown().await;
     sleep(Duration::from_secs(1)).await;
     Ok(())
 }

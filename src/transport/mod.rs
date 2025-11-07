@@ -4,11 +4,13 @@ pub mod tcp;
 pub mod websocket;
 
 pub use quic::{QuicClient, QuicSender, QuicServer};
+use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 pub use tcp::{TcpClient, TcpSender, TcpServer};
 pub use websocket::{WebSocketClient, WebSocketSender, WebSocketServer};
 
-#[derive(Debug, Clone, Copy, EnumIter)]
+#[derive(Debug, Clone, Copy, EnumIter, Serialize, Deserialize, Eq, Hash, PartialEq)]
+#[serde(rename_all = "lowercase")]
 pub enum Protocol {
     Tcp,
     Quic,

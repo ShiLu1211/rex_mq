@@ -97,10 +97,10 @@ pub struct BenchArgs {
 
 pub async fn start_server(args: ServerArgs) -> Result<()> {
     let address = args.address.parse::<SocketAddr>()?;
-    let config = RexServerConfig::from_addr(address);
-    let system = RexSystem::new(RexSystemConfig::from_id(&args.server_id));
     let protocol = Protocol::from(args.protocol.as_str()).expect("invalid protocol");
-    let _server = open_server(system, config, protocol).await?;
+    let config = RexServerConfig::new(protocol, address);
+    let system = RexSystem::new(RexSystemConfig::from_id(&args.server_id));
+    let _server = open_server(system, config).await?;
 
     loop {
         sleep(Duration::from_millis(1000)).await;
@@ -109,13 +109,14 @@ pub async fn start_server(args: ServerArgs) -> Result<()> {
 
 pub async fn start_recv(args: RecvArgs) -> Result<()> {
     let address = args.address.parse::<SocketAddr>()?;
+    let protocol = Protocol::from(args.protocol.as_str()).expect("invalid protocol");
     let config = RexClientConfig::new(
+        protocol,
         address,
         args.titles,
         Arc::new(RcvClientHandler::new(args.bench)),
     );
-    let protocol = Protocol::from(args.protocol.as_str()).expect("invalid protocol");
-    let _client = open_client(config, protocol).await?;
+    let _client = open_client(config).await?;
 
     if args.bench {
         disp_metric().await;
@@ -129,9 +130,14 @@ pub async fn start_recv(args: RecvArgs) -> Result<()> {
 
 pub async fn start_bench(args: BenchArgs) -> Result<()> {
     let address = args.address.parse::<SocketAddr>()?;
-    let config = RexClientConfig::new(address, "".to_string(), Arc::new(SndClientHandler));
     let protocol = Protocol::from(args.protocol.as_str()).expect("invalid protocol");
-    let client = open_client(config, protocol).await?;
+    let config = RexClientConfig::new(
+        protocol,
+        address,
+        "".to_string(),
+        Arc::new(SndClientHandler),
+    );
+    let client = open_client(config).await?;
 
     let command = match args.typ.as_str() {
         "title" => RexCommand::Title,

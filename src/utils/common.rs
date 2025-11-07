@@ -1,4 +1,9 @@
-use std::{cmp::min, net::SocketAddr, sync::Arc};
+use std::{
+    cmp::min,
+    collections::HashMap,
+    net::{Ipv4Addr, SocketAddr},
+    sync::Arc,
+};
 
 use anyhow::Result;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
@@ -10,6 +15,7 @@ use crate::{
     protocol::{RexCommand, RexData},
 };
 
+/// ------------------------- Client -------------------------
 pub struct TestClient {
     client: Arc<dyn RexClient>,
     rx: Receiver<RexData>,
@@ -17,35 +23,24 @@ pub struct TestClient {
 
 impl TestClient {
     pub fn new(client: Arc<dyn RexClient>, rx: Receiver<RexData>) -> Self {
-        TestClient { client, rx }
+        Self { client, rx }
     }
 
     pub async fn recv(&mut self) -> Option<RexData> {
         self.rx.recv().await
     }
 
-    pub async fn send_data(&self, data: &mut RexData) -> Result<()> {
-        self.client.send_data(data).await
-    }
-
-    pub async fn send(&self, command: RexCommand, title: &str, data: &[u8]) -> Result<()> {
-        let mut rex_data = RexData::builder(command)
+    pub async fn send(&self, cmd: RexCommand, title: &str, data: &[u8]) -> Result<()> {
+        let mut d = RexData::builder(cmd)
             .title(title.to_string())
             .data(data.into())
             .build();
-        self.send_data(&mut rex_data).await
+        self.client.send_data(&mut d).await
     }
 
-    pub async fn get_connection_state(&self) -> ConnectionState {
-        self.client.get_connection_state().await
-    }
-
-    pub async fn wait_for_connected(&self) {
-        loop {
-            match self.get_connection_state().await {
-                ConnectionState::Connected => break,
-                _ => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
-            }
+    pub async fn wait_connected(&self) {
+        while self.client.get_connection_state().await != ConnectionState::Connected {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
 
@@ -54,6 +49,7 @@ impl TestClient {
     }
 }
 
+/// ------------------------- Handler -------------------------
 struct TestClientHandler {
     tx: Sender<RexData>,
 }
@@ -70,64 +66,89 @@ impl RexClientHandler for TestClientHandler {
     }
 
     async fn handle(&self, _client: Arc<RexClientInner>, data: RexData) -> Result<()> {
-        let msg = data.data();
-        if msg.is_empty() {
-            warn!(
-                "recv empty data, from [{:032X}], command: {:?}, retcode: {:?}",
-                data.header().source(),
-                data.header().command(),
-                data.header().retcode()
+        if data.data().is_empty() {
+            warn!("recv empty from [{:032X}]", data.header().source());
+        } else {
+            info!(
+                "recv {:?}, len [{}]",
+                &data.data()[..min(16, data.data().len())],
+                data.data().len()
             );
-            return Ok(());
         }
-        info!(
-            "recv from [{:032X}], data: {:?}, data_len: {}",
-            data.header().source(),
-            &msg[..min(16, msg.len())],
-            msg.len()
-        );
         if let Err(e) = self.tx.send(data).await {
-            warn!("channel send data error: {}", e);
+            warn!("rx closed: {}", e);
         }
         Ok(())
     }
 }
 
-pub struct TestFactory {
-    server_addr: SocketAddr,
+/// ------------------------- TestEnv -------------------------
+pub struct TestEnv {
     system: Arc<RexSystem>,
+    servers: HashMap<Protocol, Arc<dyn RexServer>>,
+    base_port: u16,
 }
 
-impl Default for TestFactory {
+impl Default for TestEnv {
     fn default() -> Self {
-        TestFactory::new(SocketAddr::from(([127, 0, 0, 1], 8881)))
-    }
-}
-
-impl TestFactory {
-    pub fn new(addr: SocketAddr) -> Self {
         let _ = tracing_subscriber::fmt::try_init();
-        TestFactory {
-            server_addr: addr,
-            system: RexSystem::new(RexSystemConfig::from_id("server")),
+        Self {
+            system: RexSystem::new(RexSystemConfig::from_id("test-system")),
+            servers: HashMap::new(),
+            base_port: 8880,
         }
     }
+}
 
-    pub async fn create_server(&self, protocol: Protocol) -> Result<Arc<dyn RexServer>> {
-        let server_config = RexServerConfig::from_addr(self.server_addr);
-        open_server(self.system.clone(), server_config, protocol).await
+impl TestEnv {
+    fn next_addr(&self, proto: Protocol) -> SocketAddr {
+        let offset = match proto {
+            Protocol::Tcp => 1,
+            Protocol::Quic => 2,
+            Protocol::WebSocket => 3,
+        };
+        SocketAddr::from((Ipv4Addr::LOCALHOST, self.base_port + offset))
     }
 
-    pub async fn create_client(&self, title: &str, protocol: Protocol) -> Result<TestClient> {
+    /// 启动指定协议的 server，并加入系统
+    pub async fn start_server(&mut self, proto: Protocol) -> Result<Arc<dyn RexServer>> {
+        let addr = self.next_addr(proto);
+        let cfg = RexServerConfig::new(proto, addr);
+        let server = open_server(self.system.clone(), cfg).await?;
+        self.servers.insert(proto, server.clone());
+        Ok(server)
+    }
+
+    /// 为指定协议创建 client
+    pub async fn create_client(&self, proto: Protocol, title: &str) -> Result<TestClient> {
+        let addr = self.next_addr(proto);
         let (tx, rx) = channel(100);
         let handler = Arc::new(TestClientHandler { tx });
-        let config = RexClientConfig::new(self.server_addr, title.into(), handler);
-        let client = open_client(config, protocol).await?;
-
+        let cfg = RexClientConfig::new(proto, addr, title.into(), handler);
+        let client = open_client(cfg).await?;
         Ok(TestClient::new(client, rx))
     }
 
-    pub async fn close(&self) {
+    /// 启动所有协议的聚合 server（AggregateServer）
+    pub async fn start_aggregate_server(&mut self, protos: &[Protocol]) -> Result<()> {
+        for &p in protos {
+            self.start_server(p).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn close_server(&mut self, proto: Protocol) {
+        if let Some(s) = self.servers.remove(&proto) {
+            s.close().await;
+            drop(s);
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    }
+
+    pub async fn shutdown(&mut self) {
+        for (_, s) in self.servers.drain() {
+            s.close().await;
+        }
         self.system.close().await;
     }
 }
