@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
-use bytes::{Buf, BytesMut};
+use bytes::BytesMut;
 use futures_util::StreamExt;
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -141,25 +141,23 @@ impl WebSocketServer {
                             buffer.extend_from_slice(&data);
 
                             // 尝试解析完整的数据包
-                            while let Some(parse_result) = RexData::try_deserialize(&buffer) {
-                                match parse_result {
-                                    Ok((mut data, consumed_bytes)) => {
+                            loop {
+                                match RexData::try_deserialize(&mut buffer) {
+                                    Ok(Some(mut data)) => {
                                         debug!(
-                                            "Received data from {}: command={:?}, consumed {} bytes",
+                                            "Received data from {}: command={:?}",
                                             peer_addr,
                                             data.header().command(),
-                                            consumed_bytes
                                         );
 
-                                        // 移除已消耗的字节
-                                        buffer.advance(consumed_bytes);
-
-                                        // 处理数据
                                         if let Err(e) = handle(&self.system, &peer, &mut data).await {
                                             warn!("Error handling data from {}: {}", peer_addr, e);
                                         }
 
                                         peer.update_last_recv();
+                                    }
+                                    Ok(None) => {
+                                        break;
                                     }
                                     Err(e) => {
                                         warn!(

@@ -1,14 +1,11 @@
+use bytes::{Bytes, BytesMut};
 use std::string::FromUtf8Error;
 
-use anyhow::Result;
-use bytes::{Buf, BufMut, BytesMut};
-use crc32fast::Hasher as Crc32Hasher;
+use super::codec::{DecodedMessage, MessageCodec};
+use super::{RetCode, RexCommand};
+use crate::RexError;
 
-use crate::{
-    RexError,
-    protocol::{RetCode, RexCommand},
-};
-
+/// 消息头部（业务层）
 #[derive(Debug, Clone)]
 pub struct RexHeader {
     command: RexCommand,
@@ -32,104 +29,68 @@ impl RexHeader {
     }
 
     // Getters
+    #[inline]
     pub fn command(&self) -> RexCommand {
         self.command
     }
+
+    #[inline]
     pub fn source(&self) -> u128 {
         self.source
     }
+
+    #[inline]
     pub fn target(&self) -> u128 {
         self.target
     }
+
+    #[inline]
     pub fn retcode(&self) -> RetCode {
         self.retcode
     }
+
+    #[inline]
     pub fn ext_len(&self) -> usize {
         self.ext_len
     }
+
+    #[inline]
     pub fn data_len(&self) -> usize {
         self.data_len
     }
 
     // Setters
+    #[inline]
     pub fn set_retcode(&mut self, retcode: RetCode) {
         self.retcode = retcode;
     }
+
+    #[inline]
     pub fn set_ext_len(&mut self, len: usize) {
         self.ext_len = len;
     }
+
+    #[inline]
     pub fn set_data_len(&mut self, len: usize) {
         self.data_len = len;
     }
 
+    #[inline]
     pub fn is_success(&self) -> bool {
         self.retcode.is_success()
     }
-    pub fn serialized_len(&self) -> usize {
-        FIXED_HEADER_LEN + self.ext_len + self.data_len + 4
+
+    pub fn total_len(&self) -> usize {
+        super::codec::FIXED_HEADER_LEN + self.ext_len + self.data_len + 4
     }
 }
 
-// 协议常量
-const MAGIC: u32 = 0x5245584D; // 'REXM'
-const VERSION: u16 = 1;
-const FIXED_HEADER_LEN: usize = 56; // 4+2+2+4+4+4+16+16+4
-
-// 计算CRC32
-fn compute_crc32(ext: &[u8], data: &[u8]) -> u32 {
-    let mut hasher = Crc32Hasher::new();
-    hasher.update(ext);
-    hasher.update(data);
-    hasher.finalize()
-}
-
-// 扩展头部（仅支持 title）
+/// 消息数据结构（业务层 - 零拷贝版本）
 #[derive(Debug, Clone)]
-struct RexHeaderExt {
-    title: String,
-}
-
-impl RexHeaderExt {
-    fn new(title: String) -> Self {
-        Self { title }
-    }
-    fn title(&self) -> &str {
-        &self.title
-    }
-    fn serialized_len(&self) -> usize {
-        4 + self.title.len()
-    }
-
-    fn serialize(&self) -> BytesMut {
-        let mut buf = BytesMut::new();
-        let title_bytes = self.title.as_bytes();
-        buf.put_u32_le(title_bytes.len() as u32);
-        buf.put_slice(title_bytes);
-        buf
-    }
-
-    fn deserialize(buf: &mut BytesMut) -> Result<Self, RexError> {
-        if buf.remaining() < 4 {
-            return Err(RexError::InsufficientData);
-        }
-
-        let title_len = buf.get_u32_le() as usize;
-        if buf.remaining() < title_len {
-            return Err(RexError::InsufficientData);
-        }
-
-        let title_bytes = buf.split_to(title_len);
-        let title = String::from_utf8(title_bytes.to_vec())?;
-        Ok(Self { title })
-    }
-}
-
-// 主要数据结构
-#[derive(Debug)]
 pub struct RexData {
     header: RexHeader,
-    header_ext: Option<RexHeaderExt>,
-    data: BytesMut,
+    title: Option<String>,
+    data: Bytes,
 }
 
 impl RexData {
@@ -141,8 +102,8 @@ impl RexData {
 
         Self {
             header,
-            header_ext: None,
-            data,
+            title: None,
+            data: data.freeze(),
         }
     }
 
@@ -153,15 +114,15 @@ impl RexData {
         title: String,
         data: BytesMut,
     ) -> Self {
-        let ext = RexHeaderExt::new(title);
+        let title_len = 4 + title.len();
         let mut header = RexHeader::new(command, source, target);
-        header.set_ext_len(ext.serialized_len());
+        header.set_ext_len(title_len);
         header.set_data_len(data.len());
 
         Self {
             header,
-            header_ext: Some(ext),
-            data,
+            title: Some(title),
+            data: data.freeze(),
         }
     }
 
@@ -178,191 +139,133 @@ impl RexData {
 
         Self {
             header,
-            header_ext: None,
-            data,
+            title: None,
+            data: data.freeze(),
         }
     }
 
     // === 核心序列化/反序列化方法 ===
 
+    /// 序列化（使用优化的 codec）
     pub fn serialize(&self) -> BytesMut {
-        let ext_bytes = self
-            .header_ext
-            .as_ref()
-            .map(|ext| ext.serialize())
-            .unwrap_or_default();
-
-        let crc = compute_crc32(&ext_bytes, &self.data);
-        let total_len = FIXED_HEADER_LEN + ext_bytes.len() + self.data.len() + 4;
-        let mut buf = BytesMut::with_capacity(total_len);
-
-        // 写入固定头部
-        buf.put_u32_le(MAGIC);
-        buf.put_u16_le(VERSION);
-        buf.put_u16_le(0); // flags 预留
-        buf.put_u32_le(ext_bytes.len() as u32);
-        buf.put_u32_le(self.data.len() as u32);
-        buf.put_u32_le(self.header.command.as_u32());
-        buf.put_u128_le(self.header.source);
-        buf.put_u128_le(self.header.target);
-        buf.put_u32_le(self.header.retcode as u32);
-
-        // 写入扩展和数据
-        if !ext_bytes.is_empty() {
-            buf.put_slice(&ext_bytes);
-        }
-        if !self.data.is_empty() {
-            buf.put_slice(&self.data);
-        }
-
-        // 写入CRC
-        buf.put_u32_le(crc);
-        buf
+        MessageCodec::encode(
+            self.header.command,
+            self.header.source,
+            self.header.target,
+            self.header.retcode,
+            self.title.as_deref(),
+            &self.data,
+        )
     }
 
-    /// 统一的反序列化方法，适用于所有传输协议
-    /// 返回 (解析的数据, 消耗的字节数)
-    pub fn deserialize(mut buf: BytesMut) -> Result<(Self, usize), RexError> {
-        let original_len = buf.len();
-
-        // 检查基本头部
-        if buf.len() < FIXED_HEADER_LEN {
-            return Err(RexError::InsufficientData);
-        }
-
-        // 读取头部字段
-        let magic = buf.get_u32_le();
-        if magic != MAGIC {
-            return Err(RexError::DataCorrupted);
-        }
-
-        let version = buf.get_u16_le();
-        if version != VERSION {
-            return Err(RexError::VersionMismatch);
-        }
-
-        let _flags = buf.get_u16_le();
-        let ext_len = buf.get_u32_le() as usize;
-        let data_len = buf.get_u32_le() as usize;
-        let command_value = buf.get_u32_le();
-        let source = buf.get_u128_le();
-        let target = buf.get_u128_le();
-        let retcode_value = buf.get_u32_le();
-
-        let command = RexCommand::from_u32(command_value).ok_or(RexError::InvalidCommand)?;
-        let retcode = RetCode::from_u32(retcode_value).ok_or(RexError::InvalidRetCode)?;
-
-        // 检查剩余数据长度
-        let remaining_needed = ext_len + data_len + 4; // +4 for CRC
-        if buf.len() < remaining_needed {
-            return Err(RexError::InsufficientData);
-        }
-
-        // 读取扩展、数据和CRC
-        let ext_data = if ext_len > 0 {
-            let mut ext_buf = buf.split_to(ext_len);
-            Some(RexHeaderExt::deserialize(&mut ext_buf)?)
-        } else {
-            None
-        };
-
-        let data_bytes = if data_len > 0 {
-            buf.split_to(data_len)
-        } else {
-            BytesMut::new()
-        };
-
-        let crc_read = buf.get_u32_le();
-
-        // 验证CRC
-        let ext_bytes = ext_data
-            .as_ref()
-            .map(|ext| ext.serialize())
-            .unwrap_or_else(BytesMut::new);
-        let crc_calc = compute_crc32(&ext_bytes, &data_bytes);
-        if crc_calc != crc_read {
-            return Err(RexError::DataCorrupted);
-        }
-
-        // 构建结果
-        let mut header = RexHeader::new(command, source, target);
-        header.set_retcode(retcode);
-        header.set_ext_len(ext_len);
-        header.set_data_len(data_len);
-
-        let consumed_bytes = original_len - buf.len();
-
-        Ok((
-            Self {
-                header,
-                header_ext: ext_data,
-                data: data_bytes,
-            },
-            consumed_bytes,
-        ))
+    /// 零拷贝反序列化（主方法）
+    pub fn deserialize(buf: &mut BytesMut) -> Result<Self, RexError> {
+        let decoded = MessageCodec::decode(buf)?;
+        Ok(Self::from_decoded(decoded))
     }
 
-    /// 尝试从缓冲区解析，用于流处理
-    /// 返回 None 表示数据不完整
-    pub fn try_deserialize(buf: &BytesMut) -> Option<Result<(Self, usize), RexError>> {
-        if buf.len() < FIXED_HEADER_LEN {
-            return None;
+    /// 尝试从缓冲区解析（用于流处理 - 零拷贝）
+    pub fn try_deserialize(buf: &mut BytesMut) -> Result<Option<Self>, RexError> {
+        match MessageCodec::decode_stream(buf)? {
+            Some(decoded) => Ok(Some(Self::from_decoded(decoded))),
+            None => Ok(None),
         }
+    }
 
-        // 预读包长度信息
-        let mut temp_buf = buf.clone();
-        temp_buf.advance(8); // skip magic, version, flags
-        let ext_len = temp_buf.get_u32_le() as usize;
-        let data_len = temp_buf.get_u32_le() as usize;
+    /// 从解码结果构造 RexData
+    fn from_decoded(decoded: DecodedMessage) -> Self {
+        let mut header = RexHeader::new(decoded.command, decoded.source, decoded.target);
+        header.set_retcode(decoded.retcode);
 
-        let total_needed = FIXED_HEADER_LEN + ext_len + data_len + 4;
-        if buf.len() < total_needed {
-            return None;
+        if let Some(ref title) = decoded.title {
+            header.set_ext_len(4 + title.len());
         }
+        header.set_data_len(decoded.data.len());
 
-        Some(Self::deserialize(buf.clone()))
+        Self {
+            header,
+            title: decoded.title,
+            data: decoded.data,
+        }
     }
 
     // === 访问器方法 ===
 
+    #[inline]
     pub fn header(&self) -> &RexHeader {
         &self.header
     }
+
+    #[inline]
     pub fn data(&self) -> &[u8] {
         &self.data
     }
+
+    #[inline]
     pub fn title(&self) -> Option<&str> {
-        self.header_ext.as_ref().map(|ext| ext.title())
+        self.title.as_deref()
     }
+
+    #[inline]
     pub fn retcode(&self) -> RetCode {
         self.header.retcode
     }
+
+    #[inline]
     pub fn is_success(&self) -> bool {
         self.header.is_success()
     }
-    pub fn serialized_len(&self) -> usize {
-        self.header.serialized_len()
+
+    #[inline]
+    pub fn total_len(&self) -> usize {
+        self.header.total_len()
+    }
+
+    /// 获取 Bytes 克隆（零拷贝 - 引用计数）
+    #[inline]
+    pub fn data_bytes(&self) -> Bytes {
+        self.data.clone()
+    }
+
+    /// 获取数据切片
+    #[inline]
+    pub fn data_slice(&self) -> &[u8] {
+        &self.data
     }
 
     // === 修改器方法 ===
 
+    #[inline]
     pub fn set_command(&mut self, command: RexCommand) -> &mut Self {
         self.header.command = command;
         self
     }
 
+    #[inline]
     pub fn set_source(&mut self, source: u128) -> &mut Self {
         self.header.source = source;
         self
     }
 
+    #[inline]
     pub fn set_target(&mut self, target: u128) -> &mut Self {
         self.header.target = target;
         self
     }
 
+    #[inline]
     pub fn set_retcode(&mut self, retcode: RetCode) -> &mut Self {
         self.header.set_retcode(retcode);
+        self
+    }
+
+    pub fn set_title(&mut self, title: Option<String>) -> &mut Self {
+        self.title = title;
+        if let Some(ref t) = self.title {
+            self.header.set_ext_len(4 + t.len());
+        } else {
+            self.header.set_ext_len(0);
+        }
         self
     }
 
@@ -374,6 +277,16 @@ impl RexData {
 
     pub fn data_as_string_lossy(&self) -> String {
         String::from_utf8_lossy(&self.data).to_string()
+    }
+
+    /// 取出数据（零拷贝）
+    pub fn take_data(self) -> Bytes {
+        self.data
+    }
+
+    /// 转换为可变数据（会分配新内存）
+    pub fn into_mutable_data(self) -> BytesMut {
+        BytesMut::from(self.data.as_ref())
     }
 
     // === 构建器模式 ===
@@ -411,7 +324,7 @@ impl RexData {
     }
 }
 
-// 构建器
+/// 构建器
 pub struct RexDataBuilder {
     command: RexCommand,
     source: u128,
@@ -493,15 +406,15 @@ mod tests {
             .data_from_string("test message")
             .build();
 
-        let serialized = original.serialize();
-        let (deserialized, consumed) = RexData::deserialize(serialized.clone()).unwrap();
+        let mut serialized = original.serialize();
+        let deserialized = RexData::deserialize(&mut serialized).unwrap();
 
-        assert_eq!(consumed, serialized.len());
         assert_eq!(deserialized.header().command(), RexCommand::Login);
         assert_eq!(deserialized.header().source(), 100);
         assert_eq!(deserialized.header().target(), 200);
         assert_eq!(deserialized.data_as_string().unwrap(), "test message");
         assert!(deserialized.is_success());
+        assert_eq!(serialized.len(), 0); // 完全消费
     }
 
     #[test]
@@ -514,8 +427,8 @@ mod tests {
             .data_from_string("Authentication failed")
             .build();
 
-        let serialized = original.serialize();
-        let (deserialized, _) = RexData::deserialize(serialized).unwrap();
+        let mut serialized = original.serialize();
+        let deserialized = RexData::deserialize(&mut serialized).unwrap();
 
         assert_eq!(deserialized.title(), Some("Error Message"));
         assert_eq!(deserialized.retcode(), RetCode::AuthFailed);
@@ -528,8 +441,8 @@ mod tests {
 
     #[test]
     fn test_try_deserialize_incomplete() {
-        let data = BytesMut::from(&[1, 2, 3, 4][..]); // 明显不完整
-        assert!(RexData::try_deserialize(&data).is_none());
+        let mut data = BytesMut::from(&[1, 2, 3, 4][..]);
+        assert!(RexData::try_deserialize(&mut data).unwrap().is_none());
     }
 
     #[test]
@@ -543,9 +456,85 @@ mod tests {
         let response = request
             .create_success_response(RexCommand::CheckReturn, BytesMut::from("pong".as_bytes()));
 
-        assert_eq!(response.header().source(), 200); // 交换了source和target
+        assert_eq!(response.header().source(), 200);
         assert_eq!(response.header().target(), 100);
         assert_eq!(response.header().command(), RexCommand::CheckReturn);
         assert!(response.is_success());
+    }
+
+    #[test]
+    fn test_stream_decode() {
+        let original = RexData::builder(RexCommand::Title)
+            .source(1)
+            .target(2)
+            .title("test")
+            .data_from_string("hello")
+            .build();
+
+        let mut buf = original.serialize();
+
+        let result = RexData::try_deserialize(&mut buf).unwrap();
+        assert!(result.is_some());
+
+        let decoded = result.unwrap();
+        assert_eq!(decoded.header().command(), RexCommand::Title);
+        assert_eq!(decoded.title(), Some("test"));
+        assert_eq!(decoded.data_as_string().unwrap(), "hello");
+        assert_eq!(buf.len(), 0); // 完全消费
+    }
+
+    #[test]
+    fn test_zerocopy_clone() {
+        let msg = RexData::builder(RexCommand::Title)
+            .source(1)
+            .target(2)
+            .data_from_string("x".repeat(1024))
+            .build();
+
+        // 零拷贝克隆数据
+        let data1 = msg.data_bytes();
+        let data2 = msg.data_bytes();
+        let data3 = msg.data_bytes();
+
+        assert_eq!(data1.len(), data2.len());
+        assert_eq!(data2.len(), data3.len());
+        // 所有克隆共享同一份底层数据（引用计数）
+    }
+
+    #[test]
+    fn test_message_forwarding() {
+        let msg = RexData::builder(RexCommand::Title)
+            .source(1)
+            .target(2)
+            .data_from_string("forward me")
+            .build();
+
+        // 零拷贝转发
+        let data = msg.data_bytes();
+        let response =
+            msg.create_success_response(RexCommand::TitleReturn, BytesMut::from(&data[..]));
+
+        assert_eq!(response.data_as_string().unwrap(), "forward me");
+    }
+
+    #[test]
+    fn test_batch_processing() {
+        let messages: Vec<_> = (0..100)
+            .map(|i| {
+                RexData::builder(RexCommand::Title)
+                    .source(i)
+                    .data_from_string(format!("msg_{}", i))
+                    .build()
+            })
+            .collect();
+
+        // 所有消息都可以零拷贝克隆
+        let mut total_len = 0;
+        for msg in &messages {
+            let data = msg.data_bytes();
+            total_len += data.len();
+        }
+
+        assert!(total_len > 0);
     }
 }

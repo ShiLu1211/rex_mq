@@ -12,15 +12,24 @@ mod tests {
             .await?;
 
         // 创建对应 client
-        let tcp_client = env.create_client(Protocol::Tcp, "tcp").await?;
+        let mut tcp_client = env.create_client(Protocol::Tcp, "tcp;one").await?;
         tcp_client.wait_connected().await;
-
-        let mut ws_client = env.create_client(Protocol::WebSocket, "ws").await?;
+        let mut quic_client = env.create_client(Protocol::Quic, "quic;one").await?;
+        quic_client.wait_connected().await;
+        let mut ws_client = env.create_client(Protocol::WebSocket, "ws;one").await?;
         ws_client.wait_connected().await;
 
         let test_data = "message from tcp".as_bytes();
-        tcp_client.send(RexCommand::Title, "ws", test_data).await?;
+        tcp_client.send(RexCommand::Cast, "one", test_data).await?;
+        let data = quic_client.recv().await.unwrap();
+        assert_eq!(test_data, data.data());
+        let data = ws_client.recv().await.unwrap();
+        assert_eq!(test_data, data.data());
 
+        let test_data = "message from quic".as_bytes();
+        quic_client.send(RexCommand::Cast, "one", test_data).await?;
+        let data = tcp_client.recv().await.unwrap();
+        assert_eq!(test_data, data.data());
         let data = ws_client.recv().await.unwrap();
         assert_eq!(test_data, data.data());
 

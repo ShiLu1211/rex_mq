@@ -5,7 +5,7 @@ use std::sync::{
 use std::time::Duration;
 
 use anyhow::Result;
-use bytes::{Buf, BytesMut};
+use bytes::BytesMut;
 use tokio::{
     io::AsyncReadExt,
     net::{TcpSocket, tcp::OwnedReadHalf},
@@ -238,19 +238,18 @@ impl TcpClient {
                     buffer.extend_from_slice(&temp_buf[..n]);
 
                     // 尝试解析完整的数据包
-                    while let Some(parse_result) = RexData::try_deserialize(&buffer) {
-                        match parse_result {
-                            Ok((data, consumed_bytes)) => {
-                                debug!(
-                                    "Parsed message: command={:?}, consumed {} bytes",
-                                    data.header().command(),
-                                    consumed_bytes
-                                );
-
-                                buffer.advance(consumed_bytes);
+                    loop {
+                        match RexData::try_deserialize(&mut buffer) {
+                            Ok(Some(data)) => {
+                                debug!("Parsed message: command={:?}", data.header().command(),);
                                 self.on_data(data).await;
                             }
+                            Ok(None) => {
+                                // 数据不完整，等待更多数据
+                                break;
+                            }
                             Err(e) => {
+                                // 错误处理
                                 warn!("Data parsing error: {}, clearing buffer", e);
                                 buffer.clear();
                                 break;

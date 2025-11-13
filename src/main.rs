@@ -202,7 +202,7 @@ async fn main() {
 }
 
 static METRIC: LazyLock<Mutex<Histogram<u64>>> =
-    LazyLock::new(|| Mutex::new(Histogram::<u64>::new(3).unwrap()));
+    LazyLock::new(|| Mutex::new(Histogram::<u64>::new(3).expect("new histogram error")));
 
 pub async fn disp_metric() {
     loop {
@@ -257,7 +257,9 @@ impl RexClientHandler for RcvClientHandler {
                 let now = now_micros();
                 let latency = now - timestamp(data.data());
                 let mut record = METRIC.lock().await;
-                record.record(latency as u64).unwrap();
+                if let Err(e) = record.record(latency as u64) {
+                    eprintln!("record error: {}", e);
+                }
             }
         } else {
             println!("recv: {}", data.data_as_string_lossy());
