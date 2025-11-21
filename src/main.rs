@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use bytes::{Bytes, BytesMut};
 use clap::Parser;
 use hdrhistogram::Histogram;
@@ -97,7 +97,9 @@ pub struct BenchArgs {
 
 pub async fn start_server(args: ServerArgs) -> Result<()> {
     let address = args.address.parse::<SocketAddr>()?;
-    let protocol = Protocol::from(args.protocol.as_str()).expect("invalid protocol");
+    let protocol = Protocol::from(args.protocol.as_str())
+        .ok_or_else(|| anyhow!("invalid protocol: {}", args.protocol))?;
+
     let config = RexServerConfig::new(protocol, address);
     let system = RexSystem::new(RexSystemConfig::from_id(&args.server_id));
     let _server = open_server(system, config).await?;
@@ -109,7 +111,9 @@ pub async fn start_server(args: ServerArgs) -> Result<()> {
 
 pub async fn start_recv(args: RecvArgs) -> Result<()> {
     let address = args.address.parse::<SocketAddr>()?;
-    let protocol = Protocol::from(args.protocol.as_str()).expect("invalid protocol");
+    let protocol = Protocol::from(args.protocol.as_str())
+        .ok_or_else(|| anyhow!("invalid protocol: {}", args.protocol))?;
+
     let config = RexClientConfig::new(
         protocol,
         address,
@@ -130,7 +134,9 @@ pub async fn start_recv(args: RecvArgs) -> Result<()> {
 
 pub async fn start_bench(args: BenchArgs) -> Result<()> {
     let address = args.address.parse::<SocketAddr>()?;
-    let protocol = Protocol::from(args.protocol.as_str()).expect("invalid protocol");
+    let protocol = Protocol::from(args.protocol.as_str())
+        .ok_or_else(|| anyhow!("invalid protocol: {}", args.protocol))?;
+
     let config = RexClientConfig::new(
         protocol,
         address,
@@ -143,7 +149,7 @@ pub async fn start_bench(args: BenchArgs) -> Result<()> {
         "title" => RexCommand::Title,
         "group" => RexCommand::Group,
         "cast" => RexCommand::Cast,
-        _ => panic!("invalid type"),
+        _ => return Err(anyhow!("invalid send type: {}", args.typ)),
     };
     let title = args.title;
 
@@ -182,7 +188,6 @@ pub async fn start_bench(args: BenchArgs) -> Result<()> {
 
 #[tokio::main]
 async fn main() {
-    // 初始化日志
     #[cfg(debug_assertions)]
     {
         tracing_subscriber::fmt::init();
@@ -190,19 +195,23 @@ async fn main() {
     let cli = Cli::parse();
 
     if let Some(subcommand) = cli.command {
-        let _ = match subcommand {
-            Commands::Server(args) => {
-                let _ = start_server(args).await;
-                Ok(())
-            }
+        let result = match subcommand {
+            Commands::Server(args) => start_server(args).await,
             Commands::Recv(args) => start_recv(args).await,
             Commands::Bench(args) => start_bench(args).await,
         };
+
+        if let Err(e) = result {
+            eprintln!("Application error: {:#}", e);
+            std::process::exit(1);
+        }
     }
 }
 
-static METRIC: LazyLock<Mutex<Histogram<u64>>> =
-    LazyLock::new(|| Mutex::new(Histogram::<u64>::new(3).expect("new histogram error")));
+#[allow(clippy::expect_used)]
+static METRIC: LazyLock<Mutex<Histogram<u64>>> = LazyLock::new(|| {
+    Mutex::new(Histogram::<u64>::new(3).expect("failed to create histogram metric"))
+});
 
 pub async fn disp_metric() {
     loop {
@@ -255,7 +264,14 @@ impl RexClientHandler for RcvClientHandler {
                 || command == RexCommand::Cast
             {
                 let now = now_micros();
-                let latency = now - timestamp(data.data());
+                let Some(ts) = timestamp(data.data()) else {
+                    eprintln!("cannot get timestamp from data");
+                    return Ok(());
+                };
+
+                // 使用 saturating_sub 防止时间回拨崩溃
+                let latency = now.saturating_sub(ts);
+
                 let mut record = METRIC.lock().await;
                 if let Err(e) = record.record(latency as u64) {
                     eprintln!("record error: {}", e);

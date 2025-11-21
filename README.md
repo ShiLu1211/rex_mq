@@ -17,6 +17,6 @@ cargo run --example port_refuse
 
 ## docs
 ```
-tcp len 1024 tps 5w latency 70us(wsl) 35us(ubuntu)
+tcp len 1024 tps 5w latency 50-60us(wsl) 35us(ubuntu)
 
 ```
