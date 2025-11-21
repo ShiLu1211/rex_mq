@@ -1,7 +1,19 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RexSystemConfig {
     pub server_id: String,
+    #[serde(default = "default_check_interval")]
     pub check_interval: u64,
+    #[serde(default = "default_client_timeout")]
     pub client_timeout: u64,
+}
+
+fn default_check_interval() -> u64 {
+    15
+}
+fn default_client_timeout() -> u64 {
+    45
 }
 
 impl RexSystemConfig {

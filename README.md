@@ -2,11 +2,11 @@
 
 ## example
 ``` bash
-cargo run (-r) server -a [127.0.0.1:8881]
+cargo run (-r) server -p [tcp|quic|websocket] -a [127.0.0.1:8881]
 
-cargo run (-r) recv -a [127.0.0.1:8881] -t [one] (-b)
+cargo run (-r) recv -p [tcp|quic|websocket] -a [127.0.0.1:8881] -t [one] (-b)
 
-cargo run (-r) bench -a [127.0.0.1:8881] -y [title] -t [one] -i [100] (-b)
+cargo run (-r) bench -p [tcp|quic|websocket] -a [127.0.0.1:8881] -y [title] -t [one] -i [100] (-b)
 ```
 
 ## tests
@@ -17,6 +17,6 @@ cargo run --example port_refuse
 
 ## docs
 ```
-tcp len 1024 tps 5w latency 70us(wsl) 35us(ubuntu)
+tcp len 1024 tps 5w latency 50-60us(wsl) 35us(ubuntu)
 
 ```
