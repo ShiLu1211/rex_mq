@@ -1,0 +1,30 @@
+[package]
+name = "rex-test"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rex-core = { path = "../rex-core" }
+rex-client = { path = "../rex-client" }
+rex-server = { path = "../rex-server" }
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+async-trait.workspace = true
+strum.workspace = true
+crc32fast.workspace = true
+bytes.workspace = true
+clap.workspace = true
+rand.workspace = true
+hdrhistogram.workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.7", features = ["async_tokio", "html_reports"] }
+
+[[bench]]
+name = "data_codec"
+harness = false

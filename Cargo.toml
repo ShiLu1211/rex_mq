@@ -1,23 +1,29 @@
-[package]
-name = "rex_mq"
+[workspace]
+members = [
+  "crates/rex-core",
+  "crates/rex-client",
+  "crates/rex-server",
+  "crates/rex-test",
+  "bindings/rex4p",
+  "bindings/rex4j",
+]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[features]
-default = []
-skip_crc = []
-
-[lints.clippy]
+[workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
 
-[dependencies]
+[workspace.dependencies]
 tokio = { version = "1.48", features = ["full"] }
 quinn = "0.11"
 rustls = { version = "0.23", default-features = false }
 rcgen = "0.14"
-bytes = "1.10"
+bytes = "1.11"
 dashmap = "6.1"
 uuid = { version = "1.18", features = ["v4"] }
 anyhow = "1.0"
@@ -37,23 +43,16 @@ strum_macros = "0.27"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.9"
 
-[dev-dependencies]
-criterion = { version = "0.7", features = ["async_tokio", "html_reports"] }
-
-[[bench]]
-name = "data_codec"
-harness = false
-
 [profile.dev]
-opt-level = 0 # 编译快，调试方便
+opt-level = 0
 debug = true
 lto = false
 
 [profile.release]
-opt-level = 3 # 高优化
+opt-level = 3
 debug = false
 lto = "thin"
 
 [profile.bench]
 inherits = "release"
-debug = true         # 保留符号方便分析
+debug = true

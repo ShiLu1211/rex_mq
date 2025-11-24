@@ -1,0 +1,13 @@
+[package]
+name = "rex4j"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "rex4j"
+crate-type = ["cdylib"]
+
+[dependencies]
+rex-core = { path = "../../crates/rex-core" }
+rex-client = { path = "../../crates/rex-client" }
+jni = "0.21"

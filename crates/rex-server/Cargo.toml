@@ -1,0 +1,25 @@
+[package]
+name = "rex-server"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rex-core = { path = "../rex-core" }
+rex-client = { path = "../rex-client" }
+anyhow.workspace = true
+tracing.workspace = true
+serde.workspace = true
+toml.workspace = true
+async-trait.workspace = true
+rand.workspace = true
+dashmap.workspace = true
+tokio.workspace = true
+bytes.workspace = true
+quinn.workspace = true
+rustls.workspace = true
+futures-util.workspace = true
+tokio-tungstenite.workspace = true
+rcgen.workspace = true
