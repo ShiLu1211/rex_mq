@@ -7,7 +7,15 @@ edition = "2024"
 name = "rex4j"
 crate-type = ["cdylib"]
 
+[lints]
+workspace = true
+
 [dependencies]
 rex-core = { path = "../../crates/rex-core" }
 rex-client = { path = "../../crates/rex-client" }
+anyhow.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+bytes.workspace = true
 jni = "0.21"

@@ -17,6 +17,14 @@ pub enum RexCommand {
     DelTitleReturn,
 }
 
+impl TryFrom<u32> for RexCommand {
+    type Error = anyhow::Error;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        RexCommand::from_u32(value).ok_or_else(|| anyhow::anyhow!("Invalid RexCommand {}", value))
+    }
+}
+
 impl RexCommand {
     pub fn from_u32(value: u32) -> Option<Self> {
         match value {

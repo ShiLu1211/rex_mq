@@ -18,3 +18,4 @@ strum.workspace = true
 strum_macros.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+anyhow.workspace = true
