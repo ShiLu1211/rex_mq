@@ -7,7 +7,7 @@ use jni::{
 };
 use rex_client::RexClientHandlerTrait;
 use rex_client::RexClientInner;
-use rex_core::RexData;
+use rex_core::{RexCommand, RexData};
 use tracing::warn;
 
 use crate::rex_cache::RexGlobalCache;
@@ -69,7 +69,6 @@ impl JavaHandler {
         )?;
 
         // 设置 title 字段
-        // unwrap_or_default 是安全的，不会 panic
         let title_str = env.new_string(data.title().unwrap_or_default())?;
         env.set_field_unchecked(&data_obj, cache.data.title, JValue::Object(&title_str))?;
 
@@ -211,6 +210,9 @@ impl RexClientHandlerTrait for JavaHandler {
     }
 
     async fn handle(&self, _client: Arc<RexClientInner>, data: RexData) -> Result<()> {
+        if matches!(data.header().command(), RexCommand::Check | RexCommand::CheckReturn) {
+            return Ok(())
+        }
         if let Err(e) = self.call_on_message(&data) {
             warn!("Failed to call onMessage: {}", e);
         }

@@ -47,7 +47,7 @@ impl RexGlobalCache {
 pub struct RexCommandCache {
     pub cls: GlobalRef,
     pub from_value: JStaticMethodID,
-    pub get_value: JMethodID,
+    pub value: JFieldID,
 }
 
 impl RexCommandCache {
@@ -62,7 +62,7 @@ impl RexCommandCache {
                 "fromValue",
                 "(I)Lcom/rex4j/RexCommand;",
             )?,
-            get_value: env.get_method_id(&cls_local, "getValue", "()I")?,
+            value: env.get_field_id(&cls_local, "value", "I")?,
         })
     }
 }
@@ -114,17 +114,16 @@ pub struct RexHandlerCache {
 
 impl RexHandlerCache {
     fn init(env: &mut JNIEnv) -> Result<Self> {
-        let cls_local = env.find_class("com/rex4j/RexHandler")?;
-        let _cls = env.new_global_ref(&cls_local)?;
+        let cls = env.find_class("com/rex4j/RexHandler")?;
 
         Ok(Self {
             on_login: env.get_method_id(
-                &cls_local,
+                &cls,
                 "onLogin",
                 "(Lcom/rex4j/RexClient;Lcom/rex4j/RexData;)V",
             )?,
             on_message: env.get_method_id(
-                &cls_local,
+                &cls,
                 "onMessage",
                 "(Lcom/rex4j/RexClient;Lcom/rex4j/RexData;)V",
             )?,
@@ -133,54 +132,34 @@ impl RexHandlerCache {
 }
 
 pub struct RexConfigCache {
-    // pub cls: GlobalRef,
-    // pub protocol_cls: GlobalRef,
-    pub get_protocol: JMethodID,
-    pub get_host: JMethodID,
-    pub get_port: JMethodID,
-    pub get_title: JMethodID,
-    pub get_idle_timeout: JMethodID,
-    pub get_pong_wait: JMethodID,
-    pub get_max_reconnect_attempts: JMethodID,
-    pub get_read_buffer_size: JMethodID,
-    pub get_max_buffer_size: JMethodID,
-
-    pub get_protocol_value: JMethodID,
+    pub protocol: JFieldID,
+    pub host: JFieldID,
+    pub port: JFieldID,
+    pub title: JFieldID,
+    pub idle_timeout: JFieldID,
+    pub pong_wait: JFieldID,
+    pub max_reconnect_attempts: JFieldID,
+    pub read_buffer_size: JFieldID,
+    pub max_buffer_size: JFieldID,
+    pub protocol_value: JFieldID,
 }
 
 impl RexConfigCache {
     pub fn init(env: &mut JNIEnv) -> Result<Self> {
-        let cls_local = env.find_class("com/rex4j/RexConfig")?;
-        // let cls = env.new_global_ref(&cls_local)?;
-
-        let protocol_local = env.find_class("com/rex4j/RexConfig$Protocol")?;
-        // let protocol_cls = env.new_global_ref(&protocol_local)?;
+        let cls = env.find_class("com/rex4j/RexConfig")?;
+        let protocol_cls = env.find_class("com/rex4j/RexConfig$Protocol")?;
 
         Ok(Self {
-            // cls,
-            // protocol_cls,
-            get_protocol: env.get_method_id(
-                &cls_local,
-                "getProtocol",
-                "()Lcom/rex4j/RexConfig$Protocol;",
-            )?,
-
-            get_host: env.get_method_id(&cls_local, "getHost", "()Ljava/lang/String;")?,
-            get_port: env.get_method_id(&cls_local, "getPort", "()I")?,
-            get_title: env.get_method_id(&cls_local, "getTitle", "()Ljava/lang/String;")?,
-
-            get_idle_timeout: env.get_method_id(&cls_local, "getIdleTimeout", "()J")?,
-            get_pong_wait: env.get_method_id(&cls_local, "getPongWait", "()J")?,
-            get_max_reconnect_attempts: env.get_method_id(
-                &cls_local,
-                "getMaxReconnectAttempts",
-                "()I",
-            )?,
-
-            get_read_buffer_size: env.get_method_id(&cls_local, "getReadBufferSize", "()I")?,
-            get_max_buffer_size: env.get_method_id(&cls_local, "getMaxBufferSize", "()I")?,
-
-            get_protocol_value: env.get_method_id(&protocol_local, "getValue", "()I")?,
+            protocol: env.get_field_id(&cls, "protocol", "Lcom/rex4j/RexConfig$Protocol;")?,
+            host: env.get_field_id(&cls, "host", "Ljava/lang/String;")?,
+            port: env.get_field_id(&cls, "port", "I")?,
+            title: env.get_field_id(&cls, "title", "Ljava/lang/String;")?,
+            idle_timeout: env.get_field_id(&cls, "idleTimeout", "J")?,
+            pong_wait: env.get_field_id(&cls, "pongWait", "J")?,
+            max_reconnect_attempts: env.get_field_id(&cls, "maxReconnectAttempts", "I")?,
+            read_buffer_size: env.get_field_id(&cls, "readBufferSize", "I")?,
+            max_buffer_size: env.get_field_id(&cls, "maxBufferSize", "I")?,
+            protocol_value: env.get_field_id(&protocol_cls, "value", "I")?,
         })
     }
 }

@@ -48,109 +48,88 @@ pub extern "system" fn Java_com_rex4j_jni_RexNative_init(
 fn init_internal(env: &mut JNIEnv, config_obj: &JObject, handler_obj: &JObject) -> Result<jlong> {
     let cache = RexGlobalCache::get().ok_or_else(|| anyhow::anyhow!("Cache not initialized"))?;
 
-    let protocol_obj = unsafe {
-        env.call_method_unchecked(
+    let protocol_obj = env
+        .get_field_unchecked(
             config_obj,
-            cache.config.get_protocol,
+            cache.config.protocol,
             jni::signature::ReturnType::Object,
-            &[],
-        )
-    }?
-    .l()?;
-
-    let protocol_value = unsafe {
-        env.call_method_unchecked(
+        )?
+        .l()?;
+    let protocol_val = env
+        .get_field_unchecked(
             &protocol_obj,
-            cache.config.get_protocol_value,
+            cache.config.protocol_value,
             jni::signature::ReturnType::Primitive(jni::signature::Primitive::Int),
-            &[],
-        )
-    }?
-    .i()?;
+        )?
+        .i()?;
 
-    let host_obj = unsafe {
-        env.call_method_unchecked(
+    let host_obj = env
+        .get_field_unchecked(
             config_obj,
-            cache.config.get_host,
+            cache.config.host,
             jni::signature::ReturnType::Object,
-            &[],
-        )
-    }?
-    .l()?;
+        )?
+        .l()?;
     let host_str: String = env.get_string(&JString::from(host_obj))?.into();
 
-    let port = unsafe {
-        env.call_method_unchecked(
+    let port = env
+        .get_field_unchecked(
             config_obj,
-            cache.config.get_port,
+            cache.config.port,
             jni::signature::ReturnType::Primitive(jni::signature::Primitive::Int),
-            &[],
-        )
-    }?
-    .i()?;
+        )?
+        .i()?;
 
-    let title_obj = unsafe {
-        env.call_method_unchecked(
+    let title_obj = env
+        .get_field_unchecked(
             config_obj,
-            cache.config.get_title,
+            cache.config.title,
             jni::signature::ReturnType::Object,
-            &[],
-        )
-    }?
-    .l()?;
+        )?
+        .l()?;
     let title_str: String = env.get_string(&JString::from(title_obj))?.into();
 
-    let idle_timeout = unsafe {
-        env.call_method_unchecked(
+    let idle_timeout = env
+        .get_field_unchecked(
             config_obj,
-            cache.config.get_idle_timeout,
+            cache.config.idle_timeout,
             jni::signature::ReturnType::Primitive(jni::signature::Primitive::Long),
-            &[],
-        )
-    }?
-    .j()? as u64;
+        )?
+        .j()? as u64;
 
-    let pong_wait = unsafe {
-        env.call_method_unchecked(
+    let pong_wait = env
+        .get_field_unchecked(
             config_obj,
-            cache.config.get_pong_wait,
+            cache.config.pong_wait,
             jni::signature::ReturnType::Primitive(jni::signature::Primitive::Long),
-            &[],
-        )
-    }?
-    .j()? as u64;
+        )?
+        .j()? as u64;
 
-    let max_reconnect = unsafe {
-        env.call_method_unchecked(
+    let max_reconnect = env
+        .get_field_unchecked(
             config_obj,
-            cache.config.get_max_reconnect_attempts,
+            cache.config.max_reconnect_attempts,
             jni::signature::ReturnType::Primitive(jni::signature::Primitive::Int),
-            &[],
-        )
-    }?
-    .i()? as u32;
+        )?
+        .i()? as u32;
 
-    let read_buffer_size = unsafe {
-        env.call_method_unchecked(
+    let read_buffer_size = env
+        .get_field_unchecked(
             config_obj,
-            cache.config.get_read_buffer_size,
+            cache.config.read_buffer_size,
             jni::signature::ReturnType::Primitive(jni::signature::Primitive::Int),
-            &[],
-        )
-    }?
-    .i()? as usize;
+        )?
+        .i()? as usize;
 
-    let max_buffer_size = unsafe {
-        env.call_method_unchecked(
+    let max_buffer_size = env
+        .get_field_unchecked(
             config_obj,
-            cache.config.get_max_buffer_size,
+            cache.config.max_buffer_size,
             jni::signature::ReturnType::Primitive(jni::signature::Primitive::Int),
-            &[],
-        )
-    }?
-    .i()? as usize;
+        )?
+        .i()? as usize;
 
-    let protocol = match protocol_value {
+    let protocol = match protocol_val {
         0 => Protocol::Tcp,
         1 => Protocol::Quic,
         2 => Protocol::WebSocket,
@@ -214,14 +193,11 @@ fn send_internal(env: &mut JNIEnv, client_handle: jlong, data_obj: &JObject) -> 
     let command = if command_enum_obj.is_null() {
         0
     } else {
-        unsafe {
-            env.call_method_unchecked(
-                &command_enum_obj,
-                cache.command.get_value,
-                jni::signature::ReturnType::Primitive(jni::signature::Primitive::Int),
-                &[],
-            )?
-        }
+        env.get_field_unchecked(
+            &command_enum_obj,
+            cache.command.value,
+            jni::signature::ReturnType::Primitive(jni::signature::Primitive::Int),
+        )?
         .i()?
     };
 
