@@ -116,18 +116,17 @@ impl JavaHandler {
             cache.data.command,
             JValue::Object(&command_enum_obj),
         )?;
+        let _ = env.delete_local_ref(command_enum_obj);
 
         // 设置 title 字段
         let title_str = env.new_string(data.title().unwrap_or_default())?;
         env.set_field_unchecked(data_obj, cache.data.title, JValue::Object(&title_str))?;
-
         let _ = env.delete_local_ref(title_str);
 
         // 设置 data 字段
         let data_bytes = data.data();
         let jbytes = env.byte_array_from_slice(data_bytes)?;
         env.set_field_unchecked(data_obj, cache.data.data, JValue::Object(&jbytes))?;
-
         let _ = env.delete_local_ref(jbytes);
 
         Ok(())

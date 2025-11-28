@@ -221,6 +221,7 @@ fn send_internal(env: &mut JNIEnv, client_handle: jlong, data_obj: &JObject) -> 
         )?
         .i()?
     };
+    let _ = env.delete_local_ref(command_enum_obj);
 
     let title_obj = env
         .get_field_unchecked(
@@ -229,22 +230,22 @@ fn send_internal(env: &mut JNIEnv, client_handle: jlong, data_obj: &JObject) -> 
             jni::signature::ReturnType::Object,
         )?
         .l()?;
-
     let title = if title_obj.is_null() {
         String::new()
     } else {
-        env.get_string(&JString::from(title_obj))?.into()
+        env.get_string(<&JString>::from(&title_obj))?.into()
     };
+    let _ = env.delete_local_ref(title_obj);
 
     let data_bytes_obj = env
         .get_field_unchecked(data_obj, cache.data.data, jni::signature::ReturnType::Array)?
         .l()?;
-
     let data_bytes = if data_bytes_obj.is_null() {
         Vec::new()
     } else {
-        env.convert_byte_array(JByteArray::from(data_bytes_obj))?
+        env.convert_byte_array(<&JByteArray>::from(&data_bytes_obj))?
     };
+    let _ = env.delete_local_ref(data_bytes_obj);
 
     let data_bytesmut = BytesMut::from(Bytes::from(data_bytes));
 
@@ -256,9 +257,7 @@ fn send_internal(env: &mut JNIEnv, client_handle: jlong, data_obj: &JObject) -> 
         .data(data_bytesmut)
         .build();
 
-    get_runtime().spawn(async move {
-        let _ = client.send_data(&mut rex_data).await;
-    });
+    get_runtime().block_on(client.send_data(&mut rex_data))?;
 
     Ok(())
 }
