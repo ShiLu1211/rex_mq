@@ -19,7 +19,12 @@ static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
 #[allow(clippy::expect_used)]
 fn get_runtime() -> &'static Runtime {
-    RUNTIME.get_or_init(|| Runtime::new().expect("Failed to create Tokio runtime"))
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create Tokio runtime")
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -47,6 +52,18 @@ pub extern "system" fn Java_com_rex4j_jni_RexNative_init(
 
 fn init_internal(env: &mut JNIEnv, config_obj: &JObject, handler_obj: &JObject) -> Result<jlong> {
     let cache = RexGlobalCache::get().ok_or_else(|| anyhow::anyhow!("Cache not initialized"))?;
+
+    let client_obj = env.alloc_object(&cache.client.cls)?;
+    env.set_field_unchecked(
+        &client_obj,
+        cache.client.config,
+        jni::objects::JValueGen::Object(config_obj),
+    )?;
+    env.set_field_unchecked(
+        &client_obj,
+        cache.client.handler,
+        jni::objects::JValueGen::Object(handler_obj),
+    )?;
 
     let protocol_obj = env
         .get_field_unchecked(
@@ -140,7 +157,7 @@ fn init_internal(env: &mut JNIEnv, config_obj: &JObject, handler_obj: &JObject) 
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid server address: {}", e))?;
 
-    let handler = Arc::new(JavaHandler::new(env, handler_obj, config_obj)?);
+    let handler = JavaHandler::new(env, handler_obj, &client_obj)?;
 
     let mut config = RexClientConfig::new(protocol, server_addr, title_str, handler.clone());
     config.idle_timeout = idle_timeout;
@@ -157,7 +174,11 @@ fn init_internal(env: &mut JNIEnv, config_obj: &JObject, handler_obj: &JObject) 
 
     let client_ptr = Box::into_raw(Box::new(client)) as jlong;
 
-    handler.set_client_ptr(client_ptr as i64)?;
+    env.set_field_unchecked(
+        &client_obj,
+        cache.client.client,
+        jni::objects::JValueGen::Long(client_ptr),
+    )?;
 
     Ok(client_ptr)
 }
@@ -235,7 +256,9 @@ fn send_internal(env: &mut JNIEnv, client_handle: jlong, data_obj: &JObject) -> 
         .data(data_bytesmut)
         .build();
 
-    get_runtime().block_on(client.send_data(&mut rex_data))?;
+    get_runtime().spawn(async move {
+        let _ = client.send_data(&mut rex_data).await;
+    });
 
     Ok(())
 }
