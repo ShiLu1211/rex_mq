@@ -19,7 +19,7 @@ pub async fn handle(
     let mut success = false;
 
     if let Some(target_client) = system.find_one_by_title(title, Some(client_id)) {
-        let target_client_id = target_client.id().await;
+        let target_client_id = target_client.id();
         data.set_target(target_client_id);
 
         debug!(

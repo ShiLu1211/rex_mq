@@ -38,7 +38,7 @@ pub async fn handle(
     let mut failed_clients = Vec::new();
 
     for client in matching_clients {
-        let client_id = client.id().await;
+        let client_id = client.id();
         data.set_target(client_id);
 
         if let Err(e) = client.send_buf(&data.serialize()).await {

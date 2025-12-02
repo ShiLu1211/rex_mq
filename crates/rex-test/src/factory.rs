@@ -59,7 +59,7 @@ impl RexClientHandlerTrait for TestClientHandler {
     async fn login_ok(&self, client: Arc<RexClientInner>, _data: RexData) -> Result<()> {
         info!(
             "login ok, client id: [{:032X}], title: [{}]",
-            client.id().await,
+            client.id(),
             client.title_str()
         );
         Ok(())

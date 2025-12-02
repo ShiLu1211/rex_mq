@@ -10,11 +10,11 @@ use anyhow::Result;
 use bytes::BytesMut;
 use dashmap::DashSet;
 use itertools::Itertools;
+use parking_lot::RwLock;
 use rex_core::{
     RexData,
     utils::{new_uuid, now_secs},
 };
-use tokio::sync::RwLock;
 
 use crate::RexSenderTrait;
 
@@ -39,7 +39,7 @@ pub struct RexClientInner {
     id: RwLock<u128>,
     local_addr: SocketAddr,
     titles: DashSet<String>,
-    sender: RwLock<Arc<dyn RexSenderTrait>>,
+    sender: Arc<RwLock<Arc<dyn RexSenderTrait>>>,
 
     last_recv: AtomicU64,
 }
@@ -55,7 +55,7 @@ impl RexClientInner {
             id: RwLock::new(id),
             local_addr,
             titles: title.split(';').map(|s| s.to_string()).collect(),
-            sender: RwLock::new(sender),
+            sender: Arc::new(RwLock::new(sender)),
             last_recv: AtomicU64::new(now_secs()),
         }
     }
@@ -65,39 +65,37 @@ impl RexClientInner {
             id: RwLock::new(new_uuid()),
             local_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
             titles: title.split(';').map(|s| s.to_string()).collect(),
-            sender: RwLock::new(sender),
+            sender: Arc::new(RwLock::new(sender)),
             last_recv: AtomicU64::new(now_secs()),
         }
     }
 
     pub async fn send_buf(&self, buf: &BytesMut) -> Result<()> {
-        {
-            let sender = self.sender.read().await;
-            sender.send_buf(buf).await?;
-        }
+        let sender = self.sender();
+        sender.send_buf(buf).await?;
         self.update_last_recv();
         Ok(())
     }
 
     pub async fn close(&self) -> Result<()> {
-        let sender = self.sender.read().await;
+        let sender = self.sender();
         sender.close().await
     }
 
-    pub async fn id(&self) -> u128 {
-        *self.id.read().await
+    pub fn id(&self) -> u128 {
+        *self.id.read()
     }
 
-    pub async fn set_id(&self, id: u128) {
-        *self.id.write().await = id;
+    pub fn set_id(&self, id: u128) {
+        *self.id.write() = id;
     }
 
-    pub async fn sender(&self) -> Arc<dyn RexSenderTrait> {
-        self.sender.read().await.clone()
+    pub fn sender(&self) -> Arc<dyn RexSenderTrait> {
+        self.sender.read().clone()
     }
 
-    pub async fn set_sender(&self, sender: Arc<dyn RexSenderTrait>) {
-        *self.sender.write().await = sender;
+    pub fn set_sender(&self, sender: Arc<dyn RexSenderTrait>) {
+        *self.sender.write() = sender;
     }
     pub fn title_list(&self) -> Vec<String> {
         self.titles.iter().map(|s| s.to_string()).collect()

@@ -50,7 +50,7 @@ impl RexSystem {
     }
 
     pub async fn add_client(&self, client: Arc<RexClientInner>) {
-        let id = client.id().await;
+        let id = client.id();
         self.id2client.insert(id, client.clone());
 
         for title in client.title_list() {

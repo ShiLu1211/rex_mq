@@ -101,7 +101,7 @@ impl TcpServer {
                     .handle_connection_inner(peer.clone(), reader)
                     .await;
 
-                let client_id = peer.id().await;
+                let client_id = peer.id();
                 server_clone.system.remove_client(client_id).await;
 
                 info!("Connection {} closed and cleaned up", peer_addr);

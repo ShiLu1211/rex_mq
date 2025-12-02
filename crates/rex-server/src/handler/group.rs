@@ -42,7 +42,7 @@ pub async fn handle(
     let index = GROUP_ROUND_ROBIN_INDEX.fetch_add(1, Ordering::Relaxed) % matching_clients.len();
     let target_client = &matching_clients[index];
 
-    let target_client_id = target_client.id().await;
+    let target_client_id = target_client.id();
     data.set_target(target_client_id);
 
     if let Err(e) = target_client.send_buf(&data.serialize()).await {

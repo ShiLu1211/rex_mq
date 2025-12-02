@@ -23,7 +23,7 @@ rand.workspace = true
 hdrhistogram.workspace = true
 
 [dev-dependencies]
-criterion = { version = "0.7", features = ["async_tokio", "html_reports"] }
+criterion = { version = "0.8", features = ["async_tokio", "html_reports"] }
 
 [[bench]]
 name = "data_codec"
