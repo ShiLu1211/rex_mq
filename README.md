@@ -28,6 +28,16 @@ java -jar target/rex-rex4j-0.1.0.jar -y rcv -h 127.0.0.1 -p 8881 -t one
 java -jar target/rex-rex4j-0.1.0.jar -y snd -h 127.0.0.1 -p 8881 -t one -c Title -s 1024 -i 100 -T 60
 ```
 
+## python
+``` bash
+cd bindings/rex4p
+python3 -m venv .venv
+source .venv/bin/activate
+pip install maturin
+# pip install patchelf
+maturin develop --release
+```
+
 ## docs
 ```
 tcp len 1024 tps 5w latency 50-60us(wsl) 35us(ubuntu)
