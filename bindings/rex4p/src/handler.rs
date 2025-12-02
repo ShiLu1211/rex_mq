@@ -16,14 +16,6 @@ impl PyClientHandler {
     }
 }
 
-impl Clone for PyClientHandler {
-    fn clone(&self) -> Self {
-        Python::attach(|py| Self {
-            callback: self.callback.as_ref().clone_ref(py),
-        })
-    }
-}
-
 #[async_trait::async_trait]
 impl RexClientHandlerTrait for PyClientHandler {
     async fn login_ok(&self, _client: Arc<RexClientInner>, data: RexData) -> Result<()> {

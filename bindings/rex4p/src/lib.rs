@@ -14,6 +14,7 @@ pub use types::*;
 fn rex4p(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 注册类型
     m.add_class::<PyRexClient>()?;
+    m.add_class::<PyClientConfig>()?;
     m.add_class::<PyProtocol>()?;
     m.add_class::<PyConnectionState>()?;
     m.add_class::<PyRexData>()?;

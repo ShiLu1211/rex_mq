@@ -1,6 +1,11 @@
+use std::sync::Arc;
+
 use bytes::BytesMut;
 use pyo3::{exceptions::PyValueError, prelude::*};
+use rex_client::RexClientConfig;
 use rex_core::{Protocol, RetCode, RexCommand, RexData};
+
+use crate::PyClientHandler;
 
 /// 协议类型
 #[pyclass(name = "Protocol")]
@@ -248,5 +253,143 @@ impl PyRexData {
 
     pub fn inner_mut(&mut self) -> &mut RexData {
         &mut self.inner
+    }
+}
+
+/// 客户端配置
+#[pyclass(name = "ClientConfig")]
+pub struct PyClientConfig {
+    protocol: Protocol,
+    server_addr: String,
+    title: String,
+    handler: Option<Py<PyAny>>,
+    idle_timeout: u64,
+    pong_wait: u64,
+    max_reconnect_attempts: u32,
+    read_buffer_size: usize,
+    max_buffer_size: usize,
+}
+
+#[pymethods]
+impl PyClientConfig {
+    #[new]
+    #[pyo3(signature = (server_addr, protocol, title, handler))]
+    fn new(server_addr: String, protocol: PyProtocol, title: String, handler: Py<PyAny>) -> Self {
+        Self {
+            protocol: protocol.inner(),
+            server_addr,
+            title,
+            handler: Some(handler),
+            idle_timeout: 10,
+            pong_wait: 5,
+            max_reconnect_attempts: 5,
+            read_buffer_size: 8192,
+            max_buffer_size: 8 * 1024 * 1024,
+        }
+    }
+
+    /// 设置空闲超时时间（秒）
+    fn with_idle_timeout(mut slf: PyRefMut<'_, Self>, timeout: u64) -> PyRefMut<'_, Self> {
+        slf.idle_timeout = timeout;
+        slf
+    }
+
+    /// 设置心跳响应等待时间（秒）
+    fn with_pong_wait(mut slf: PyRefMut<'_, Self>, wait: u64) -> PyRefMut<'_, Self> {
+        slf.pong_wait = wait;
+        slf
+    }
+
+    /// 设置最大重连尝试次数
+    fn with_max_reconnect_attempts(
+        mut slf: PyRefMut<'_, Self>,
+        attempts: u32,
+    ) -> PyRefMut<'_, Self> {
+        slf.max_reconnect_attempts = attempts;
+        slf
+    }
+
+    /// 设置读取缓冲区大小（字节）
+    fn with_read_buffer_size(mut slf: PyRefMut<'_, Self>, size: usize) -> PyRefMut<'_, Self> {
+        slf.read_buffer_size = size;
+        slf
+    }
+
+    /// 设置最大缓冲区大小（字节）
+    fn with_max_buffer_size(mut slf: PyRefMut<'_, Self>, size: usize) -> PyRefMut<'_, Self> {
+        slf.max_buffer_size = size;
+        slf
+    }
+
+    #[getter]
+    fn server_addr(&self) -> String {
+        self.server_addr.clone()
+    }
+
+    #[getter]
+    fn protocol(&self) -> PyProtocol {
+        PyProtocol {
+            inner: self.protocol,
+        }
+    }
+
+    #[getter]
+    fn title(&self) -> String {
+        self.title.clone()
+    }
+
+    #[getter]
+    fn idle_timeout(&self) -> u64 {
+        self.idle_timeout
+    }
+
+    #[getter]
+    fn pong_wait(&self) -> u64 {
+        self.pong_wait
+    }
+
+    #[getter]
+    fn max_reconnect_attempts(&self) -> u32 {
+        self.max_reconnect_attempts
+    }
+
+    fn __str__(&self) -> String {
+        format!(
+            "ClientConfig(server={}, protocol={:?}, title='{}', idle_timeout={}s)",
+            self.server_addr, self.protocol, self.title, self.idle_timeout
+        )
+    }
+
+    fn __repr__(&self) -> String {
+        self.__str__()
+    }
+}
+
+impl PyClientConfig {
+    pub fn into_rust_config(&self) -> PyResult<RexClientConfig> {
+        let server_addr = self
+            .server_addr
+            .parse()
+            .map_err(|e| PyValueError::new_err(format!("Invalid server address: {}", e)))?;
+
+        let handler = self
+            .handler
+            .as_ref()
+            .ok_or_else(|| PyValueError::new_err("Handler not set"))?;
+
+        let py_handler = Arc::new(PyClientHandler::new(Python::attach(|py| {
+            handler.clone_ref(py)
+        })));
+
+        let mut config =
+            RexClientConfig::new(self.protocol, server_addr, self.title.clone(), py_handler);
+
+        config.idle_timeout = self.idle_timeout;
+        config.pong_wait = self.pong_wait;
+        config.max_reconnect_attempts = self.max_reconnect_attempts;
+        config.read_buffer_size = self.read_buffer_size;
+        config.max_buffer_size = self.max_buffer_size;
+
+        Ok(config)
     }
 }

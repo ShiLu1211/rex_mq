@@ -11,10 +11,11 @@ class MyHandler:
 
 
 async def main():
-    client = RexClient()
     handler = MyHandler()
+    config = ClientConfig("127.0.0.1:8881", Protocol.tcp(), "one", handler)
 
-    await client.connect("127.0.0.1:8881", Protocol.tcp(), "one", handler)
+    client = RexClient()
+    await client.connect(config)
 
     while not await client.is_connected():
         await asyncio.sleep(0.1)

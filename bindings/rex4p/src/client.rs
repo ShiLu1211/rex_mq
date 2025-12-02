@@ -1,16 +1,15 @@
-use pyo3::{exceptions::PyValueError, prelude::*};
-use rex_client::{RexClientConfig, RexClientTrait, open_client};
+use pyo3::prelude::*;
+use rex_client::{RexClientTrait, open_client};
 use rex_core::RexData;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::{PyClientHandler, PyConnectionState, PyProtocol, PyRexData, PyRexError};
+use crate::{PyConnectionState, PyRexData, PyRexError};
 
 /// Rex 客户端
 #[pyclass(name = "RexClient")]
 pub struct PyRexClient {
     client: Arc<RwLock<Option<Arc<dyn RexClientTrait>>>>,
-    config: Arc<RwLock<Option<RexClientConfig>>>,
 }
 
 #[pymethods]
@@ -19,41 +18,23 @@ impl PyRexClient {
     fn new() -> Self {
         Self {
             client: Arc::new(RwLock::new(None)),
-            config: Arc::new(RwLock::new(None)),
         }
     }
 
-    /// 连接到服务器
+    /// 使用配置连接到服务器
     ///
     /// Args:
-    ///     server_addr: 服务器地址，例如 "127.0.0.1:8080"
-    ///     protocol: 协议类型 (Protocol.tcp(), Protocol.quic(), Protocol.websocket())
-    ///     title: 客户端标题
-    ///     handler: 消息处理器对象，需要实现 on_login 和 on_message 方法
+    ///     config: ClientConfig 配置对象
     fn connect<'py>(
         &'py self,
         py: Python<'py>,
-        server_addr: String,
-        protocol: PyProtocol,
-        title: String,
-        handler: Py<PyAny>,
+        config: PyRef<crate::types::PyClientConfig>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = self.client.clone();
-        let config = self.config.clone();
-
-        let server_addr = server_addr
-            .parse()
-            .map_err(|e| PyValueError::new_err(format!("Invalid server address: {}", e)))?;
-
-        let py_handler = Arc::new(PyClientHandler::new(handler));
+        let rust_config = config.into_rust_config()?;
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let client_config =
-                RexClientConfig::new(protocol.inner(), server_addr, title, py_handler);
-
-            *config.write().await = Some(client_config.clone());
-
-            let rex_client = open_client(client_config)
+            let rex_client = open_client(rust_config)
                 .await
                 .map_err(|e| PyRexError::new_err(format!("Connection failed: {}", e)))?;
 
