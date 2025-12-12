@@ -36,6 +36,19 @@ source .venv/bin/activate
 pip install maturin
 # pip install patchelf
 maturin develop --release
+
+cd examples
+python rex_engine.py
+```
+
+or
+
+``` bash
+cargo build -r
+cp target/release/librex4p.so bindings/rex4p/examples/rex4p.so
+
+cd bindings/rex4p/examples
+python3 rex_engine.py
 ```
 
 ## docs
