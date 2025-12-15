@@ -44,6 +44,7 @@ strum_macros = "0.27"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.9"
 parking_lot = "0.12"
+kanal = "0.1"
 
 [profile.dev]
 opt-level = 0

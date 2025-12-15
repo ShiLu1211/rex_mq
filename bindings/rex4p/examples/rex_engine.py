@@ -1,5 +1,6 @@
-from rex4p import *
 import asyncio
+
+from rex4p import *
 
 
 class MyHandler:
@@ -20,7 +21,7 @@ async def main():
     while not await client.is_connected():
         await asyncio.sleep(0.1)
 
-    await client.send_text(RexCommand.Title, "Hello World", target=None, title="two")
+    await client.send_text(RexCommand.Title, "Hello World", title="two")
 
     await asyncio.sleep(10)
 
