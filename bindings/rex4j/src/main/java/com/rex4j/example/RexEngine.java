@@ -96,8 +96,9 @@ public class RexEngine implements Runnable {
             double mean = hist.getMean() / 1_000.0;
 
             System.out.printf(
-                "tps: %d, mean: %.3f µs, min: %.0f µs, P50: %.0f µs, P90: %.0f µs, P98: %.0f µs, P99: %.0f µs, max: %.0f µs%n",
-                count, mean, min, p50, p90, p98, p99, max);
+                "tps: %d, mean: %.3f µs, min: %.0f µs, P50: %.0f µs, P90: %.0f µs, P95: %.0f µs,"
+                    + " P98: %.0f µs, P99: %.0f µs, max: %.0f µs%n",
+                count, mean, min, p50, p90, p95, p98, p99, max);
           }
         },
         1,
