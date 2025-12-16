@@ -105,6 +105,7 @@ public class RexEngine implements Runnable {
         1,
         TimeUnit.SECONDS);
     RexConfig config = RexConfig.builder(host, port, title).build();
+    @SuppressWarnings({"resource", "unused"})
     RexClient client =
         new RexClient(
             config,
