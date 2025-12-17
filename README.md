@@ -30,29 +30,17 @@ java -jar target/rex-rex4j-0.1.0.jar -y snd -h 127.0.0.1 -p 8881 -t one -c Title
 
 ## python
 ``` bash
-cd bindings/rex4p
-python3 -m venv .venv
-source .venv/bin/activate
-pip install maturin
-# pip install patchelf
-maturin develop --release
-
-cd examples
-python rex_engine.py
-```
-
-or
-
-``` bash
 cargo build -r
 cp target/release/librex4p.so bindings/rex4p/examples/rex4p.so
 
 cd bindings/rex4p/examples
-python3 rex_engine.py
+
+python3 ./rex_engine.py -H 127.0.0.1 -p 8881 -t one -y rcv
+
+python3 ./rex_engine.py -H 127.0.0.1 -p 8881 -t one -y snd -s 1024 -i 50 -T 60
 ```
 
 ## docs
 ```
 tcp len 1024 tps 5w latency 50-60us(wsl) 35us(ubuntu)
-
 ```
