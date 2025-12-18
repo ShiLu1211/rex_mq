@@ -19,14 +19,14 @@ class BenchmarkHandler:
         self.start_time = None
         self.end_time = None
         self.mode = mode
-        
+
         # 获取当前的事件循环（需要在 async 上下文中初始化，或者在 start 时获取）
         # 如果是在 main 中初始化，可以直接获取
         try:
             self.loop = asyncio.get_running_loop()
         except RuntimeError:
             self.loop = None
-        
+
         # Events to signal completion
         self.async_done_event = asyncio.Event()
         self.sync_done_event = threading.Event()
@@ -41,7 +41,7 @@ class BenchmarkHandler:
             print(f"[{self.mode.upper()} RECEIVER] ⏱️ First message received. Timer started.")
 
         self.received_count += 1
-        
+
         # Progress Log every 10%
         if self.received_count % (max(1, self.total_expected // 10)) == 0:
             print(f"[{self.mode.upper()} RECEIVER] 📥 Progress: {self.received_count}/{self.total_expected}")
@@ -66,7 +66,7 @@ class BenchmarkHandler:
 
         elapsed = self.end_time - self.start_time
         rate = self.received_count / elapsed if elapsed > 0 else 0
-        
+
         print("\n" + "="*50)
         print(f"📊 {self.mode.upper()} TEST RESULTS")
         print("="*50)
@@ -82,7 +82,7 @@ class BenchmarkHandler:
 # ==========================================
 async def run_async_benchmark(host, count, batch_size):
     print(f"\n🚀 Starting ASYNC Benchmark ({count} messages)...")
-    
+
     # 1. Setup Receiver
     recv_handler = BenchmarkHandler(count, mode="async")
     recv_config = ClientConfig(host, Protocol.tcp(), "bench_receiver", recv_handler)
@@ -102,23 +102,23 @@ async def run_async_benchmark(host, count, batch_size):
 
     # 3. Sending Phase
     send_start = time.time()
-    
+
     # Create tasks for concurrent sending
     tasks = []
     for i in range(count):
         # Note: We set target="bench_receiver" to route message to the receiver
         task = sender.send_text(
-            RexCommand.Title, 
-            f"Async Payload {i}", 
+            RexCommand.Title,
+            f"Async Payload {i}",
             title="bench_receiver"
         )
         tasks.append(task)
-        
+
         # Batch control (optional throttle to prevent local memory overflow on massive tests)
         if len(tasks) >= batch_size:
             await asyncio.gather(*tasks)
             tasks = []
-    
+
     if tasks:
         await asyncio.gather(*tasks)
 
@@ -166,11 +166,11 @@ def run_sync_benchmark(host, count):
     send_start = time.time()
     for i in range(count):
         sender.send_text(
-            RexCommand.Title, 
-            f"Sync Payload {i}", 
+            RexCommand.Title,
+            f"Sync Payload {i}",
             title="bench_receiver"
         )
-    
+
     send_elapsed = time.time() - send_start
     print(f"📤 [SENDER] Finished sending {count} messages in {send_elapsed:.2f}s")
 
@@ -200,7 +200,7 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="127.0.0.1:8881", help="Server address")
     parser.add_argument("--count", type=int, default=10000, help="Number of messages to send")
     parser.add_argument("--batch", type=int, default=1000, help="Async batch size for gathering tasks")
-    
+
     args = parser.parse_args()
 
     print("="*60)
@@ -212,10 +212,10 @@ if __name__ == "__main__":
     try:
         if args.mode in ["async"]:
             asyncio.run(run_async_benchmark(args.host, args.count, args.batch))
-        
+
         if args.mode in ["sync"]:
             run_sync_benchmark(args.host, args.count)
-            
+
     except KeyboardInterrupt:
         print("\n🛑 Test interrupted by user.")
     except Exception as e:
