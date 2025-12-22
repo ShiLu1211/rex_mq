@@ -146,14 +146,6 @@ fn init_internal(env: &mut JNIEnv, config_obj: &JObject, handler_obj: &JObject) 
         )?
         .i()? as u32;
 
-    let read_buffer_size = env
-        .get_field_unchecked(
-            config_obj,
-            cache.config.read_buffer_size,
-            jni::signature::ReturnType::Primitive(jni::signature::Primitive::Int),
-        )?
-        .i()? as usize;
-
     let max_buffer_size = env
         .get_field_unchecked(
             config_obj,
@@ -179,7 +171,6 @@ fn init_internal(env: &mut JNIEnv, config_obj: &JObject, handler_obj: &JObject) 
     config.idle_timeout = idle_timeout;
     config.pong_wait = pong_wait;
     config.max_reconnect_attempts = max_reconnect;
-    config.read_buffer_size = read_buffer_size;
     config.max_buffer_size = max_buffer_size;
 
     info!("Opening client with config: {:?}", config.server_addr);

@@ -221,11 +221,10 @@ impl TcpClient {
 
     async fn receive_data_task(self: &Arc<Self>, mut rx: OwnedReadHalf) {
         let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
-        let mut temp_buf = vec![0u8; self.config.read_buffer_size];
         let mut total_read = 0;
 
         loop {
-            match rx.read(&mut temp_buf).await {
+            match rx.read_buf(&mut buffer).await {
                 Ok(0) => {
                     info!("Peer closed connection gracefully");
                     break;
@@ -233,8 +232,6 @@ impl TcpClient {
                 Ok(n) => {
                     total_read += n;
                     debug!("Buffered read: {} bytes (total: {})", n, total_read);
-
-                    buffer.extend_from_slice(&temp_buf[..n]);
 
                     // 尝试解析完整的数据包
                     loop {

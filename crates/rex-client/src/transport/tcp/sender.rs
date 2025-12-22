@@ -23,7 +23,6 @@ impl RexSenderTrait for TcpSender {
     async fn send_buf(&self, buf: &BytesMut) -> Result<()> {
         let mut writer = self.writer.lock().await;
         writer.write_all(buf).await?;
-        writer.flush().await?;
         Ok(())
     }
 

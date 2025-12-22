@@ -118,23 +118,19 @@ impl TcpServer {
         info!("Handling new connection: {}", peer_addr);
 
         let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
-        let mut temp_buf = vec![0u8; self.config.read_buffer_size];
 
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
         loop {
             tokio::select! {
                 // 从 TCP 流中读取数据
-                result = reader.read(&mut temp_buf) => {
+                result = reader.read_buf(&mut buffer) => {
                     match result {
                         Ok(0) => {
                             info!("Connection {} closed by client", peer_addr);
                             break;
                         }
-                        Ok(n) => {
-                            // 将读取的数据添加到缓冲区
-                            buffer.extend_from_slice(&temp_buf[..n]);
-
+                        Ok(_) => {
                             loop {
                                 match RexData::try_deserialize(&mut buffer) {
                                     Ok(Some(mut data)) => {

@@ -266,7 +266,6 @@ pub struct PyClientConfig {
     idle_timeout: u64,
     pong_wait: u64,
     max_reconnect_attempts: u32,
-    read_buffer_size: usize,
     max_buffer_size: usize,
 }
 
@@ -283,7 +282,6 @@ impl PyClientConfig {
             idle_timeout: 10,
             pong_wait: 5,
             max_reconnect_attempts: 5,
-            read_buffer_size: 8192,
             max_buffer_size: 8 * 1024 * 1024,
         }
     }
@@ -306,12 +304,6 @@ impl PyClientConfig {
         attempts: u32,
     ) -> PyRefMut<'_, Self> {
         slf.max_reconnect_attempts = attempts;
-        slf
-    }
-
-    /// 设置读取缓冲区大小（字节）
-    fn with_read_buffer_size(mut slf: PyRefMut<'_, Self>, size: usize) -> PyRefMut<'_, Self> {
-        slf.read_buffer_size = size;
         slf
     }
 
@@ -387,7 +379,6 @@ impl PyClientConfig {
         config.idle_timeout = self.idle_timeout;
         config.pong_wait = self.pong_wait;
         config.max_reconnect_attempts = self.max_reconnect_attempts;
-        config.read_buffer_size = self.read_buffer_size;
         config.max_buffer_size = self.max_buffer_size;
 
         Ok(config)

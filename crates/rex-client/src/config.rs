@@ -17,7 +17,6 @@ pub struct RexClientConfig {
     pub pong_wait: u64,
     pub max_reconnect_attempts: u32,
 
-    pub read_buffer_size: usize,
     pub max_buffer_size: usize,
 }
 
@@ -36,7 +35,6 @@ impl RexClientConfig {
             idle_timeout: 10,
             pong_wait: 5,
             max_reconnect_attempts: 5,
-            read_buffer_size: 8192,
             max_buffer_size: 8 * 1024 * 1024,
         }
     }

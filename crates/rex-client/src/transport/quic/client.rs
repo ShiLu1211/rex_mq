@@ -18,6 +18,7 @@ use rustls::{
     pki_types::{CertificateDer, ServerName, UnixTime},
 };
 use tokio::{
+    io::AsyncReadExt,
     sync::{RwLock, broadcast},
     time::sleep,
 };
@@ -289,16 +290,22 @@ impl QuicClient {
 
     async fn handle_stream(self: &Arc<Self>, mut recv_stream: RecvStream) -> Result<()> {
         let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
-        let mut temp_buf = vec![0u8; self.config.read_buffer_size];
         let mut total_read = 0;
 
         loop {
-            match recv_stream.read(&mut temp_buf).await {
-                Ok(Some(n)) => {
+            match recv_stream.read_buf(&mut buffer).await {
+                Ok(0) => {
+                    debug!("Stream finished, total read: {} bytes", total_read);
+
+                    if !buffer.is_empty() {
+                        warn!("Stream ended with {} bytes remaining", buffer.len());
+                    }
+
+                    break;
+                }
+                Ok(n) => {
                     total_read += n;
                     debug!("Buffered read: {} bytes (total: {})", n, total_read);
-
-                    buffer.extend_from_slice(&temp_buf[..n]);
 
                     // 尝试解析完整的数据包
                     loop {
@@ -328,15 +335,6 @@ impl QuicClient {
                         );
                         buffer.clear();
                     }
-                }
-                Ok(None) => {
-                    debug!("Stream finished, total read: {} bytes", total_read);
-
-                    if !buffer.is_empty() {
-                        warn!("Stream ended with {} bytes remaining", buffer.len());
-                    }
-
-                    break;
                 }
                 Err(e) => {
                     warn!("QUIC read error: {}", e);
