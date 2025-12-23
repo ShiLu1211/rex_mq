@@ -6,20 +6,19 @@ use std::time::Duration;
 
 use anyhow::Result;
 use bytes::BytesMut;
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use rex_core::{
-    RexCommand, RexData,
+    RexClientInner, RexCommand, RexData, RexSender, WriteCommand,
     utils::{new_uuid, now_secs},
 };
 use tokio::{
-    sync::{RwLock, broadcast},
+    sync::{RwLock, broadcast, mpsc},
     time::sleep,
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
-use super::WebSocketSender;
-use crate::{ConnectionState, RexClientConfig, RexClientInner, RexClientTrait};
+use crate::{ConnectionState, RexClientConfig, RexClientTrait};
 
 pub struct WebSocketClient {
     // connection
@@ -164,8 +163,32 @@ impl WebSocketClient {
         let url = format!("ws://{}", self.config.server_addr);
         let (ws_stream, _) = connect_async(&url).await?;
 
-        let (sink, stream) = ws_stream.split();
-        let sender = Arc::new(WebSocketSender::new_client(sink));
+        let (mut sink, stream) = ws_stream.split();
+
+        let (tx, mut rx) = mpsc::channel(10000);
+
+        tokio::spawn(async move {
+            debug!("Writer loop started for {}", url);
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    WriteCommand::Data(buf) => {
+                        if let Err(e) = sink.send(Message::Binary(buf.clone().freeze())).await {
+                            warn!("Write error to {}: {}, stopping writer loop", url, e);
+                            break;
+                        }
+                    }
+                    WriteCommand::Close => {
+                        debug!("Close command received for {}", url);
+                        let _ = sink.close().await;
+                        break;
+                    }
+                }
+            }
+            // 循环结束（Channel被Drop或出错），确保关闭 Socket
+            debug!("Writer loop ended for {}", url);
+        });
+
+        let sender = Arc::new(RexSender::new(tx));
 
         // 创建或更新客户端
         {
@@ -311,7 +334,7 @@ impl WebSocketClient {
         }
     }
 
-    async fn heartbeat_task(self: &Arc<Self>) {
+    async fn heartbeat_task(&self) {
         let heartbeat_interval = Duration::from_secs(15);
 
         loop {
@@ -358,7 +381,7 @@ impl WebSocketClient {
         }
     }
 
-    async fn login(self: &Arc<Self>) -> Result<()> {
+    async fn login(&self) -> Result<()> {
         if let Some(client) = self.get_client().await {
             let mut data = RexData::builder(RexCommand::Login)
                 .data_from_string(self.config.title().await.clone())

@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use rex_core::RexData;
-
-use crate::RexClientInner;
+use rex_core::{RexClientInner, RexData};
 
 #[async_trait::async_trait]
 pub trait RexClientHandlerTrait: Send + Sync {

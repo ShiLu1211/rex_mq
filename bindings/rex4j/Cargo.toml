@@ -10,9 +10,13 @@ crate-type = ["cdylib"]
 [lints]
 workspace = true
 
+[features]
+default = []
+skip_crc = ["rex-core/skip_crc", "rex-client/skip_crc"]
+
 [dependencies]
-rex-core = { path = "../../crates/rex-core" }
-rex-client = { path = "../../crates/rex-client" }
+rex-core.workspace = true
+rex-client.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 async-trait.workspace = true

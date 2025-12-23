@@ -26,6 +26,10 @@ panic = "deny"
 # （按功能分组，便于维护）
 # =====================
 [workspace.dependencies]
+rex-core = { path = "./crates/rex-core", default-features = false }
+rex-client = { path = "./crates/rex-client", default-features = false }
+rex-server = { path = "./crates/rex-server", default-features = false }
+
 # --- Async Runtime & Concurrency ---
 tokio = { version = "1.48", features = [
   "rt-multi-thread",

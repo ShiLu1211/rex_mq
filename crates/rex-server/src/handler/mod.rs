@@ -9,8 +9,7 @@ mod title;
 use std::sync::Arc;
 
 use anyhow::Result;
-use rex_client::RexClientInner;
-use rex_core::{RexCommand, RexData};
+use rex_core::{RexClientInner, RexCommand, RexData};
 use tracing::debug;
 
 use crate::RexSystem;

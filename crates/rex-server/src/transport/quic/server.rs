@@ -3,12 +3,11 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::Result;
 use bytes::BytesMut;
 use quinn::{Connection, Endpoint, RecvStream, ServerConfig};
-use rex_client::{QuicSender, RexClientInner};
-use rex_core::{RexData, utils::new_uuid};
+use rex_core::{RexClientInner, RexData, RexSender, WriteCommand, utils::new_uuid};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::{
-    io::AsyncReadExt,
-    sync::{Semaphore, broadcast},
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::{Semaphore, broadcast, mpsc},
 };
 use tracing::{debug, info, warn};
 
@@ -109,17 +108,42 @@ impl QuicServer {
         Ok(server)
     }
 
-    async fn handle_connection(self: Arc<Self>, connection: Connection, peer_addr: SocketAddr) {
+    async fn handle_connection(self: &Arc<Self>, connection: Connection, peer_addr: SocketAddr) {
         info!("Handling QUIC connection from {}", peer_addr);
 
         // 打开第一个单向流用于发送
-        let sender = match connection.open_uni().await {
-            Ok(stream) => Arc::new(QuicSender::new(stream)),
+        let (mut writer, reader) = match connection.open_bi().await {
+            Ok(res) => res,
             Err(e) => {
                 warn!("Failed to open initial stream for {}: {}", peer_addr, e);
                 return;
             }
         };
+
+        let (tx, mut rx) = mpsc::channel(10000);
+
+        tokio::spawn(async move {
+            debug!("Writer loop started for {}", peer_addr);
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    WriteCommand::Data(buf) => {
+                        if let Err(e) = writer.write_all(&buf).await {
+                            warn!("Write error to {}: {}, stopping writer loop", peer_addr, e);
+                            break;
+                        }
+                    }
+                    WriteCommand::Close => {
+                        debug!("Close command received for {}", peer_addr);
+                        let _ = writer.shutdown().await;
+                        break;
+                    }
+                }
+            }
+            // 循环结束（Channel被Drop或出错），确保关闭 Socket
+            debug!("Writer loop ended for {}", peer_addr);
+        });
+
+        let sender = Arc::new(RexSender::new(tx));
 
         let peer = Arc::new(RexClientInner::new(new_uuid(), peer_addr, "", sender));
 
@@ -137,9 +161,12 @@ impl QuicServer {
             async move {
                 let _permit = permit;
 
-                server_clone
-                    .handle_connection_inner(peer.clone(), connection)
-                    .await;
+                if let Err(e) = server_clone
+                    .handle_connection_inner(peer.clone(), reader)
+                    .await
+                {
+                    warn!("Error processing connection from {}: {}", peer_addr, e);
+                }
 
                 let client_id = peer.id();
                 server_clone.system.remove_client(client_id).await;
@@ -150,38 +177,7 @@ impl QuicServer {
     }
 
     async fn handle_connection_inner(
-        self: &Arc<Self>,
-        peer: Arc<RexClientInner>,
-        connection: Connection,
-    ) {
-        let peer_addr = peer.local_addr();
-        info!("Processing streams from QUIC connection: {}", peer_addr);
-
-        // 处理所有传入的单向流
-        loop {
-            match connection.accept_uni().await {
-                Ok(recv_stream) => {
-                    let peer_clone = peer.clone();
-                    let server_clone = self.clone();
-
-                    tokio::spawn(async move {
-                        if let Err(e) = server_clone.handle_stream(peer_clone, recv_stream).await {
-                            warn!("Error handling stream from {}: {}", peer_addr, e);
-                        }
-                    });
-                }
-                Err(e) => {
-                    info!("Connection {} closed: {}", peer_addr, e);
-                    break;
-                }
-            }
-        }
-
-        info!("Finished processing streams from {}", peer_addr);
-    }
-
-    async fn handle_stream(
-        self: Arc<Self>,
+        &self,
         peer: Arc<RexClientInner>,
         mut recv_stream: RecvStream,
     ) -> Result<()> {

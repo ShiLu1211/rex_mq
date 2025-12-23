@@ -1,7 +1,6 @@
 mod client;
 mod config;
 mod handler;
-mod sender;
 mod transport;
 
 use std::sync::Arc;
@@ -9,13 +8,10 @@ use std::sync::Arc;
 use anyhow::Result;
 use rex_core::Protocol;
 
-pub use client::{ConnectionState, RexClientInner, RexClientTrait};
+pub use client::{ConnectionState, RexClientTrait};
 pub use config::RexClientConfig;
 pub use handler::RexClientHandlerTrait;
-pub use sender::RexSenderTrait;
-pub use transport::{
-    QuicClient, QuicSender, TcpClient, TcpSender, WebSocketClient, WebSocketSender,
-};
+pub use transport::{QuicClient, TcpClient, WebSocketClient};
 
 pub async fn open_client(client_config: RexClientConfig) -> Result<Arc<dyn RexClientTrait>> {
     match client_config.protocol {

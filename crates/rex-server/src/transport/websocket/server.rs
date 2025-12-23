@@ -2,12 +2,11 @@ use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use bytes::BytesMut;
-use futures_util::StreamExt;
-use rex_client::{RexClientInner, WebSocketSender};
-use rex_core::{RexData, utils::new_uuid};
+use futures_util::{SinkExt, StreamExt};
+use rex_core::{RexClientInner, RexData, RexSender, WriteCommand, utils::new_uuid};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{Semaphore, broadcast},
+    sync::{Semaphore, broadcast, mpsc},
 };
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{debug, info, warn};
@@ -75,7 +74,7 @@ impl WebSocketServer {
         Ok(server)
     }
 
-    async fn handle_connection(self: Arc<Self>, stream: TcpStream, peer_addr: SocketAddr) {
+    async fn handle_connection(self: &Arc<Self>, stream: TcpStream, peer_addr: SocketAddr) {
         info!("New WebSocket connection from {}", peer_addr);
 
         // WebSocket握手
@@ -87,8 +86,32 @@ impl WebSocketServer {
             }
         };
 
-        let (sink, mut stream) = ws_stream.split();
-        let sender = Arc::new(WebSocketSender::new_server(sink));
+        let (mut sink, mut stream) = ws_stream.split();
+
+        let (tx, mut rx) = mpsc::channel(10000);
+
+        tokio::spawn(async move {
+            debug!("Writer loop started for {}", peer_addr);
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    WriteCommand::Data(buf) => {
+                        if let Err(e) = sink.send(Message::Binary(buf.clone().freeze())).await {
+                            warn!("Write error to {}: {}, stopping writer loop", peer_addr, e);
+                            break;
+                        }
+                    }
+                    WriteCommand::Close => {
+                        debug!("Close command received for {}", peer_addr);
+                        let _ = sink.close().await;
+                        break;
+                    }
+                }
+            }
+            // 循环结束（Channel被Drop或出错），确保关闭 Socket
+            debug!("Writer loop ended for {}", peer_addr);
+        });
+
+        let sender = Arc::new(RexSender::new(tx));
         let peer = Arc::new(RexClientInner::new(new_uuid(), peer_addr, "", sender));
 
         let permit = match self.semaphore.clone().acquire_owned().await {
@@ -118,7 +141,7 @@ impl WebSocketServer {
     }
 
     async fn handle_connection_inner(
-        self: &Arc<Self>,
+        &self,
         peer: Arc<RexClientInner>,
         stream: &mut futures_util::stream::SplitStream<
             tokio_tungstenite::WebSocketStream<TcpStream>,

@@ -7,19 +7,18 @@ use std::time::Duration;
 use anyhow::Result;
 use bytes::BytesMut;
 use rex_core::{
-    RexCommand, RexData,
+    RexClientInner, RexCommand, RexData, RexSender, WriteCommand,
     utils::{new_uuid, now_secs},
 };
 use tokio::{
-    io::AsyncReadExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpSocket, tcp::OwnedReadHalf},
-    sync::{RwLock, broadcast},
+    sync::{RwLock, broadcast, mpsc},
     time::sleep,
 };
 use tracing::{debug, info, warn};
 
-use super::TcpSender;
-use crate::{ConnectionState, RexClientConfig, RexClientInner, RexClientTrait};
+use crate::{ConnectionState, RexClientConfig, RexClientTrait};
 
 pub struct TcpClient {
     // connection
@@ -169,9 +168,32 @@ impl TcpClient {
 
         let stream = socket.connect(self.config.server_addr).await?;
         let local_addr = stream.local_addr()?;
-        let (rx, tx) = stream.into_split();
+        let (reader, mut writer) = stream.into_split();
 
-        let sender = Arc::new(TcpSender::new(tx));
+        let (tx, mut rx) = mpsc::channel(10000);
+
+        tokio::spawn(async move {
+            debug!("Writer loop started for {}", local_addr);
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    WriteCommand::Data(buf) => {
+                        if let Err(e) = writer.write_all(&buf).await {
+                            warn!("Write error to {}: {}, stopping writer loop", local_addr, e);
+                            break;
+                        }
+                    }
+                    WriteCommand::Close => {
+                        debug!("Close command received for {}", local_addr);
+                        let _ = writer.shutdown().await;
+                        break;
+                    }
+                }
+            }
+            // 循环结束（Channel被Drop或出错），确保关闭 Socket
+            debug!("Writer loop ended for {}", local_addr);
+        });
+
+        let sender = Arc::new(RexSender::new(tx));
 
         // 创建或更新客户端
         {
@@ -192,11 +214,11 @@ impl TcpClient {
 
         // 启动数据接收任务
         tokio::spawn({
-            let this = Arc::clone(self);
+            let this = self.clone();
             let mut shutdown_rx = this.shutdown_tx.subscribe();
             async move {
                 tokio::select! {
-                    _ = this.receive_data_task(rx) => {
+                    _ = this.receive_data_task(reader) => {
                         warn!("Data receiving task ended");
                     }
                     _ = shutdown_rx.recv() => {
@@ -219,7 +241,7 @@ impl TcpClient {
         Ok(())
     }
 
-    async fn receive_data_task(self: &Arc<Self>, mut rx: OwnedReadHalf) {
+    async fn receive_data_task(&self, mut rx: OwnedReadHalf) {
         let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
         let mut total_read = 0;
 
@@ -298,7 +320,7 @@ impl TcpClient {
         }
     }
 
-    async fn heartbeat_task(self: &Arc<Self>) {
+    async fn heartbeat_task(&self) {
         let heartbeat_interval = Duration::from_secs(15);
 
         loop {
@@ -345,7 +367,7 @@ impl TcpClient {
         }
     }
 
-    async fn login(self: &Arc<Self>) -> Result<()> {
+    async fn login(&self) -> Result<()> {
         if let Some(client) = self.get_client().await {
             let mut data = RexData::builder(RexCommand::Login)
                 .data_from_string(self.config.title().await.clone())

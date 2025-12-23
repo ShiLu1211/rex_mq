@@ -6,9 +6,12 @@ edition.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+skip_crc = ["rex-core/skip_crc"]
+
 [dependencies]
-rex-core = { path = "../rex-core" }
-rex-client = { path = "../rex-client" }
+rex-core.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 serde.workspace = true

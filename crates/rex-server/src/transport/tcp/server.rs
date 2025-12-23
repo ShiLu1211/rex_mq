@@ -2,12 +2,11 @@ use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use bytes::BytesMut;
-use rex_client::{RexClientInner, TcpSender};
-use rex_core::{RexData, utils::new_uuid};
+use rex_core::{RexClientInner, RexData, RexSender, WriteCommand, utils::new_uuid};
 use tokio::{
-    io::AsyncReadExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream, tcp::OwnedReadHalf},
-    sync::{Semaphore, broadcast},
+    sync::{Semaphore, broadcast, mpsc},
 };
 use tracing::{debug, info, warn};
 
@@ -73,15 +72,38 @@ impl TcpServer {
         Ok(server)
     }
 
-    async fn handle_connection(self: Arc<Self>, stream: TcpStream, peer_addr: SocketAddr) {
+    async fn handle_connection(self: &Arc<Self>, stream: TcpStream, peer_addr: SocketAddr) {
         info!("New connection from {}", peer_addr);
 
         if let Err(e) = stream.set_nodelay(true) {
             warn!("Error setting TCP_NODELAY for {}: {}", peer_addr, e);
         }
 
-        let (reader, writer) = stream.into_split();
-        let sender = Arc::new(TcpSender::new(writer));
+        let (reader, mut writer) = stream.into_split();
+
+        let (tx, mut rx) = mpsc::channel(10000);
+
+        tokio::spawn(async move {
+            debug!("Writer loop started for {}", peer_addr);
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    WriteCommand::Data(buf) => {
+                        if let Err(e) = writer.write_all(&buf).await {
+                            warn!("Write error to {}: {}, stopping writer loop", peer_addr, e);
+                            break;
+                        }
+                    }
+                    WriteCommand::Close => {
+                        debug!("Close command received for {}", peer_addr);
+                        let _ = writer.shutdown().await;
+                        break;
+                    }
+                }
+            }
+            debug!("Writer loop ended for {}", peer_addr);
+        });
+
+        let sender = Arc::new(RexSender::new(tx));
         let peer = Arc::new(RexClientInner::new(new_uuid(), peer_addr, "", sender));
 
         let permit = match self.semaphore.clone().acquire_owned().await {
@@ -109,11 +131,7 @@ impl TcpServer {
         });
     }
 
-    async fn handle_connection_inner(
-        self: &Arc<Self>,
-        peer: Arc<RexClientInner>,
-        mut reader: OwnedReadHalf,
-    ) {
+    async fn handle_connection_inner(&self, peer: Arc<RexClientInner>, mut reader: OwnedReadHalf) {
         let peer_addr = peer.local_addr();
         info!("Handling new connection: {}", peer_addr);
 

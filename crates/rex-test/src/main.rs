@@ -6,15 +6,12 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use clap::Parser;
 use hdrhistogram::Histogram;
 use rand::{Rng, distr::Alphanumeric, rng};
-use rex_client::{RexClientConfig, RexClientHandlerTrait, RexClientInner, open_client};
-use rex_core::{
-    Protocol, RexCommand, RexData,
-    utils::{now_micros, timestamp, timestamp_data},
-};
+use rex_client::{RexClientConfig, RexClientHandlerTrait, open_client};
+use rex_core::{Protocol, RexClientInner, RexCommand, RexData, utils::now_micros};
 use rex_server::{RexServerConfig, RexSystem, RexSystemConfig, open_server};
 
 #[derive(clap::Parser)]
@@ -152,32 +149,37 @@ pub async fn start_bench(args: BenchArgs) -> Result<()> {
     };
     let title = args.title;
 
-    let buf: Vec<u8> = rng().sample_iter(&Alphanumeric).take(args.len).collect();
-    let mut cnt = 0;
+    let raw_payload: Vec<u8> = rng().sample_iter(&Alphanumeric).take(args.len).collect();
+    let payload_static = Bytes::from(raw_payload);
+    let interval_micros = args.interval;
+
+    let mut cnt = 0u64;
 
     loop {
         let now = Instant::now();
-        let msg = timestamp_data(buf.clone());
         cnt += 1;
-        let mut data = if args.bench {
-            let msg_bytes = Bytes::from(msg);
-            let msg_bytesmut = BytesMut::from(msg_bytes);
-            RexData::builder(command)
-                .title(title.clone())
-                .data(msg_bytesmut)
-                .build()
+        let data_bytesmut = if args.bench {
+            let mut buf = BytesMut::with_capacity(8 + args.len);
+            buf.put_u64(now_micros() as u64);
+            buf.put_slice(&payload_static);
+            buf
         } else {
-            RexData::builder(command)
-                .title(title.clone())
-                .data(cnt.to_string().as_bytes().into())
-                .build()
+            let payload = cnt.to_string();
+            let mut buf = BytesMut::with_capacity(payload.len());
+            buf.put_slice(payload.as_bytes());
+            buf
         };
+
+        let mut data = RexData::builder(command)
+            .title(title.clone())
+            .data(data_bytesmut)
+            .build();
 
         if let Err(e) = client.send_data(&mut data).await {
             eprintln!("send data error: {}", e);
         }
 
-        while now.elapsed().as_micros() < args.interval {
+        while now.elapsed().as_micros() < interval_micros {
             spin_loop();
         }
     }
@@ -279,11 +281,8 @@ impl RexClientHandlerTrait for RcvClientHandler {
                 || command == RexCommand::Group
                 || command == RexCommand::Cast
             {
-                let now = now_micros();
-                let Some(ts) = timestamp(data.data()) else {
-                    eprintln!("cannot get timestamp from data");
-                    return Ok(());
-                };
+                let now = now_micros() as u64;
+                let ts = data.data().get_u64();
 
                 // 使用 saturating_sub 防止时间回拨崩溃
                 let latency = now.saturating_sub(ts);

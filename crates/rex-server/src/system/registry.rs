@@ -2,8 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use dashmap::{DashMap, DashSet};
 use rand::seq::IteratorRandom;
-use rex_client::RexClientInner;
-use rex_core::utils::now_secs;
+use rex_core::{RexClientInner, utils::now_secs};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
@@ -53,7 +52,7 @@ impl RexSystem {
         let id = client.id();
         self.id2client.insert(id, client.clone());
 
-        for title in client.title_list() {
+        for title in client.title_iter() {
             self.title2ids
                 .entry(title.to_string())
                 .or_default()
@@ -63,7 +62,7 @@ impl RexSystem {
 
     pub async fn remove_client(&self, client_id: u128) {
         if let Some((_id, client)) = self.id2client.remove(&client_id) {
-            for title in client.title_list() {
+            for title in client.title_iter() {
                 if let Some(clients) = self.title2ids.get_mut(&title) {
                     clients.remove(&client_id);
                 }
@@ -117,15 +116,27 @@ impl RexSystem {
         title: &str,
         exclude: Option<u128>,
     ) -> Vec<Arc<RexClientInner>> {
-        if let Some(clients) = self.title2ids.get(title) {
-            clients
-                .iter()
-                .filter(|id| exclude.is_none_or(|ex| **id != ex)) // 如果 exclude=None 就不过滤
-                .filter_map(|id| self.id2client.get(&id).as_deref().cloned())
-                .collect()
-        } else {
-            vec![]
+        let Some(client_ids) = self.title2ids.get(title) else {
+            return Vec::new();
+        };
+
+        let mut result = Vec::with_capacity(client_ids.len());
+
+        for id_ref in client_ids.iter() {
+            let id = *id_ref;
+
+            if let Some(ex) = exclude
+                && id == ex
+            {
+                continue;
+            }
+
+            if let Some(client) = self.id2client.get(&id) {
+                result.push(client.clone());
+            }
         }
+
+        result
     }
 
     pub fn find_one_by_title(
@@ -196,7 +207,7 @@ impl RexSystem {
                 }
 
                 // 同步清理 title2ids 映射
-                for title in client.title_list() {
+                for title in client.title_iter() {
                     if let Some(clients) = self.title2ids.get_mut(&title) {
                         clients.remove(&client_id);
                         if clients.is_empty() {

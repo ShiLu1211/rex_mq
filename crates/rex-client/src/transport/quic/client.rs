@@ -8,7 +8,7 @@ use anyhow::Result;
 use bytes::BytesMut;
 use quinn::{ClientConfig, Connection, Endpoint, RecvStream, crypto::rustls::QuicClientConfig};
 use rex_core::{
-    RexCommand, RexData,
+    RexClientInner, RexCommand, RexData, RexSender, WriteCommand,
     utils::{new_uuid, now_secs},
 };
 use rustls::{
@@ -18,14 +18,13 @@ use rustls::{
     pki_types::{CertificateDer, ServerName, UnixTime},
 };
 use tokio::{
-    io::AsyncReadExt,
-    sync::{RwLock, broadcast},
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::{RwLock, broadcast, mpsc},
     time::sleep,
 };
 use tracing::{debug, info, warn};
 
-use super::QuicSender;
-use crate::{ConnectionState, RexClientConfig, RexClientInner, RexClientTrait};
+use crate::{ConnectionState, RexClientConfig, RexClientTrait};
 
 pub struct QuicClient {
     // connection
@@ -212,8 +211,32 @@ impl QuicClient {
         let local_addr = self.endpoint.local_addr()?;
 
         // 打开第一个单向流用于发送
-        let tx = conn.open_uni().await?;
-        let sender = Arc::new(QuicSender::new(tx));
+        let (mut writer, reader) = conn.open_bi().await?;
+
+        let (tx, mut rx) = mpsc::channel(10000);
+
+        tokio::spawn(async move {
+            debug!("Writer loop started for {}", local_addr);
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    WriteCommand::Data(buf) => {
+                        if let Err(e) = writer.write_all(&buf).await {
+                            warn!("Write error to {}: {}, stopping writer loop", local_addr, e);
+                            break;
+                        }
+                    }
+                    WriteCommand::Close => {
+                        debug!("Close command received for {}", local_addr);
+                        let _ = writer.shutdown().await;
+                        break;
+                    }
+                }
+            }
+            // 循环结束（Channel被Drop或出错），确保关闭 Socket
+            debug!("Writer loop ended for {}", local_addr);
+        });
+
+        let sender = Arc::new(RexSender::new(tx));
 
         // 创建或更新客户端
         {
@@ -241,8 +264,8 @@ impl QuicClient {
             let mut shutdown_rx = this.shutdown_tx.subscribe();
             async move {
                 tokio::select! {
-                    _ = this.receive_data_task(conn) => {
-                        warn!("Data receiving task ended");
+                    Err(e) = this.handle_stream(reader) => {
+                        warn!("Data receiving task ended: {e}");
                     }
                     _ = shutdown_rx.recv() => {
                         debug!("Data receiving task received shutdown signal");
@@ -264,31 +287,7 @@ impl QuicClient {
         Ok(())
     }
 
-    async fn receive_data_task(self: &Arc<Self>, connection: Connection) {
-        info!("Starting QUIC receiver task");
-
-        loop {
-            match connection.accept_uni().await {
-                Ok(recv_stream) => {
-                    debug!("Accepted incoming stream from server");
-                    let this = self.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = this.handle_stream(recv_stream).await {
-                            warn!("Error handling stream: {}", e);
-                        }
-                    });
-                }
-                Err(e) => {
-                    info!("QUIC connection closed: {}", e);
-                    break;
-                }
-            }
-        }
-
-        info!("QUIC receiver task ended");
-    }
-
-    async fn handle_stream(self: &Arc<Self>, mut recv_stream: RecvStream) -> Result<()> {
+    async fn handle_stream(&self, mut recv_stream: RecvStream) -> Result<()> {
         let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
         let mut total_read = 0;
 
@@ -399,40 +398,23 @@ impl QuicClient {
             debug!("Sending heartbeat (idle: {}s)", idle_time);
             let ping = RexData::builder(RexCommand::Check).build().serialize();
 
-            // 获取连接并打开新的单向流发送心跳
-            let conn = {
-                let conn_guard = self.connection.read().await;
-                conn_guard.clone()
-            };
+            if let Err(e) = client.send_buf(&ping).await {
+                warn!("Heartbeat send failed: {}", e);
+                *self.connection_state.write().await = ConnectionState::Disconnected;
+                continue;
+            }
 
-            if let Some(conn) = conn {
-                match conn.open_uni().await {
-                    Ok(mut stream) => {
-                        if let Err(e) = stream.write_all(&ping).await {
-                            warn!("Heartbeat send failed: {}", e);
-                            *self.connection_state.write().await = ConnectionState::Disconnected;
-                            continue;
-                        }
-                        let _ = stream.finish();
+            // 等待心跳响应
+            let before_ping = last_recv;
+            sleep(Duration::from_secs(self.config.pong_wait)).await;
+            let after_ping = client.last_recv();
 
-                        // 等待心跳响应
-                        let before_ping = last_recv;
-                        sleep(Duration::from_secs(self.config.pong_wait)).await;
-                        let after_ping = client.last_recv();
-
-                        if after_ping <= before_ping {
-                            warn!("Heartbeat timeout, marking connection as lost");
-                            *self.connection_state.write().await = ConnectionState::Disconnected;
-                        } else {
-                            debug!("Heartbeat successful");
-                            self.last_heartbeat.store(now_secs(), Ordering::Relaxed);
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to open stream for heartbeat: {}", e);
-                        *self.connection_state.write().await = ConnectionState::Disconnected;
-                    }
-                }
+            if after_ping <= before_ping {
+                warn!("Heartbeat timeout, marking connection as lost");
+                *self.connection_state.write().await = ConnectionState::Disconnected;
+            } else {
+                debug!("Heartbeat successful");
+                self.last_heartbeat.store(now_secs(), Ordering::Relaxed);
             }
         }
     }
