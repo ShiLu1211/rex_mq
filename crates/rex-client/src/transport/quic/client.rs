@@ -211,7 +211,7 @@ impl QuicClient {
         let local_addr = self.endpoint.local_addr()?;
 
         // 打开第一个单向流用于发送
-        let (mut writer, reader) = conn.open_bi().await?;
+        let mut writer = conn.open_uni().await?;
 
         let (tx, mut rx) = mpsc::channel(10000);
 
@@ -264,8 +264,8 @@ impl QuicClient {
             let mut shutdown_rx = this.shutdown_tx.subscribe();
             async move {
                 tokio::select! {
-                    Err(e) = this.handle_stream(reader) => {
-                        warn!("Data receiving task ended: {e}");
+                    _ = this.receive_data_task(conn) => {
+                        warn!("Data receiving task ended");
                     }
                     _ = shutdown_rx.recv() => {
                         debug!("Data receiving task received shutdown signal");
@@ -285,6 +285,30 @@ impl QuicClient {
         self.last_heartbeat.store(now_secs(), Ordering::Relaxed);
 
         Ok(())
+    }
+
+    async fn receive_data_task(self: &Arc<Self>, connection: Connection) {
+        info!("Starting QUIC receiver task");
+
+        loop {
+            match connection.accept_uni().await {
+                Ok(recv_stream) => {
+                    debug!("Accepted incoming stream from server");
+                    let this = self.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = this.handle_stream(recv_stream).await {
+                            warn!("Error handling stream: {}", e);
+                        }
+                    });
+                }
+                Err(e) => {
+                    info!("QUIC connection closed: {}", e);
+                    break;
+                }
+            }
+        }
+
+        info!("QUIC receiver task ended");
     }
 
     async fn handle_stream(&self, mut recv_stream: RecvStream) -> Result<()> {

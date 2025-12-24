@@ -112,7 +112,7 @@ impl QuicServer {
         info!("Handling QUIC connection from {}", peer_addr);
 
         // 打开第一个单向流用于发送
-        let (mut writer, reader) = match connection.open_bi().await {
+        let mut writer = match connection.open_uni().await {
             Ok(res) => res,
             Err(e) => {
                 warn!("Failed to open initial stream for {}: {}", peer_addr, e);
@@ -161,12 +161,9 @@ impl QuicServer {
             async move {
                 let _permit = permit;
 
-                if let Err(e) = server_clone
-                    .handle_connection_inner(peer.clone(), reader)
-                    .await
-                {
-                    warn!("Error processing connection from {}: {}", peer_addr, e);
-                }
+                server_clone
+                    .handle_connection_inner(peer.clone(), connection)
+                    .await;
 
                 let client_id = peer.id();
                 server_clone.system.remove_client(client_id).await;
@@ -177,6 +174,37 @@ impl QuicServer {
     }
 
     async fn handle_connection_inner(
+        self: &Arc<Self>,
+        peer: Arc<RexClientInner>,
+        connection: Connection,
+    ) {
+        let peer_addr = peer.local_addr();
+        info!("Processing streams from QUIC connection: {}", peer_addr);
+
+        // 处理所有传入的单向流
+        loop {
+            match connection.accept_uni().await {
+                Ok(recv_stream) => {
+                    let peer_clone = peer.clone();
+                    let server_clone = self.clone();
+
+                    tokio::spawn(async move {
+                        if let Err(e) = server_clone.handle_stream(peer_clone, recv_stream).await {
+                            warn!("Error handling stream from {}: {}", peer_addr, e);
+                        }
+                    });
+                }
+                Err(e) => {
+                    info!("Connection {} closed: {}", peer_addr, e);
+                    break;
+                }
+            }
+        }
+
+        info!("Finished processing streams from {}", peer_addr);
+    }
+
+    async fn handle_stream(
         &self,
         peer: Arc<RexClientInner>,
         mut recv_stream: RecvStream,
