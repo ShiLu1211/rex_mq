@@ -20,7 +20,12 @@ pub async fn handle(
         client.set_sender(source_client.sender());
         client.insert_title(title);
         if let Err(e) = client
-            .send_buf(&data.set_command(RexCommand::LoginReturn).serialize())
+            .send_buf(
+                &data
+                    .set_command(RexCommand::LoginReturn)
+                    .serialize()
+                    .freeze(),
+            )
             .await
         {
             warn!(
@@ -41,7 +46,12 @@ pub async fn handle(
         system.add_client(source_client.clone()).await;
 
         if let Err(e) = source_client
-            .send_buf(&data.set_command(RexCommand::LoginReturn).serialize())
+            .send_buf(
+                &data
+                    .set_command(RexCommand::LoginReturn)
+                    .serialize()
+                    .freeze(),
+            )
             .await
         {
             warn!(

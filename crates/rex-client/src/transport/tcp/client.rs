@@ -13,7 +13,7 @@ use rex_core::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpSocket, tcp::OwnedReadHalf},
-    sync::{RwLock, broadcast, mpsc},
+    sync::{RwLock, broadcast},
     time::sleep,
 };
 use tracing::{debug, info, warn};
@@ -170,11 +170,11 @@ impl TcpClient {
         let local_addr = stream.local_addr()?;
         let (reader, mut writer) = stream.into_split();
 
-        let (tx, mut rx) = mpsc::channel(10000);
+        let (tx, rx) = kanal::bounded_async(10000);
 
         tokio::spawn(async move {
             debug!("Writer loop started for {}", local_addr);
-            while let Some(cmd) = rx.recv().await {
+            while let Ok(cmd) = rx.recv().await {
                 match cmd {
                     WriteCommand::Data(buf) => {
                         if let Err(e) = writer.write_all(&buf).await {
@@ -344,7 +344,10 @@ impl TcpClient {
 
             // 发送心跳
             debug!("Sending heartbeat (idle: {}s)", idle_time);
-            let ping = RexData::builder(RexCommand::Check).build().serialize();
+            let ping = RexData::builder(RexCommand::Check)
+                .build()
+                .serialize()
+                .freeze();
 
             if let Err(e) = client.send_buf(&ping).await {
                 warn!("Heartbeat send failed: {}", e);
@@ -441,7 +444,7 @@ impl TcpClient {
     ) -> Result<()> {
         let client_id = client.id();
         data.set_source(client_id);
-        client.send_buf(&data.serialize()).await?;
+        client.send_buf(&data.serialize().freeze()).await?;
         debug!(
             "TCP data sent successfully: command={:?}",
             data.header().command()

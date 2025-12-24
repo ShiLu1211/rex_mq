@@ -14,7 +14,12 @@ pub async fn handle(
     let client_id = data.header().source();
     debug!("[{:032X}] Received check online", client_id);
     if let Err(e) = source_client
-        .send_buf(&data.set_command(RexCommand::CheckReturn).serialize())
+        .send_buf(
+            &data
+                .set_command(RexCommand::CheckReturn)
+                .serialize()
+                .freeze(),
+        )
         .await
     {
         warn!(

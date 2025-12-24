@@ -18,7 +18,12 @@ pub async fn handle(
     if let Some(client) = system.find_some_by_id(client_id) {
         system.register_title(client_id, &title);
         if let Err(e) = client
-            .send_buf(&data.set_command(RexCommand::RegTitleReturn).serialize())
+            .send_buf(
+                &data
+                    .set_command(RexCommand::RegTitleReturn)
+                    .serialize()
+                    .freeze(),
+            )
             .await
         {
             warn!("[{:032X}] Send reg title return error: {}", client_id, e);
@@ -28,7 +33,8 @@ pub async fn handle(
             &data
                 .set_command(RexCommand::RegTitleReturn)
                 .set_retcode(RetCode::NoTargetAvailable)
-                .serialize(),
+                .serialize()
+                .freeze(),
         )
         .await
     {

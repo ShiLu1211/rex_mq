@@ -12,7 +12,7 @@ use rex_core::{
     utils::{new_uuid, now_secs},
 };
 use tokio::{
-    sync::{RwLock, broadcast, mpsc},
+    sync::{RwLock, broadcast},
     time::sleep,
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -165,14 +165,14 @@ impl WebSocketClient {
 
         let (mut sink, stream) = ws_stream.split();
 
-        let (tx, mut rx) = mpsc::channel(10000);
+        let (tx, rx) = kanal::bounded_async(10000);
 
         tokio::spawn(async move {
             debug!("Writer loop started for {}", url);
-            while let Some(cmd) = rx.recv().await {
+            while let Ok(cmd) = rx.recv().await {
                 match cmd {
                     WriteCommand::Data(buf) => {
-                        if let Err(e) = sink.send(Message::Binary(buf.clone().freeze())).await {
+                        if let Err(e) = sink.send(Message::Binary(buf.clone())).await {
                             warn!("Write error to {}: {}, stopping writer loop", url, e);
                             break;
                         }
@@ -358,7 +358,10 @@ impl WebSocketClient {
 
             // 发送心跳
             debug!("Sending heartbeat (idle: {}s)", idle_time);
-            let ping = RexData::builder(RexCommand::Check).build().serialize();
+            let ping = RexData::builder(RexCommand::Check)
+                .build()
+                .serialize()
+                .freeze();
 
             if let Err(e) = client.send_buf(&ping).await {
                 warn!("Heartbeat send failed: {}", e);
@@ -455,7 +458,7 @@ impl WebSocketClient {
     ) -> Result<()> {
         let client_id = client.id();
         data.set_source(client_id);
-        client.send_buf(&data.serialize()).await?;
+        client.send_buf(&data.serialize().freeze()).await?;
         debug!(
             "WebSocket data sent successfully: command={:?}",
             data.header().command()

@@ -7,21 +7,20 @@ use std::{
 };
 
 use anyhow::Result;
-use bytes::BytesMut;
+use bytes::Bytes;
 use dashmap::DashSet;
 use itertools::Itertools;
-use parking_lot::RwLock;
 
 use crate::{
     RexSender,
-    utils::{new_uuid, now_secs},
+    utils::{force_set_value, new_uuid, now_secs},
 };
 
 pub struct RexClientInner {
-    id: RwLock<u128>,
+    id: u128,
     local_addr: SocketAddr,
     titles: DashSet<String>,
-    sender: Arc<RwLock<Arc<RexSender>>>,
+    sender: Arc<RexSender>,
 
     last_recv: AtomicU64,
 }
@@ -29,25 +28,25 @@ pub struct RexClientInner {
 impl RexClientInner {
     pub fn new(id: u128, local_addr: SocketAddr, title: &str, sender: Arc<RexSender>) -> Self {
         RexClientInner {
-            id: RwLock::new(id),
+            id,
             local_addr,
             titles: title.split(';').map(|s| s.to_string()).collect(),
-            sender: Arc::new(RwLock::new(sender)),
+            sender,
             last_recv: AtomicU64::new(now_secs()),
         }
     }
 
     pub fn from_title(title: String, sender: Arc<RexSender>) -> Self {
         RexClientInner {
-            id: RwLock::new(new_uuid()),
+            id: new_uuid(),
             local_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
             titles: title.split(';').map(|s| s.to_string()).collect(),
-            sender: Arc::new(RwLock::new(sender)),
+            sender,
             last_recv: AtomicU64::new(now_secs()),
         }
     }
 
-    pub async fn send_buf(&self, buf: &BytesMut) -> Result<()> {
+    pub async fn send_buf(&self, buf: &Bytes) -> Result<()> {
         let sender = self.sender();
         sender.send_buf(buf).await?;
         self.update_last_recv();
@@ -60,19 +59,19 @@ impl RexClientInner {
     }
 
     pub fn id(&self) -> u128 {
-        *self.id.read()
+        self.id
     }
 
     pub fn set_id(&self, id: u128) {
-        *self.id.write() = id;
+        force_set_value(&self.id, id);
     }
 
     pub fn sender(&self) -> Arc<RexSender> {
-        self.sender.read().clone()
+        self.sender.clone()
     }
 
     pub fn set_sender(&self, sender: Arc<RexSender>) {
-        *self.sender.write() = sender;
+        force_set_value(&self.sender, sender);
     }
     pub fn title_iter(&self) -> impl Iterator<Item = String> + '_ {
         self.titles.iter().map(|s| s.to_string())

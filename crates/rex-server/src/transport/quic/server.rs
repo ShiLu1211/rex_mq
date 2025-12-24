@@ -7,7 +7,7 @@ use rex_core::{RexClientInner, RexData, RexSender, WriteCommand, utils::new_uuid
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::{Semaphore, broadcast, mpsc},
+    sync::{Semaphore, broadcast},
 };
 use tracing::{debug, info, warn};
 
@@ -120,11 +120,11 @@ impl QuicServer {
             }
         };
 
-        let (tx, mut rx) = mpsc::channel(10000);
+        let (tx, rx) = kanal::bounded_async(10000);
 
         tokio::spawn(async move {
             debug!("Writer loop started for {}", peer_addr);
-            while let Some(cmd) = rx.recv().await {
+            while let Ok(cmd) = rx.recv().await {
                 match cmd {
                     WriteCommand::Data(buf) => {
                         if let Err(e) = writer.write_all(&buf).await {

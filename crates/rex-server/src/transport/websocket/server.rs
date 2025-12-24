@@ -6,7 +6,7 @@ use futures_util::{SinkExt, StreamExt};
 use rex_core::{RexClientInner, RexData, RexSender, WriteCommand, utils::new_uuid};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{Semaphore, broadcast, mpsc},
+    sync::{Semaphore, broadcast},
 };
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{debug, info, warn};
@@ -88,14 +88,14 @@ impl WebSocketServer {
 
         let (mut sink, mut stream) = ws_stream.split();
 
-        let (tx, mut rx) = mpsc::channel(10000);
+        let (tx, rx) = kanal::bounded_async(10000);
 
         tokio::spawn(async move {
             debug!("Writer loop started for {}", peer_addr);
-            while let Some(cmd) = rx.recv().await {
+            while let Ok(cmd) = rx.recv().await {
                 match cmd {
                     WriteCommand::Data(buf) => {
-                        if let Err(e) = sink.send(Message::Binary(buf.clone().freeze())).await {
+                        if let Err(e) = sink.send(Message::Binary(buf.clone())).await {
                             warn!("Write error to {}: {}, stopping writer loop", peer_addr, e);
                             break;
                         }
@@ -204,7 +204,7 @@ impl WebSocketServer {
                         }
                         Some(Ok(Message::Ping(data))) => {
                             // 自动响应 Pong
-                            if let Err(e) = peer.send_buf(&BytesMut::from(Message::Pong(data).into_data())).await {
+                            if let Err(e) = peer.send_buf(&Message::Pong(data).into_data()).await {
                                 warn!("Failed to send pong: {}", e);
                             }
                         }

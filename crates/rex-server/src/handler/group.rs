@@ -27,7 +27,8 @@ pub async fn handle(
                 &data
                     .set_command(RexCommand::GroupReturn)
                     .set_retcode(RetCode::NoTargetAvailable)
-                    .serialize(),
+                    .serialize()
+                    .freeze(),
             )
             .await
         {
@@ -44,14 +45,15 @@ pub async fn handle(
     let target_client_id = target_client.id();
     data.set_target(target_client_id);
 
-    if let Err(e) = target_client.send_buf(&data.serialize()).await {
+    if let Err(e) = target_client.send_buf(&data.serialize().freeze()).await {
         warn!("client [{:032X}] error: {}", target_client_id, e);
         if let Err(e) = source_client
             .send_buf(
                 &data
                     .set_command(RexCommand::TitleReturn)
                     .set_retcode(RetCode::NoTargetAvailable)
-                    .serialize(),
+                    .serialize()
+                    .freeze(),
             )
             .await
         {

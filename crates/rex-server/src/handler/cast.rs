@@ -24,7 +24,8 @@ pub async fn handle(
                 &data
                     .set_command(RexCommand::CastReturn)
                     .set_retcode(RetCode::NoTargetAvailable)
-                    .serialize(),
+                    .serialize()
+                    .freeze(),
             )
             .await
         {
@@ -40,7 +41,7 @@ pub async fn handle(
         let client_id = client.id();
         data.set_target(client_id);
 
-        if let Err(e) = client.send_buf(&data.serialize()).await {
+        if let Err(e) = client.send_buf(&data.serialize().freeze()).await {
             warn!(
                 "Failed to send cast message to client [{:032X}]: {}",
                 client_id, e
@@ -68,7 +69,8 @@ pub async fn handle(
                 &data
                     .set_command(RexCommand::CastReturn)
                     .set_retcode(RetCode::NoTargetAvailable)
-                    .serialize(),
+                    .serialize()
+                    .freeze(),
             )
             .await
     {

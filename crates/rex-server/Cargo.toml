@@ -26,3 +26,4 @@ rustls.workspace = true
 futures-util.workspace = true
 tokio-tungstenite.workspace = true
 rcgen.workspace = true
+kanal.workspace = true
