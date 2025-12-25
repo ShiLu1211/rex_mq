@@ -66,7 +66,7 @@ impl RexClientHandlerTrait for TestClientHandler {
 
     async fn handle(&self, _client: Arc<RexClientInner>, data: RexData) -> Result<()> {
         if data.data().is_empty() {
-            warn!("recv empty from [{:032X}]", data.header().source());
+            warn!("recv empty from [{:032X}]", data.source());
         } else {
             info!(
                 "recv {:?}, len [{}]",

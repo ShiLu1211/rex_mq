@@ -13,7 +13,7 @@ pub async fn handle(
 ) -> Result<()> {
     let title = data.title().unwrap_or_default();
     debug!("Received cast message: {}", title);
-    let client_id = data.header().source();
+    let client_id = data.source();
 
     let matching_clients = system.find_all_by_title(title, Some(client_id));
 
@@ -24,8 +24,7 @@ pub async fn handle(
                 &data
                     .set_command(RexCommand::CastReturn)
                     .set_retcode(RetCode::NoTargetAvailable)
-                    .serialize()
-                    .freeze(),
+                    .serialize(),
             )
             .await
         {
@@ -41,7 +40,7 @@ pub async fn handle(
         let client_id = client.id();
         data.set_target(client_id);
 
-        if let Err(e) = client.send_buf(&data.serialize().freeze()).await {
+        if let Err(e) = client.send_buf(&data.serialize()).await {
             warn!(
                 "Failed to send cast message to client [{:032X}]: {}",
                 client_id, e
@@ -69,8 +68,7 @@ pub async fn handle(
                 &data
                     .set_command(RexCommand::CastReturn)
                     .set_retcode(RetCode::NoTargetAvailable)
-                    .serialize()
-                    .freeze(),
+                    .serialize(),
             )
             .await
     {

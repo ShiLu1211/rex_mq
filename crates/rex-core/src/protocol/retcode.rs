@@ -1,4 +1,5 @@
 // 定义返回码枚举
+// 注意：RetCode 使用 u32 值，rkyv 会自动处理
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetCode {

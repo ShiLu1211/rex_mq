@@ -13,7 +13,7 @@ pub async fn handle(
 ) -> Result<()> {
     let title = data.title().unwrap_or_default();
     debug!("Received title message: {}", title);
-    let client_id = data.header().source();
+    let client_id = data.source();
 
     let mut success = false;
 
@@ -28,7 +28,7 @@ pub async fn handle(
             data.data().len()
         );
 
-        if let Err(e) = target_client.send_buf(&data.serialize().freeze()).await {
+        if let Err(e) = target_client.send_buf(&data.serialize()).await {
             warn!(
                 "client [{:032X}] send to [{:032X}] error: {}",
                 client_id, target_client_id, e
@@ -46,8 +46,7 @@ pub async fn handle(
                 &data
                     .set_command(RexCommand::TitleReturn)
                     .set_retcode(RetCode::NoTargetAvailable)
-                    .serialize()
-                    .freeze(),
+                    .serialize(),
             )
             .await
         {

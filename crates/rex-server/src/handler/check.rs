@@ -11,15 +11,10 @@ pub async fn handle(
     source_client: &Arc<RexClientInner>,
     data: &mut RexData,
 ) -> Result<()> {
-    let client_id = data.header().source();
+    let client_id = data.source();
     debug!("[{:032X}] Received check online", client_id);
     if let Err(e) = source_client
-        .send_buf(
-            &data
-                .set_command(RexCommand::CheckReturn)
-                .serialize()
-                .freeze(),
-        )
+        .send_buf(&data.set_command(RexCommand::CheckReturn).serialize())
         .await
     {
         warn!(

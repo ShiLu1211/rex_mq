@@ -276,7 +276,7 @@ impl RexClientHandlerTrait for RcvClientHandler {
 
     async fn handle(&self, _client: Arc<RexClientInner>, data: RexData) -> Result<()> {
         if self.bench {
-            let command = data.header().command();
+            let command = data.command();
             if command == RexCommand::Title
                 || command == RexCommand::Group
                 || command == RexCommand::Cast

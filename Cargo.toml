@@ -54,6 +54,7 @@ dashmap = "6.1"
 ahash = "0.8"
 hdrhistogram = "7.5"
 crc32fast = "1.5"
+rkyv = { version = "0.7", features = ["std", "validation"] }
 
 # --- IDs, Randomness ---
 uuid = { version = "1.19", features = ["v4"] }

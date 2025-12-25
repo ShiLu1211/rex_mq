@@ -190,7 +190,7 @@ impl PyRexData {
 
     #[getter]
     fn command(&self) -> PyRexCommand {
-        self.inner.header().command().into()
+        self.inner.command().into()
     }
 
     #[getter]
@@ -215,12 +215,12 @@ impl PyRexData {
 
     #[getter]
     fn source(&self) -> u128 {
-        self.inner.header().source()
+        self.inner.source()
     }
 
     #[getter]
     fn target(&self) -> u128 {
-        self.inner.header().target()
+        self.inner.target()
     }
 
     fn is_success(&self) -> bool {

@@ -229,7 +229,7 @@ impl QuicServer {
                                 debug!(
                                     "Received data from {}: command={:?}",
                                     peer_addr,
-                                    data.header().command(),
+                                    data.command(),
                                 );
 
                                 if let Err(e) = handle(&self.system, &peer, &mut data).await {

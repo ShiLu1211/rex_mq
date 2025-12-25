@@ -54,7 +54,10 @@ impl JavaHandler {
                     while let Some(buf) = rx.blocking_recv() {
                         if let Err(e) = (|| -> Result<()> {
                             let mut buf_mut = BytesMut::from(buf);
-                            let data = RexData::deserialize(&mut buf_mut)?;
+                            let Some(data) = RexData::try_deserialize(&mut buf_mut)? else {
+                                warn!("invalid message");
+                                return Ok(());
+                            };
 
                             // 创建 Java RexData 对象
                             let data_obj = env.alloc_object(&cache.data.cls)?;
@@ -100,7 +103,7 @@ impl JavaHandler {
             RexGlobalCache::get().ok_or_else(|| anyhow::anyhow!("Cache not initialized"))?;
 
         // 设置 command 字段
-        let command_int = data.header().command() as i32;
+        let command_int = data.command() as i32;
         let command_enum_obj = unsafe {
             env.call_static_method_unchecked(
                 &cache.command.cls,
@@ -176,13 +179,10 @@ impl RexClientHandlerTrait for JavaHandler {
     }
 
     async fn handle(&self, _client: Arc<RexClientInner>, data: RexData) -> Result<()> {
-        if matches!(
-            data.header().command(),
-            RexCommand::Check | RexCommand::CheckReturn
-        ) {
+        if matches!(data.command(), RexCommand::Check | RexCommand::CheckReturn) {
             return Ok(());
         }
-        if let Err(e) = self.tx.send(data.serialize().freeze()).await {
+        if let Err(e) = self.tx.send(data.serialize()).await {
             warn!("Failed to enqueue message for Java handler: {}", e);
         }
         Ok(())

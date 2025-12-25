@@ -259,7 +259,7 @@ impl TcpClient {
                     loop {
                         match RexData::try_deserialize(&mut buffer) {
                             Ok(Some(data)) => {
-                                debug!("Parsed message: command={:?}", data.header().command(),);
+                                debug!("Parsed message: command={:?}", data.command(),);
                                 self.on_data(data).await;
                             }
                             Ok(None) => {
@@ -344,10 +344,7 @@ impl TcpClient {
 
             // 发送心跳
             debug!("Sending heartbeat (idle: {}s)", idle_time);
-            let ping = RexData::builder(RexCommand::Check)
-                .build()
-                .serialize()
-                .freeze();
+            let ping = RexData::builder(RexCommand::Check).build().serialize();
 
             if let Err(e) = client.send_buf(&ping).await {
                 warn!("Heartbeat send failed: {}", e);
@@ -388,14 +385,11 @@ impl TcpClient {
     }
 
     async fn handle_received_data(&self, client: &Arc<RexClientInner>, data: RexData) {
-        debug!(
-            "Handling received data: command={:?}",
-            data.header().command()
-        );
+        debug!("Handling received data: command={:?}", data.command());
 
         let handler = self.config.client_handler.clone();
 
-        match data.header().command() {
+        match data.command() {
             RexCommand::LoginReturn => {
                 info!("TCP login successful");
                 if let Err(e) = handler.login_ok(client.clone(), data).await {
@@ -425,7 +419,7 @@ impl TcpClient {
                 }
             }
             _ => {
-                debug!("Unhandled command: {:?}", data.header().command());
+                debug!("Unhandled command: {:?}", data.command());
             }
         }
 
@@ -444,11 +438,8 @@ impl TcpClient {
     ) -> Result<()> {
         let client_id = client.id();
         data.set_source(client_id);
-        client.send_buf(&data.serialize().freeze()).await?;
-        debug!(
-            "TCP data sent successfully: command={:?}",
-            data.header().command()
-        );
+        client.send_buf(&data.serialize()).await?;
+        debug!("TCP data sent successfully: command={:?}", data.command());
         Ok(())
     }
 }

@@ -19,7 +19,7 @@ pub async fn handle(
     client: &Arc<RexClientInner>,
     data: &mut RexData,
 ) -> Result<()> {
-    match data.header().command() {
+    match data.command() {
         RexCommand::Title => title::handle(system, client, data).await,
         RexCommand::Group => group::handle(system, client, data).await,
         RexCommand::Cast => cast::handle(system, client, data).await,
@@ -28,7 +28,7 @@ pub async fn handle(
         RexCommand::RegTitle => reg_title::handle(system, client, data).await,
         RexCommand::DelTitle => del_title::handle(system, client, data).await,
         _ => {
-            debug!("no handle command: {:?}", data.header().command());
+            debug!("no handle command: {:?}", data.command());
             Ok(())
         }
     }

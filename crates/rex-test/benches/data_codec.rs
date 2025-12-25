@@ -68,8 +68,8 @@ fn deserialize(c: &mut Criterion) {
         g.throughput(Throughput::Bytes(size as u64));
         g.bench_with_input(BenchmarkId::from_parameter(size), &serialized, |b, data| {
             b.iter(|| {
-                let mut buf = data.clone();
-                black_box(RexData::deserialize(&mut buf).unwrap());
+                let buf = data.clone();
+                black_box(RexData::try_deserialize(&mut buf.into()).unwrap());
             });
         });
     }
@@ -83,8 +83,8 @@ fn roundtrip(c: &mut Criterion) {
         g.throughput(Throughput::Bytes(size as u64));
         g.bench_with_input(BenchmarkId::from_parameter(size), &msg, |b, msg| {
             b.iter(|| {
-                let mut buf = msg.serialize();
-                black_box(RexData::deserialize(&mut buf).unwrap());
+                let buf = msg.serialize();
+                black_box(RexData::try_deserialize(&mut buf.into()).unwrap());
             });
         });
     }
@@ -97,8 +97,8 @@ fn try_deserialize(c: &mut Criterion) {
     let serialized = msg.serialize();
     g.bench_function("try_deserialize", |b| {
         b.iter(|| {
-            let mut buf = serialized.clone();
-            black_box(RexData::try_deserialize(&mut buf).unwrap());
+            let buf = serialized.clone();
+            black_box(RexData::try_deserialize(&mut buf.into()).unwrap());
         });
     });
 }
@@ -112,8 +112,8 @@ fn batch(c: &mut Criterion) {
         g.bench_with_input(BenchmarkId::from_parameter(count), &msgs, |b, msgs| {
             b.iter(|| {
                 for msg in msgs {
-                    let mut buf = msg.serialize();
-                    black_box(RexData::deserialize(&mut buf).unwrap());
+                    let buf = msg.serialize();
+                    black_box(RexData::try_deserialize(&mut buf.into()).unwrap());
                 }
             });
         });

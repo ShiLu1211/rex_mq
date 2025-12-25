@@ -11,7 +11,7 @@ pub async fn handle(
     source_client: &Arc<RexClientInner>,
     data: &mut RexData,
 ) -> Result<()> {
-    let client_id = data.header().source();
+    let client_id = data.source();
     debug!("[{:032X}] Received login message", client_id);
     let title = data.data_as_string_lossy();
 
@@ -20,12 +20,7 @@ pub async fn handle(
         client.set_sender(source_client.sender());
         client.insert_title(title);
         if let Err(e) = client
-            .send_buf(
-                &data
-                    .set_command(RexCommand::LoginReturn)
-                    .serialize()
-                    .freeze(),
-            )
+            .send_buf(&data.set_command(RexCommand::LoginReturn).serialize())
             .await
         {
             warn!(
@@ -46,12 +41,7 @@ pub async fn handle(
         system.add_client(source_client.clone()).await;
 
         if let Err(e) = source_client
-            .send_buf(
-                &data
-                    .set_command(RexCommand::LoginReturn)
-                    .serialize()
-                    .freeze(),
-            )
+            .send_buf(&data.set_command(RexCommand::LoginReturn).serialize())
             .await
         {
             warn!(
