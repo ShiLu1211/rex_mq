@@ -116,7 +116,7 @@ pub async fn start_recv(args: RecvArgs) -> Result<()> {
     let config = RexClientConfig::new(
         protocol,
         address,
-        args.titles,
+        &args.titles,
         Arc::new(RcvClientHandler::new(args.bench)),
     );
     let _client = open_client(config).await?;
@@ -136,12 +136,7 @@ pub async fn start_bench(args: BenchArgs) -> Result<()> {
     let protocol = Protocol::from(args.protocol.as_str())
         .ok_or_else(|| anyhow!("invalid protocol: {}", args.protocol))?;
 
-    let config = RexClientConfig::new(
-        protocol,
-        address,
-        "".to_string(),
-        Arc::new(SndClientHandler),
-    );
+    let config = RexClientConfig::new(protocol, address, "", Arc::new(SndClientHandler));
     let client = open_client(config).await?;
 
     let command = match args.typ.as_str() {

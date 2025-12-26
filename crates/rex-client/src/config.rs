@@ -1,7 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use rex_core::Protocol;
-use tokio::sync::RwLock;
+use rex_core::{Protocol, utils::force_set_value};
 
 use crate::RexClientHandlerTrait;
 
@@ -10,7 +9,7 @@ use crate::RexClientHandlerTrait;
 pub struct RexClientConfig {
     pub protocol: Protocol,
     pub server_addr: SocketAddr,
-    pub title: Arc<RwLock<String>>,
+    pub title: String,
     pub client_handler: Arc<dyn RexClientHandlerTrait>,
 
     pub idle_timeout: u64,
@@ -24,13 +23,13 @@ impl RexClientConfig {
     pub fn new(
         protocol: Protocol,
         server_addr: SocketAddr,
-        title: String,
+        title: &str,
         client_handler: Arc<dyn RexClientHandlerTrait>,
     ) -> Self {
         Self {
             protocol,
             server_addr,
-            title: Arc::new(RwLock::new(title)),
+            title: title.to_string(),
             client_handler,
             idle_timeout: 10,
             pong_wait: 5,
@@ -39,11 +38,11 @@ impl RexClientConfig {
         }
     }
 
-    pub async fn title(&self) -> String {
-        self.title.read().await.clone()
+    pub fn title(&self) -> &str {
+        self.title.as_str()
     }
 
-    pub async fn set_title(&self, title: String) {
-        *self.title.write().await = title;
+    pub fn set_title(&self, title: &str) {
+        force_set_value(&self.title, title.to_string());
     }
 }

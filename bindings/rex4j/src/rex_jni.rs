@@ -167,7 +167,7 @@ fn init_internal(env: &mut JNIEnv, config_obj: &JObject, handler_obj: &JObject) 
 
     let handler = JavaHandler::new(env, handler_obj, &client_obj)?;
 
-    let mut config = RexClientConfig::new(protocol, server_addr, title_str, handler.clone());
+    let mut config = RexClientConfig::new(protocol, server_addr, &title_str, handler.clone());
     config.idle_timeout = idle_timeout;
     config.pong_wait = pong_wait;
     config.max_reconnect_attempts = max_reconnect;

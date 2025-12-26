@@ -57,7 +57,7 @@ impl RexSystem {
         let id = client.id();
         self.id2client.insert(id, client.clone());
 
-        for title in client.title_list() {
+        for title in client.title_iter() {
             let mut clients = self.title2clients.entry(title).or_default();
             // 避免重复添加
             if !clients.iter().any(|c| c.id() == id) {
@@ -72,7 +72,7 @@ impl RexSystem {
             None => return,
         };
 
-        for title in client.title_list() {
+        for title in client.title_iter() {
             if let Some(mut clients) = self.title2clients.get_mut(&title) {
                 clients.retain(|c| c.id() != client_id);
                 if clients.is_empty() {
@@ -94,7 +94,7 @@ impl RexSystem {
             return;
         };
 
-        client.insert_title(title.to_string());
+        client.insert_title(title);
 
         let mut clients = self.title2clients.entry(title.to_string()).or_default();
         // 避免重复添加
@@ -212,7 +212,7 @@ impl RexSystem {
             }
 
             // 清理 title2clients
-            for title in client.title_list() {
+            for title in client.title_iter() {
                 if let Some(mut clients) = self.title2clients.get_mut(&title) {
                     clients.retain(|c| c.id() != client_id);
                     if clients.is_empty() {

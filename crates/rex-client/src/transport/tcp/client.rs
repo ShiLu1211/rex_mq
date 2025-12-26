@@ -8,12 +8,12 @@ use anyhow::Result;
 use bytes::BytesMut;
 use rex_core::{
     RexCommand, RexData,
-    utils::{new_uuid, now_secs},
+    utils::{force_set_value, new_uuid, now_secs},
 };
 use tokio::{
     io::AsyncReadExt,
     net::{TcpSocket, tcp::OwnedReadHalf},
-    sync::{RwLock, broadcast},
+    sync::broadcast,
     time::sleep,
 };
 use tracing::{debug, info, warn};
@@ -23,7 +23,7 @@ use crate::{ConnectionState, RexClientConfig, RexClientInner, RexClientTrait};
 
 pub struct TcpClient {
     // connection
-    client: RwLock<Option<Arc<RexClientInner>>>,
+    client: Option<Arc<RexClientInner>>,
     connection_state: AtomicU8,
 
     // config
@@ -44,7 +44,7 @@ impl RexClientTrait for TcpClient {
         }
 
         if let Some(client) = self.get_client().await {
-            self.send_data_with_client(&client, data).await
+            self.send_data_with_client(client, data).await
         } else {
             Err(anyhow::anyhow!("No active TCP connection"))
         }
@@ -78,7 +78,7 @@ impl TcpClient {
     pub async fn open(config: RexClientConfig) -> Result<Arc<dyn RexClientTrait>> {
         let (shutdown_tx, _) = broadcast::channel(4);
         let client = Arc::new(Self {
-            client: RwLock::new(None),
+            client: None,
             connection_state: AtomicU8::new(ConnectionState::Disconnected as u8),
             config,
             shutdown_tx,
@@ -185,18 +185,17 @@ impl TcpClient {
 
         // 创建或更新客户端
         {
-            let mut client_guard = self.client.write().await;
-            if let Some(existing_client) = client_guard.as_ref() {
+            if let Some(existing_client) = self.client.as_ref() {
                 existing_client.set_sender(sender.clone());
             } else {
                 let id = new_uuid();
                 let new_client = Arc::new(RexClientInner::new(
                     id,
                     local_addr,
-                    &self.config.title().await,
+                    self.config.title(),
                     sender.clone(),
                 ));
-                *client_guard = Some(new_client);
+                force_set_value(&self.client, Some(new_client));
             }
         }
 
@@ -358,9 +357,9 @@ impl TcpClient {
     async fn login(self: &Arc<Self>) -> Result<()> {
         if let Some(client) = self.get_client().await {
             let mut data = RexData::builder(RexCommand::Login)
-                .data_from_string(self.config.title().await.clone())
+                .data_from_string(self.config.title())
                 .build();
-            self.send_data_with_client(&client, &mut data).await?;
+            self.send_data_with_client(client, &mut data).await?;
             info!("Login request sent");
         }
         Ok(())
@@ -368,7 +367,7 @@ impl TcpClient {
 
     async fn on_data(&self, data: RexData) {
         if let Some(client) = self.get_client().await {
-            self.handle_received_data(&client, data).await;
+            self.handle_received_data(client, data).await;
         }
     }
 
@@ -389,14 +388,14 @@ impl TcpClient {
             }
             RexCommand::RegTitleReturn => {
                 let title = data.data_as_string_lossy();
-                client.insert_title(title.clone());
-                self.config.set_title(client.title_str()).await;
+                client.insert_title(&title);
+                self.config.set_title(&client.title_str());
                 info!("Title registered: {}", title);
             }
             RexCommand::DelTitleReturn => {
                 let title = data.data_as_string_lossy();
                 client.remove_title(&title);
-                self.config.set_title(client.title_str()).await;
+                self.config.set_title(&client.title_str());
                 info!("Title removed: {}", title);
             }
             RexCommand::Title
@@ -418,8 +417,8 @@ impl TcpClient {
         client.update_last_recv();
     }
 
-    async fn get_client(&self) -> Option<Arc<RexClientInner>> {
-        self.client.read().await.clone()
+    async fn get_client(&self) -> &Option<Arc<RexClientInner>> {
+        &self.client
     }
 
     async fn send_data_with_client(

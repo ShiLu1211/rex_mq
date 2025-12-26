@@ -188,7 +188,7 @@ impl WebSocketClient {
                 let new_client = Arc::new(RexClientInner::new(
                     id,
                     local_addr,
-                    &self.config.title().await,
+                    self.config.title(),
                     sender.clone(),
                 ));
                 *client_guard = Some(new_client);
@@ -371,7 +371,7 @@ impl WebSocketClient {
     async fn login(self: &Arc<Self>) -> Result<()> {
         if let Some(client) = self.get_client().await {
             let mut data = RexData::builder(RexCommand::Login)
-                .data_from_string(self.config.title().await.clone())
+                .data_from_string(self.config.title())
                 .build();
             self.send_data_with_client(&client, &mut data).await?;
             info!("Login request sent");
@@ -402,14 +402,14 @@ impl WebSocketClient {
             }
             RexCommand::RegTitleReturn => {
                 let title = data.data_as_string_lossy();
-                client.insert_title(title.clone());
-                self.config.set_title(client.title_str()).await;
+                client.insert_title(&title);
+                self.config.set_title(&client.title_str());
                 info!("Title registered: {}", title);
             }
             RexCommand::DelTitleReturn => {
                 let title = data.data_as_string_lossy();
                 client.remove_title(&title);
-                self.config.set_title(client.title_str()).await;
+                self.config.set_title(&client.title_str());
                 info!("Title removed: {}", title);
             }
             RexCommand::Title

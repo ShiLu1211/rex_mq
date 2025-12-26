@@ -18,5 +18,3 @@ async-trait.workspace = true
 futures-util.workspace = true
 tokio-tungstenite.workspace = true
 dashmap.workspace = true
-itertools.workspace = true
-parking_lot.workspace = true

@@ -124,7 +124,7 @@ impl TestEnv {
         let addr = self.next_addr(proto);
         let (tx, rx) = channel(100);
         let handler = Arc::new(TestClientHandler { tx });
-        let cfg = RexClientConfig::new(proto, addr, title.into(), handler);
+        let cfg = RexClientConfig::new(proto, addr, title, handler);
         let client = open_client(cfg).await?;
         Ok(TestClient::new(client, rx))
     }

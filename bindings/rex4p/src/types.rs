@@ -200,7 +200,7 @@ impl PyRexData {
 
     #[getter]
     fn text(&self) -> Option<String> {
-        self.inner.data_as_string().ok()
+        self.inner.data_as_str().map(|s| s.to_string()).ok()
     }
 
     #[getter]
@@ -373,8 +373,7 @@ impl PyClientConfig {
             handler.clone_ref(py)
         })));
 
-        let mut config =
-            RexClientConfig::new(self.protocol, server_addr, self.title.clone(), py_handler);
+        let mut config = RexClientConfig::new(self.protocol, server_addr, &self.title, py_handler);
 
         config.idle_timeout = self.idle_timeout;
         config.pong_wait = self.pong_wait;
