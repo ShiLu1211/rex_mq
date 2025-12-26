@@ -19,11 +19,24 @@ use rex_core::{
 use crate::RexSenderTrait;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(u8)]
 pub enum ConnectionState {
-    Disconnected,
-    Connecting,
-    Connected,
-    Reconnecting,
+    Disconnected = 0,
+    Connecting = 1,
+    Connected = 2,
+    Reconnecting = 3,
+}
+
+impl From<u8> for ConnectionState {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => ConnectionState::Disconnected,
+            1 => ConnectionState::Connecting,
+            2 => ConnectionState::Connected,
+            3 => ConnectionState::Reconnecting,
+            _ => ConnectionState::Disconnected,
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -32,7 +45,7 @@ pub trait RexClientTrait: Send + Sync {
 
     async fn close(&self);
 
-    async fn get_connection_state(&self) -> ConnectionState;
+    fn get_connection_state(&self) -> ConnectionState;
 }
 
 pub struct RexClientInner {

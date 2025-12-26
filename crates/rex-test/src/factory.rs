@@ -39,7 +39,7 @@ impl TestClient {
     }
 
     pub async fn wait_connected(&self) {
-        while self.client.get_connection_state().await != ConnectionState::Connected {
+        while self.client.get_connection_state() != ConnectionState::Connected {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }

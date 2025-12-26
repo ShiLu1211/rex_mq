@@ -7,7 +7,7 @@ use jni::{
     objects::{JByteArray, JClass, JObject, JString},
     sys::{jbyteArray, jint, jlong},
 };
-use rex_client::{ConnectionState, RexClientConfig, RexClientTrait, open_client};
+use rex_client::{RexClientConfig, RexClientTrait, open_client};
 use rex_core::{Protocol, RexCommand, RexData};
 use tokio::runtime::Runtime;
 use tracing::{error, info};
@@ -281,22 +281,7 @@ pub extern "system" fn Java_com_rex4j_jni_RexNative_getConnectionState(
 
     let client = unsafe { &*(client_handle as *const Arc<dyn RexClientTrait>) };
 
-    let runtime = match get_runtime() {
-        Ok(rt) => rt,
-        Err(e) => {
-            error!("Failed to get runtime for connection state: {:#}", e);
-            return 0;
-        }
-    };
-
-    let state = runtime.block_on(client.get_connection_state());
-
-    match state {
-        ConnectionState::Disconnected => 0,
-        ConnectionState::Connecting => 1,
-        ConnectionState::Connected => 2,
-        ConnectionState::Reconnecting => 3,
-    }
+    client.get_connection_state() as jint
 }
 
 #[unsafe(no_mangle)]

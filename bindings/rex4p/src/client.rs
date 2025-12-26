@@ -246,7 +246,7 @@ impl PyRexClient {
                     .as_ref()
                     .ok_or_else(|| PyRexError::new_err("Client not initialized"))?;
 
-                let state = client.get_connection_state().await;
+                let state = client.get_connection_state();
                 Ok(PyConnectionState::from(state))
             })
         })
@@ -309,7 +309,7 @@ impl PyRexClient {
             runtime.block_on(async {
                 let client_guard = client.read().await;
                 if let Some(client) = client_guard.as_ref() {
-                    let state = client.get_connection_state().await;
+                    let state = client.get_connection_state();
                     Ok(matches!(state, rex_client::ConnectionState::Connected))
                 } else {
                     Ok(false)

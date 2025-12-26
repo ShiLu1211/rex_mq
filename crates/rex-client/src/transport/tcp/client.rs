@@ -1,6 +1,6 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicU8, AtomicU64, Ordering},
 };
 use std::time::Duration;
 
@@ -24,7 +24,7 @@ use crate::{ConnectionState, RexClientConfig, RexClientInner, RexClientTrait};
 pub struct TcpClient {
     // connection
     client: RwLock<Option<Arc<RexClientInner>>>,
-    connection_state: Arc<RwLock<ConnectionState>>,
+    connection_state: AtomicU8,
 
     // config
     config: RexClientConfig,
@@ -37,7 +37,7 @@ pub struct TcpClient {
 #[async_trait::async_trait]
 impl RexClientTrait for TcpClient {
     async fn send_data(&self, data: &mut RexData) -> Result<()> {
-        let state = *self.connection_state.read().await;
+        let state = self.connection_state();
 
         if state != ConnectionState::Connected {
             return Err(anyhow::anyhow!("Client not connected (state: {:?})", state));
@@ -64,13 +64,13 @@ impl RexClientTrait for TcpClient {
         }
 
         // 更新状态
-        *self.connection_state.write().await = ConnectionState::Disconnected;
+        self.set_connection_state(ConnectionState::Disconnected);
 
         info!("TcpClient shutdown complete");
     }
 
-    async fn get_connection_state(&self) -> ConnectionState {
-        *self.connection_state.read().await
+    fn get_connection_state(&self) -> ConnectionState {
+        self.connection_state()
     }
 }
 
@@ -79,7 +79,7 @@ impl TcpClient {
         let (shutdown_tx, _) = broadcast::channel(4);
         let client = Arc::new(Self {
             client: RwLock::new(None),
-            connection_state: Arc::new(RwLock::new(ConnectionState::Disconnected)),
+            connection_state: AtomicU8::new(ConnectionState::Disconnected as u8),
             config,
             shutdown_tx,
             last_heartbeat: AtomicU64::new(now_secs()),
@@ -123,6 +123,16 @@ impl TcpClient {
         Ok(client)
     }
 
+    #[inline(always)]
+    fn connection_state(&self) -> ConnectionState {
+        self.connection_state.load(Ordering::Relaxed).into()
+    }
+
+    #[inline(always)]
+    fn set_connection_state(&self, state: ConnectionState) {
+        self.connection_state.store(state as u8, Ordering::Relaxed);
+    }
+
     async fn connect_with_retry(self: &Arc<Self>) -> Result<()> {
         let mut attempts = 0;
         let mut backoff = 1;
@@ -156,7 +166,7 @@ impl TcpClient {
     }
 
     async fn connect(self: &Arc<Self>) -> Result<()> {
-        *self.connection_state.write().await = ConnectionState::Connecting;
+        self.set_connection_state(ConnectionState::Connecting);
 
         info!("Connecting TCP to {}", self.config.server_addr);
 
@@ -205,7 +215,7 @@ impl TcpClient {
                 }
 
                 // 标记连接断开
-                *this.connection_state.write().await = ConnectionState::Disconnected;
+                this.set_connection_state(ConnectionState::Disconnected);
             }
         });
 
@@ -213,7 +223,7 @@ impl TcpClient {
         self.login().await?;
 
         // 更新连接状态
-        *self.connection_state.write().await = ConnectionState::Connected;
+        self.set_connection_state(ConnectionState::Connected);
         self.last_heartbeat.store(now_secs(), Ordering::Relaxed);
 
         Ok(())
@@ -276,16 +286,16 @@ impl TcpClient {
         loop {
             sleep(check_interval).await;
 
-            let current_state = *self.connection_state.read().await;
+            let current_state = self.connection_state();
 
             match current_state {
                 ConnectionState::Disconnected => {
                     info!("Connection lost, attempting to reconnect...");
-                    *self.connection_state.write().await = ConnectionState::Reconnecting;
+                    self.set_connection_state(ConnectionState::Reconnecting);
 
                     if let Err(e) = self.connect_with_retry().await {
                         warn!("Reconnection failed: {}", e);
-                        *self.connection_state.write().await = ConnectionState::Disconnected;
+                        self.set_connection_state(ConnectionState::Disconnected);
                     }
                 }
                 ConnectionState::Reconnecting => {
@@ -304,7 +314,7 @@ impl TcpClient {
         loop {
             sleep(heartbeat_interval).await;
 
-            if *self.connection_state.read().await != ConnectionState::Connected {
+            if self.connection_state() != ConnectionState::Connected {
                 continue;
             }
 
@@ -326,7 +336,7 @@ impl TcpClient {
 
             if let Err(e) = client.send_buf(&ping).await {
                 warn!("Heartbeat send failed: {}", e);
-                *self.connection_state.write().await = ConnectionState::Disconnected;
+                self.set_connection_state(ConnectionState::Disconnected);
                 continue;
             }
 
@@ -337,7 +347,7 @@ impl TcpClient {
 
             if after_ping <= before_ping {
                 warn!("Heartbeat timeout, marking connection as lost");
-                *self.connection_state.write().await = ConnectionState::Disconnected;
+                self.set_connection_state(ConnectionState::Disconnected);
             } else {
                 debug!("Heartbeat successful");
                 self.last_heartbeat.store(now_secs(), Ordering::Relaxed);

@@ -7,7 +7,7 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-rex-core = { path = "../rex-core" }
+rex-core.workspace = true
 anyhow.workspace = true
 bytes.workspace = true
 quinn.workspace = true

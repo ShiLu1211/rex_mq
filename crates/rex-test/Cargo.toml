@@ -7,9 +7,9 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-rex-core = { path = "../rex-core" }
-rex-client = { path = "../rex-client" }
-rex-server = { path = "../rex-server" }
+rex-core.workspace = true
+rex-client.workspace = true
+rex-server.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 tracing.workspace = true

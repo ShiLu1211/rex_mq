@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use ahash::RandomState;
 use dashmap::DashMap;
 use rand::seq::IteratorRandom;
 use rex_client::RexClientInner;
@@ -11,8 +12,8 @@ use crate::RexSystemConfig;
 
 pub struct RexSystem {
     pub config: RexSystemConfig,
-    id2client: DashMap<u128, Arc<RexClientInner>>,
-    title2ids: DashMap<String, Vec<u128>>,
+    id2client: DashMap<u128, Arc<RexClientInner>, RandomState>,
+    title2clients: DashMap<String, Vec<Arc<RexClientInner>>, RandomState>,
     shutdown_tx: Arc<broadcast::Sender<()>>,
 }
 
@@ -22,8 +23,8 @@ impl RexSystem {
 
         let system = Arc::new(Self {
             config,
-            id2client: DashMap::new(),
-            title2ids: DashMap::new(),
+            id2client: DashMap::with_hasher(RandomState::new()),
+            title2clients: DashMap::with_hasher(RandomState::new()),
             shutdown_tx: Arc::new(shutdown_tx),
         });
 
@@ -57,9 +58,10 @@ impl RexSystem {
         self.id2client.insert(id, client.clone());
 
         for title in client.title_list() {
-            let mut ids = self.title2ids.entry(title).or_default();
-            if !ids.contains(&id) {
-                ids.push(id);
+            let mut clients = self.title2clients.entry(title).or_default();
+            // 避免重复添加
+            if !clients.iter().any(|c| c.id() == id) {
+                clients.push(client.clone());
             }
         }
     }
@@ -71,11 +73,11 @@ impl RexSystem {
         };
 
         for title in client.title_list() {
-            if let Some(mut ids) = self.title2ids.get_mut(&title) {
-                ids.retain(|&id| id != client_id);
-                if ids.is_empty() {
-                    drop(ids);
-                    self.title2ids.remove(&title);
+            if let Some(mut clients) = self.title2clients.get_mut(&title) {
+                clients.retain(|c| c.id() != client_id);
+                if clients.is_empty() {
+                    drop(clients);
+                    self.title2clients.remove(&title);
                 }
             }
         }
@@ -94,9 +96,10 @@ impl RexSystem {
 
         client.insert_title(title.to_string());
 
-        let mut ids = self.title2ids.entry(title.to_string()).or_default();
-        if !ids.contains(&client_id) {
-            ids.push(client_id);
+        let mut clients = self.title2clients.entry(title.to_string()).or_default();
+        // 避免重复添加
+        if !clients.iter().any(|c| c.id() == client_id) {
+            clients.push(client.clone());
         }
     }
 
@@ -107,11 +110,11 @@ impl RexSystem {
 
         client.remove_title(title);
 
-        if let Some(mut ids) = self.title2ids.get_mut(title) {
-            ids.retain(|&id| id != client_id);
-            if ids.is_empty() {
-                drop(ids);
-                self.title2ids.remove(title);
+        if let Some(mut clients) = self.title2clients.get_mut(title) {
+            clients.retain(|c| c.id() != client_id);
+            if clients.is_empty() {
+                drop(clients);
+                self.title2clients.remove(title);
             }
         }
     }
@@ -130,16 +133,14 @@ impl RexSystem {
         title: &str,
         exclude: Option<u128>,
     ) -> Vec<Arc<RexClientInner>> {
-        let Some(ids_ref) = self.title2ids.get(title) else {
+        let Some(clients) = self.title2clients.get(title) else {
             return Vec::new();
         };
 
-        let ids = ids_ref.clone();
-        drop(ids_ref);
-
-        ids.into_iter()
-            .filter(|&id| exclude != Some(id))
-            .filter_map(|id| self.id2client.get(&id).map(|e| e.clone()))
+        clients
+            .iter()
+            .filter(|c| exclude != Some(c.id()))
+            .cloned()
             .collect()
     }
 
@@ -148,18 +149,14 @@ impl RexSystem {
         title: &str,
         exclude: Option<u128>,
     ) -> Option<Arc<RexClientInner>> {
-        let ids_ref = self.title2ids.get(title)?;
+        let clients = self.title2clients.get(title)?;
         let mut rng = rand::rng();
 
-        let selected_id = ids_ref
+        clients
             .iter()
-            .copied()
-            .filter(|&id| exclude != Some(id))
-            .choose(&mut rng)?;
-
-        drop(ids_ref);
-
-        self.id2client.get(&selected_id).map(|e| e.clone())
+            .filter(|c| exclude != Some(c.id()))
+            .choose(&mut rng)
+            .cloned()
     }
 
     pub fn find_some_by_id(&self, id: u128) -> Option<Arc<RexClientInner>> {
@@ -178,7 +175,7 @@ impl RexSystem {
         }
 
         self.id2client.clear();
-        self.title2ids.clear();
+        self.title2clients.clear();
     }
 }
 
@@ -214,12 +211,13 @@ impl RexSystem {
                 info!("client [{:032X}] removed", client_id);
             }
 
+            // 清理 title2clients
             for title in client.title_list() {
-                if let Some(mut ids) = self.title2ids.get_mut(&title) {
-                    ids.retain(|&id| id != client_id);
-                    if ids.is_empty() {
-                        drop(ids);
-                        self.title2ids.remove(&title);
+                if let Some(mut clients) = self.title2clients.get_mut(&title) {
+                    clients.retain(|c| c.id() != client_id);
+                    if clients.is_empty() {
+                        drop(clients);
+                        self.title2clients.remove(&title);
                     }
                 }
             }
