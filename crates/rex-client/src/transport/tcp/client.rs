@@ -1,19 +1,19 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicU8, AtomicU64, Ordering},
 };
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use bytes::BytesMut;
 use rex_core::{
-    RexClientInner, RexCommand, RexData, RexSender, WriteCommand,
+    RexClientInner, RexCommand, RexData, RexDataRef, RexFrame, RexFramer, RexSender, WriteCommand,
     utils::{new_uuid, now_secs},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpSocket, tcp::OwnedReadHalf},
-    sync::{RwLock, broadcast},
+    sync::broadcast,
     time::sleep,
 };
 use tracing::{debug, info, warn};
@@ -22,30 +22,30 @@ use crate::{ConnectionState, RexClientConfig, RexClientTrait};
 
 pub struct TcpClient {
     // connection
-    client: RwLock<Option<Arc<RexClientInner>>>,
-    connection_state: Arc<RwLock<ConnectionState>>,
-
+    client: arc_swap::ArcSwap<Option<Arc<RexClientInner>>>,
+    connection_state: AtomicU8,
     // config
     config: RexClientConfig,
-
     // state management
     shutdown_tx: broadcast::Sender<()>,
     last_heartbeat: AtomicU64,
+
+    worker_tx: kanal::AsyncSender<RexFrame>,
 }
 
 #[async_trait::async_trait]
 impl RexClientTrait for TcpClient {
     async fn send_data(&self, data: &mut RexData) -> Result<()> {
-        let state = *self.connection_state.read().await;
+        let state = self.get_connection_state();
 
         if state != ConnectionState::Connected {
-            return Err(anyhow::anyhow!("Client not connected (state: {:?})", state));
+            bail!("Client not connected (state: {:?})", state);
         }
 
-        if let Some(client) = self.get_client().await {
+        if let Some(client) = self.get_client() {
             self.send_data_with_client(&client, data).await
         } else {
-            Err(anyhow::anyhow!("No active TCP connection"))
+            bail!("No active TCP connection")
         }
     }
 
@@ -56,32 +56,43 @@ impl RexClientTrait for TcpClient {
         let _ = self.shutdown_tx.send(());
 
         // 关闭客户端连接
-        if let Some(client) = self.get_client().await
+        if let Some(client) = self.get_client()
             && let Err(e) = client.close().await
         {
             warn!("Error closing client connection: {}", e);
         }
 
         // 更新状态
-        *self.connection_state.write().await = ConnectionState::Disconnected;
+        self.set_connection_state(ConnectionState::Disconnected);
 
         info!("TcpClient shutdown complete");
     }
 
-    async fn get_connection_state(&self) -> ConnectionState {
-        *self.connection_state.read().await
+    fn get_connection_state(&self) -> ConnectionState {
+        self.connection_state.load(Ordering::Relaxed).into()
     }
 }
 
 impl TcpClient {
     pub async fn open(config: RexClientConfig) -> Result<Arc<dyn RexClientTrait>> {
+        let (worker_tx, worker_rx) = kanal::bounded_async(8192);
+
         let (shutdown_tx, _) = broadcast::channel(4);
         let client = Arc::new(Self {
-            client: RwLock::new(None),
-            connection_state: Arc::new(RwLock::new(ConnectionState::Disconnected)),
+            client: arc_swap::ArcSwap::from_pointee(None),
+            connection_state: AtomicU8::new(ConnectionState::Disconnected as u8),
             config,
             shutdown_tx,
             last_heartbeat: AtomicU64::new(now_secs()),
+            worker_tx,
+        });
+
+        // Worker 任务
+        tokio::spawn({
+            let client = client.clone();
+            async move {
+                client.worker_task(worker_rx).await;
+            }
         });
 
         // 初始连接
@@ -122,6 +133,25 @@ impl TcpClient {
         Ok(client)
     }
 
+    // 立即处理每条消息，无延迟
+    async fn worker_task(self: &Arc<Self>, rx: kanal::AsyncReceiver<RexFrame>) {
+        while let Ok(frame) = rx.recv().await {
+            let msg = RexData::as_archived(&frame.payload);
+            self.handle_archieve_data(&frame.peer, msg).await;
+        }
+    }
+
+    #[inline(always)]
+    fn set_connection_state(&self, state: ConnectionState) {
+        self.connection_state.store(state as u8, Ordering::Relaxed);
+    }
+
+    // 无锁快速客户端访问
+    #[inline(always)]
+    fn get_client(&self) -> Option<Arc<RexClientInner>> {
+        self.client.load().as_ref().as_ref().cloned()
+    }
+
     async fn connect_with_retry(self: &Arc<Self>) -> Result<()> {
         let mut attempts = 0;
         let mut backoff = 1;
@@ -155,7 +185,7 @@ impl TcpClient {
     }
 
     async fn connect(self: &Arc<Self>) -> Result<()> {
-        *self.connection_state.write().await = ConnectionState::Connecting;
+        self.set_connection_state(ConnectionState::Connecting);
 
         info!("Connecting TCP to {}", self.config.server_addr);
 
@@ -172,8 +202,10 @@ impl TcpClient {
 
         let (tx, rx) = kanal::bounded_async(10000);
 
+        // Writer loop
         tokio::spawn(async move {
             debug!("Writer loop started for {}", local_addr);
+
             while let Ok(cmd) = rx.recv().await {
                 match cmd {
                     WriteCommand::Data(buf) => {
@@ -189,28 +221,19 @@ impl TcpClient {
                     }
                 }
             }
-            // 循环结束（Channel被Drop或出错），确保关闭 Socket
             debug!("Writer loop ended for {}", local_addr);
         });
 
         let sender = Arc::new(RexSender::new(tx));
 
-        // 创建或更新客户端
-        {
-            let mut client_guard = self.client.write().await;
-            if let Some(existing_client) = client_guard.as_ref() {
-                existing_client.set_sender(sender.clone());
-            } else {
-                let id = new_uuid();
-                let new_client = Arc::new(RexClientInner::new(
-                    id,
-                    local_addr,
-                    &self.config.title().await,
-                    sender.clone(),
-                ));
-                *client_guard = Some(new_client);
-            }
-        }
+        // 使用 ArcSwap 更新客户端（无锁）
+        let new_client = Arc::new(RexClientInner::new(
+            new_uuid(),
+            local_addr,
+            &self.config.title().await,
+            sender.clone(),
+        ));
+        self.client.store(Arc::new(Some(new_client)));
 
         // 启动数据接收任务
         tokio::spawn({
@@ -227,7 +250,7 @@ impl TcpClient {
                 }
 
                 // 标记连接断开
-                *this.connection_state.write().await = ConnectionState::Disconnected;
+                this.set_connection_state(ConnectionState::Disconnected);
             }
         });
 
@@ -235,55 +258,45 @@ impl TcpClient {
         self.login().await?;
 
         // 更新连接状态
-        *self.connection_state.write().await = ConnectionState::Connected;
+        self.set_connection_state(ConnectionState::Connected);
         self.last_heartbeat.store(now_secs(), Ordering::Relaxed);
 
         Ok(())
     }
 
-    async fn receive_data_task(&self, mut rx: OwnedReadHalf) {
+    async fn receive_data_task(&self, mut reader: OwnedReadHalf) {
         let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
-        let mut total_read = 0;
+        let mut framer = RexFramer::new(self.config.max_buffer_size);
+
+        let Some(client) = self.get_client() else {
+            return;
+        };
 
         loop {
-            match rx.read_buf(&mut buffer).await {
+            match reader.read_buf(&mut buffer).await {
                 Ok(0) => {
                     info!("Peer closed connection gracefully");
                     break;
                 }
-                Ok(n) => {
-                    total_read += n;
-                    debug!("Buffered read: {} bytes (total: {})", n, total_read);
-
-                    // 尝试解析完整的数据包
-                    loop {
-                        match RexData::try_deserialize(&mut buffer) {
-                            Ok(Some(data)) => {
-                                debug!("Parsed message: command={:?}", data.command(),);
-                                self.on_data(data).await;
-                            }
-                            Ok(None) => {
-                                // 数据不完整，等待更多数据
-                                break;
-                            }
-                            Err(e) => {
-                                // 错误处理
-                                warn!("Data parsing error: {}, clearing buffer", e);
-                                buffer.clear();
-                                break;
+                Ok(_) => loop {
+                    match framer.try_next_frame(&mut buffer) {
+                        Ok(Some(payload)) => {
+                            let frame = RexFrame {
+                                peer: client.clone(),
+                                payload,
+                            };
+                            if let Err(e) = self.worker_tx.send(frame).await {
+                                warn!("Failed to send frame to worker: {}", e);
                             }
                         }
+                        Ok(None) => break,
+                        Err(e) => {
+                            warn!("Framing error: {}", e);
+                            buffer.clear();
+                            break;
+                        }
                     }
-
-                    // 检查缓冲区是否过大
-                    if buffer.len() > self.config.max_buffer_size {
-                        warn!(
-                            "Read buffer too large ({}KB), clearing",
-                            buffer.len() / 1024
-                        );
-                        buffer.clear();
-                    }
-                }
+                },
                 Err(e) => {
                     warn!("TCP read error: {}", e);
                     break;
@@ -298,16 +311,16 @@ impl TcpClient {
         loop {
             sleep(check_interval).await;
 
-            let current_state = *self.connection_state.read().await;
+            let current_state = self.get_connection_state();
 
             match current_state {
                 ConnectionState::Disconnected => {
                     info!("Connection lost, attempting to reconnect...");
-                    *self.connection_state.write().await = ConnectionState::Reconnecting;
+                    self.set_connection_state(ConnectionState::Reconnecting);
 
                     if let Err(e) = self.connect_with_retry().await {
                         warn!("Reconnection failed: {}", e);
-                        *self.connection_state.write().await = ConnectionState::Disconnected;
+                        self.set_connection_state(ConnectionState::Disconnected);
                     }
                 }
                 ConnectionState::Reconnecting => {
@@ -326,11 +339,11 @@ impl TcpClient {
         loop {
             sleep(heartbeat_interval).await;
 
-            if *self.connection_state.read().await != ConnectionState::Connected {
+            if self.get_connection_state() != ConnectionState::Connected {
                 continue;
             }
 
-            let Some(client) = self.get_client().await else {
+            let Some(client) = self.get_client() else {
                 warn!("No client found, cannot send heartbeat");
                 continue;
             };
@@ -348,7 +361,7 @@ impl TcpClient {
 
             if let Err(e) = client.send_buf(&ping).await {
                 warn!("Heartbeat send failed: {}", e);
-                *self.connection_state.write().await = ConnectionState::Disconnected;
+                self.set_connection_state(ConnectionState::Disconnected);
                 continue;
             }
 
@@ -359,7 +372,7 @@ impl TcpClient {
 
             if after_ping <= before_ping {
                 warn!("Heartbeat timeout, marking connection as lost");
-                *self.connection_state.write().await = ConnectionState::Disconnected;
+                self.set_connection_state(ConnectionState::Disconnected);
             } else {
                 debug!("Heartbeat successful");
                 self.last_heartbeat.store(now_secs(), Ordering::Relaxed);
@@ -368,7 +381,7 @@ impl TcpClient {
     }
 
     async fn login(&self) -> Result<()> {
-        if let Some(client) = self.get_client().await {
+        if let Some(client) = self.get_client() {
             let mut data = RexData::builder(RexCommand::Login)
                 .data_from_string(self.config.title().await.clone())
                 .build();
@@ -378,13 +391,7 @@ impl TcpClient {
         Ok(())
     }
 
-    async fn on_data(&self, data: RexData) {
-        if let Some(client) = self.get_client().await {
-            self.handle_received_data(&client, data).await;
-        }
-    }
-
-    async fn handle_received_data(&self, client: &Arc<RexClientInner>, data: RexData) {
+    async fn handle_archieve_data(&self, client: &Arc<RexClientInner>, data: RexDataRef<'_>) {
         debug!("Handling received data: command={:?}", data.command());
 
         let handler = self.config.client_handler.clone();
@@ -392,13 +399,14 @@ impl TcpClient {
         match data.command() {
             RexCommand::LoginReturn => {
                 info!("TCP login successful");
-                if let Err(e) = handler.login_ok(client.clone(), data).await {
+                let rex_data = data.deserialize();
+                if let Err(e) = handler.login_ok(client.clone(), rex_data).await {
                     warn!("Error in login_ok handler: {}", e);
                 }
             }
             RexCommand::RegTitleReturn => {
                 let title = data.data_as_string_lossy();
-                client.insert_title(title.clone());
+                client.insert_title(&title);
                 self.config.set_title(client.title_str()).await;
                 info!("Title registered: {}", title);
             }
@@ -414,7 +422,8 @@ impl TcpClient {
             | RexCommand::GroupReturn
             | RexCommand::Cast
             | RexCommand::CastReturn => {
-                if let Err(e) = handler.handle(client.clone(), data).await {
+                let rex_data = data.deserialize();
+                if let Err(e) = handler.handle(client.clone(), rex_data).await {
                     warn!("Error in message handler: {}", e);
                 }
             }
@@ -425,10 +434,6 @@ impl TcpClient {
 
         // 更新接收时间
         client.update_last_recv();
-    }
-
-    async fn get_client(&self) -> Option<Arc<RexClientInner>> {
-        self.client.read().await.clone()
     }
 
     async fn send_data_with_client(

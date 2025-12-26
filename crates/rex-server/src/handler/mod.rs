@@ -9,7 +9,7 @@ mod title;
 use std::sync::Arc;
 
 use anyhow::Result;
-use rex_core::{RexClientInner, RexCommand, RexData};
+use rex_core::{RexClientInner, RexCommand, RexDataRef};
 use tracing::debug;
 
 use crate::RexSystem;
@@ -17,18 +17,18 @@ use crate::RexSystem;
 pub async fn handle(
     system: &Arc<RexSystem>,
     client: &Arc<RexClientInner>,
-    data: &mut RexData,
+    data_ref: RexDataRef<'_>, // 零拷贝访问
 ) -> Result<()> {
-    match data.command() {
-        RexCommand::Title => title::handle(system, client, data).await,
-        RexCommand::Group => group::handle(system, client, data).await,
-        RexCommand::Cast => cast::handle(system, client, data).await,
-        RexCommand::Login => login::handle(system, client, data).await,
-        RexCommand::Check => check::handle(system, client, data).await,
-        RexCommand::RegTitle => reg_title::handle(system, client, data).await,
-        RexCommand::DelTitle => del_title::handle(system, client, data).await,
+    match data_ref.command() {
+        RexCommand::Title => title::handle(system, client, data_ref).await,
+        RexCommand::Group => group::handle(system, client, data_ref).await,
+        RexCommand::Cast => cast::handle(system, client, data_ref).await,
+        RexCommand::Login => login::handle(system, client, data_ref).await,
+        RexCommand::Check => check::handle(system, client, data_ref).await,
+        RexCommand::RegTitle => reg_title::handle(system, client, data_ref).await,
+        RexCommand::DelTitle => del_title::handle(system, client, data_ref).await,
         _ => {
-            debug!("no handle command: {:?}", data.command());
+            debug!("no handle command: {:?}", data_ref.command());
             Ok(())
         }
     }

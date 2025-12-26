@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use rex_core::{RetCode, RexClientInner, RexCommand, RexData};
+use rex_core::{RetCode, RexClientInner, RexCommand, RexDataRef};
 use tracing::{debug, warn};
 
 use crate::RexSystem;
@@ -9,30 +9,30 @@ use crate::RexSystem;
 pub async fn handle(
     system: &Arc<RexSystem>,
     source_client: &Arc<RexClientInner>,
-    data: &mut RexData,
+    data_ref: RexDataRef<'_>,
 ) -> Result<()> {
-    let client_id = data.source();
-    let title = data.data_as_string_lossy();
+    let client_id = data_ref.source();
+    let title = data_ref.data_as_string_lossy();
+
     debug!("[{:032X}] Received del title [{}]", client_id, title);
 
     if let Some(client) = system.find_some_by_id(client_id) {
         system.unregister_title(client_id, &title);
-        if let Err(e) = client
-            .send_buf(&data.set_command(RexCommand::DelTitleReturn).serialize())
-            .await
-        {
+
+        let response = data_ref.create_response(RexCommand::DelTitleReturn, title.as_bytes());
+
+        if let Err(e) = client.send_buf(&response.serialize()).await {
             warn!("[{:032X}] Send del title return error: {}", client_id, e);
         }
-    } else if let Err(e) = source_client
-        .send_buf(
-            &data
-                .set_command(RexCommand::DelTitleReturn)
-                .set_retcode(RetCode::NoTargetAvailable)
-                .serialize(),
-        )
-        .await
-    {
-        warn!("[{:032X}] Send del title return error: {}", client_id, e);
+    } else {
+        let error_response = data_ref.create_error_response(
+            RexCommand::DelTitleReturn,
+            RetCode::NoTargetAvailable,
+            b"Client not found",
+        );
+
+        let _ = source_client.send_buf(&error_response.serialize()).await;
     }
+
     Ok(())
 }

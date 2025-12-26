@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use jni::{
     JNIEnv,
     objects::{GlobalRef, JObject, JValue},
 };
 use rex_client::RexClientHandlerTrait;
-use rex_core::{RexClientInner, RexCommand, RexData};
-use tokio::sync::mpsc;
+use rex_core::{RexClientInner, RexCommand, RexData, RexDataRef};
+use rkyv::AlignedVec;
 use tracing::warn;
 
 use crate::rex_cache::RexGlobalCache;
@@ -19,7 +19,7 @@ pub struct JavaHandler {
     handler_obj: GlobalRef,
     client_obj: GlobalRef,
 
-    tx: mpsc::Sender<Bytes>,
+    tx: kanal::Sender<Bytes>,
 }
 
 impl JavaHandler {
@@ -28,7 +28,7 @@ impl JavaHandler {
         let handler_obj = env.new_global_ref(handler)?;
         let client_obj = env.new_global_ref(client)?;
 
-        let (tx, mut rx) = mpsc::channel::<Bytes>(10000);
+        let (tx, rx) = kanal::bounded(10000);
 
         let jvm_thread = Arc::new(jvm);
         let jvm = jvm_thread.clone();
@@ -40,6 +40,7 @@ impl JavaHandler {
             tx,
         });
         let handler_clone = handler.clone();
+
         std::thread::spawn(move || {
             match jvm_thread.attach_current_thread_as_daemon() {
                 Ok(mut env) => {
@@ -51,17 +52,20 @@ impl JavaHandler {
                         }
                     };
 
-                    while let Some(buf) = rx.blocking_recv() {
+                    let mut aligned = AlignedVec::with_capacity(64 * 1024);
+
+                    while let Ok(serialized_bytes) = rx.recv() {
                         if let Err(e) = (|| -> Result<()> {
-                            let mut buf_mut = BytesMut::from(buf);
-                            let Some(data) = RexData::try_deserialize(&mut buf_mut)? else {
-                                warn!("invalid message");
-                                return Ok(());
-                            };
+                            // ✅ 转换为对齐缓冲区（一次拷贝）
+                            aligned.clear();
+                            aligned.extend_from_slice(&serialized_bytes);
+
+                            // ✅ 零拷贝访问 - 无反序列化开销
+                            let data_ref = RexData::as_archived(&aligned);
 
                             // 创建 Java RexData 对象
                             let data_obj = env.alloc_object(&cache.data.cls)?;
-                            handler.init_java_data(&mut env, &data, &data_obj)?;
+                            handler.init_java_data(&mut env, data_ref, &data_obj)?;
 
                             let args = [
                                 JValue::Object(&handler.client_obj).as_jni(),
@@ -98,12 +102,17 @@ impl JavaHandler {
     }
 
     /// 创建 Java RexData 对象
-    fn init_java_data(&self, env: &mut JNIEnv, data: &RexData, data_obj: &JObject) -> Result<()> {
+    fn init_java_data(
+        &self,
+        env: &mut JNIEnv,
+        data_ref: RexDataRef<'_>,
+        data_obj: &JObject,
+    ) -> Result<()> {
         let cache =
             RexGlobalCache::get().ok_or_else(|| anyhow::anyhow!("Cache not initialized"))?;
 
         // 设置 command 字段
-        let command_int = data.command() as i32;
+        let command_int = data_ref.command() as i32;
         let command_enum_obj = unsafe {
             env.call_static_method_unchecked(
                 &cache.command.cls,
@@ -121,12 +130,12 @@ impl JavaHandler {
         let _ = env.delete_local_ref(command_enum_obj);
 
         // 设置 title 字段
-        let title_str = env.new_string(data.title().unwrap_or_default())?;
+        let title_str = env.new_string(data_ref.title().unwrap_or_default())?;
         env.set_field_unchecked(data_obj, cache.data.title, JValue::Object(&title_str))?;
         let _ = env.delete_local_ref(title_str);
 
         // 设置 data 字段
-        let data_bytes = data.data();
+        let data_bytes = data_ref.data();
         let jbytes = env.byte_array_from_slice(data_bytes)?;
         env.set_field_unchecked(data_obj, cache.data.data, JValue::Object(&jbytes))?;
         let _ = env.delete_local_ref(jbytes);
@@ -134,15 +143,21 @@ impl JavaHandler {
         Ok(())
     }
 
-    fn call_on_login(&self, data: &RexData) -> Result<()> {
-        let mut env = self.jvm.attach_current_thread()?;
+    fn call_on_login(&self, serialized_bytes: &Bytes) -> Result<()> {
+        // 转换为对齐缓冲区
+        let mut aligned = AlignedVec::with_capacity(serialized_bytes.len());
+        aligned.extend_from_slice(serialized_bytes);
 
+        // 零拷贝访问
+        let data_ref = RexData::as_archived(&aligned);
+
+        let mut env = self.jvm.attach_current_thread()?;
         let cache =
             RexGlobalCache::get().ok_or_else(|| anyhow::anyhow!("Cache not initialized"))?;
 
         // 创建 Java RexData 对象
         let data_obj = env.alloc_object(&cache.data.cls)?;
-        self.init_java_data(&mut env, data, &data_obj)?;
+        self.init_java_data(&mut env, data_ref, &data_obj)?;
 
         let args = [
             JValue::Object(&self.client_obj).as_jni(),
@@ -171,7 +186,8 @@ unsafe impl Sync for JavaHandler {}
 #[async_trait::async_trait]
 impl RexClientHandlerTrait for JavaHandler {
     async fn login_ok(&self, _client: Arc<RexClientInner>, data: RexData) -> Result<()> {
-        if let Err(e) = self.call_on_login(&data) {
+        let serialized = data.serialize();
+        if let Err(e) = self.call_on_login(&serialized) {
             warn!("Failed to call onLogin: {}", e);
             // 不返回 Err 给 Rust Core，防止断开连接，只记录日志
         }
@@ -182,7 +198,8 @@ impl RexClientHandlerTrait for JavaHandler {
         if matches!(data.command(), RexCommand::Check | RexCommand::CheckReturn) {
             return Ok(());
         }
-        if let Err(e) = self.tx.send(data.serialize()).await {
+        let serialized = data.serialize();
+        if let Err(e) = self.tx.send(serialized) {
             warn!("Failed to enqueue message for Java handler: {}", e);
         }
         Ok(())

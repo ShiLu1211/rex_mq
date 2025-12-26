@@ -3,7 +3,9 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::Result;
 use bytes::BytesMut;
 use futures_util::{SinkExt, StreamExt};
-use rex_core::{RexClientInner, RexData, RexSender, WriteCommand, utils::new_uuid};
+use rex_core::{
+    RexClientInner, RexData, RexFrame, RexFramer, RexSender, WriteCommand, utils::new_uuid,
+};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{Semaphore, broadcast},
@@ -19,12 +21,13 @@ pub struct WebSocketServer {
     listener: Arc<TcpListener>,
     semaphore: Arc<Semaphore>,
     shutdown_tx: Arc<broadcast::Sender<()>>,
+
+    worker_tx: kanal::AsyncSender<RexFrame>,
 }
 
 #[async_trait::async_trait]
 impl RexServerTrait for WebSocketServer {
     async fn close(&self) {
-        // Send shutdown signal to all tasks
         if let Err(e) = self.shutdown_tx.send(()) {
             warn!("Error sending shutdown signal: {}", e);
         }
@@ -42,13 +45,24 @@ impl WebSocketServer {
         let listener = TcpListener::bind(addr).await?;
         let semaphore = Arc::new(Semaphore::new(config.max_concurrent_handlers));
 
+        let (worker_tx, worker_rx) = kanal::bounded_async(16384);
         let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1 + config.max_concurrent_handlers);
+
         let server = Arc::new(WebSocketServer {
             system,
             config,
             listener: Arc::new(listener),
             semaphore,
             shutdown_tx: Arc::new(shutdown_tx),
+            worker_tx,
+        });
+
+        // 单个 worker 线程 - 保持低延迟
+        tokio::spawn({
+            let server_ = server.clone();
+            async move {
+                server_.worker_task(worker_rx).await;
+            }
         });
 
         // 服务器连接处理任务
@@ -74,6 +88,24 @@ impl WebSocketServer {
         Ok(server)
     }
 
+    async fn worker_task(self: &Arc<Self>, rx: kanal::AsyncReceiver<RexFrame>) {
+        while let Ok(frame) = rx.recv().await {
+            // 零拷贝访问 - 不进行反序列化
+            let data_ref = RexData::as_archived(&frame.payload);
+
+            // 直接传递零拷贝引用给 handler
+            if let Err(e) = handle(&self.system, &frame.peer, data_ref).await {
+                warn!(
+                    "Error handling data from {}: {}",
+                    &frame.peer.local_addr(),
+                    e
+                );
+            }
+
+            frame.peer.update_last_recv();
+        }
+    }
+
     async fn handle_connection(self: &Arc<Self>, stream: TcpStream, peer_addr: SocketAddr) {
         info!("New WebSocket connection from {}", peer_addr);
 
@@ -92,6 +124,7 @@ impl WebSocketServer {
 
         tokio::spawn(async move {
             debug!("Writer loop started for {}", peer_addr);
+
             while let Ok(cmd) = rx.recv().await {
                 match cmd {
                     WriteCommand::Data(buf) => {
@@ -151,6 +184,7 @@ impl WebSocketServer {
         info!("Handling WebSocket connection: {}", peer_addr);
 
         let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
+        let mut framer = RexFramer::new(self.config.max_buffer_size);
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
         loop {
@@ -164,38 +198,23 @@ impl WebSocketServer {
 
                             // 尝试解析完整的数据包
                             loop {
-                                match RexData::try_deserialize(&mut buffer) {
-                                    Ok(Some(mut data)) => {
-                                        debug!(
-                                            "Received data from {}: command={:?}",
-                                            peer_addr,
-                                            data.command(),
-                                        );
-
-                                        if let Err(e) = handle(&self.system, &peer, &mut data).await {
-                                            warn!("Error handling data from {}: {}", peer_addr, e);
+                                match framer.try_next_frame(&mut buffer) {
+                                    Ok(Some(payload)) => {
+                                        if let Err(e) = self.worker_tx
+                                            .send(RexFrame { peer: peer.clone(), payload })
+                                            .await
+                                        {
+                                            warn!("worker_tx send error: {}", e);
+                                            break;
                                         }
-
-                                        peer.update_last_recv();
                                     }
-                                    Ok(None) => {
-                                        break;
-                                    }
+                                    Ok(None) => break,
                                     Err(e) => {
-                                        warn!(
-                                            "Error parsing data from {}: {}, clearing buffer",
-                                            peer_addr, e
-                                        );
+                                        warn!("Framing error from {}: {}", peer.local_addr(), e);
                                         buffer.clear();
                                         break;
                                     }
                                 }
-                            }
-
-                            // 检查缓冲区大小，防止内存泄漏
-                            if buffer.len() > self.config.max_buffer_size {
-                                warn!("Buffer too large for connection {}, clearing", peer_addr);
-                                buffer.clear();
                             }
                         }
                         Some(Ok(Message::Close(_))) => {

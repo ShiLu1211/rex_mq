@@ -6,14 +6,6 @@ edition.workspace = true
 [lints]
 workspace = true
 
-[features]
-default = []
-skip_crc = [
-    "rex-core/skip_crc",
-    "rex-client/skip_crc",
-    "rex-server/skip_crc",
-]
-
 [dependencies]
 rex-core.workspace = true
 rex-client.workspace = true
@@ -32,7 +24,3 @@ hdrhistogram.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
-
-[[bench]]
-name = "data_codec"
-harness = false

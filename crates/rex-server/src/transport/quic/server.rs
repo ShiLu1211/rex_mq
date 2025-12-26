@@ -3,7 +3,9 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::Result;
 use bytes::BytesMut;
 use quinn::{Connection, Endpoint, RecvStream, ServerConfig};
-use rex_core::{RexClientInner, RexData, RexSender, WriteCommand, utils::new_uuid};
+use rex_core::{
+    RexClientInner, RexData, RexFrame, RexFramer, RexSender, WriteCommand, utils::new_uuid,
+};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -19,6 +21,8 @@ pub struct QuicServer {
     endpoint: Endpoint,
     semaphore: Arc<Semaphore>,
     shutdown_tx: Arc<broadcast::Sender<()>>,
+
+    worker_tx: kanal::AsyncSender<RexFrame>,
 }
 
 #[async_trait::async_trait]
@@ -45,25 +49,22 @@ impl QuicServer {
         config: RexServerConfig,
     ) -> Result<Arc<dyn RexServerTrait>> {
         let addr = config.bind_addr;
-
         // 生成自签名证书
         let (cert, key) = generate_self_signed_cert()?;
-
         // 配置服务器
         let server_config = ServerConfig::with_single_cert(vec![cert], key)?;
-
         // 配置传输参数
         // let mut transport = quinn::TransportConfig::default();
         // transport.keep_alive_interval(Some(std::time::Duration::from_secs(5)));
         // transport.max_idle_timeout(Some(std::time::Duration::from_secs(60).try_into()?));
         // transport.max_concurrent_uni_streams(1000u32.into());
         // server_config.transport_config(Arc::new(transport));
-
         // 创建endpoint
         let endpoint = Endpoint::server(server_config, addr)?;
-
         let semaphore = Arc::new(Semaphore::new(config.max_concurrent_handlers));
-        let (shutdown_tx, mut shutdown_rx) = broadcast::channel(2);
+
+        let (worker_tx, worker_rx) = kanal::bounded_async(16384);
+        let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1 + config.max_concurrent_handlers);
 
         let server = Arc::new(QuicServer {
             system,
@@ -71,6 +72,15 @@ impl QuicServer {
             endpoint,
             semaphore,
             shutdown_tx: Arc::new(shutdown_tx),
+            worker_tx,
+        });
+
+        // 单个 worker 线程 - 保持低延迟
+        tokio::spawn({
+            let server_ = server.clone();
+            async move {
+                server_.worker_task(worker_rx).await;
+            }
         });
 
         // 服务器连接处理任务
@@ -108,6 +118,24 @@ impl QuicServer {
         Ok(server)
     }
 
+    async fn worker_task(self: &Arc<Self>, rx: kanal::AsyncReceiver<RexFrame>) {
+        while let Ok(frame) = rx.recv().await {
+            // 零拷贝访问 - 不进行反序列化
+            let data_ref = RexData::as_archived(&frame.payload);
+
+            // 直接传递零拷贝引用给 handler
+            if let Err(e) = handle(&self.system, &frame.peer, data_ref).await {
+                warn!(
+                    "Error handling data from {}: {}",
+                    &frame.peer.local_addr(),
+                    e
+                );
+            }
+
+            frame.peer.update_last_recv();
+        }
+    }
+
     async fn handle_connection(self: &Arc<Self>, connection: Connection, peer_addr: SocketAddr) {
         info!("Handling QUIC connection from {}", peer_addr);
 
@@ -124,6 +152,7 @@ impl QuicServer {
 
         tokio::spawn(async move {
             debug!("Writer loop started for {}", peer_addr);
+
             while let Ok(cmd) = rx.recv().await {
                 match cmd {
                     WriteCommand::Data(buf) => {
@@ -204,18 +233,15 @@ impl QuicServer {
         info!("Finished processing streams from {}", peer_addr);
     }
 
-    async fn handle_stream(
-        &self,
-        peer: Arc<RexClientInner>,
-        mut recv_stream: RecvStream,
-    ) -> Result<()> {
+    async fn handle_stream(&self, peer: Arc<RexClientInner>, mut reader: RecvStream) -> Result<()> {
         let peer_addr = peer.local_addr();
 
         let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
+        let mut framer = RexFramer::new(self.config.max_buffer_size);
 
         loop {
             // 从 QUIC 流中读取数据
-            match recv_stream.read_buf(&mut buffer).await {
+            match reader.read_buf(&mut buffer).await {
                 Ok(0) => {
                     // Stream finished
                     debug!("Stream from {} finished", peer_addr);
@@ -224,43 +250,27 @@ impl QuicServer {
                 Ok(_) => {
                     // 尝试解析完整的数据包
                     loop {
-                        match RexData::try_deserialize(&mut buffer) {
-                            Ok(Some(mut data)) => {
-                                debug!(
-                                    "Received data from {}: command={:?}",
-                                    peer_addr,
-                                    data.command(),
-                                );
-
-                                if let Err(e) = handle(&self.system, &peer, &mut data).await {
-                                    warn!("Error handling data from {}: {}", peer_addr, e);
+                        match framer.try_next_frame(&mut buffer) {
+                            Ok(Some(payload)) => {
+                                if let Err(e) = self
+                                    .worker_tx
+                                    .send(RexFrame {
+                                        peer: peer.clone(),
+                                        payload,
+                                    })
+                                    .await
+                                {
+                                    warn!("worker_tx send error: {}", e);
+                                    break;
                                 }
-
-                                peer.update_last_recv();
                             }
-                            Ok(None) => {
-                                break;
-                            }
+                            Ok(None) => break,
                             Err(e) => {
-                                warn!(
-                                    "Error parsing data from {}: {}, clearing buffer",
-                                    peer_addr, e
-                                );
+                                warn!("Framing error from {}: {}", peer.local_addr(), e);
                                 buffer.clear();
                                 break;
                             }
                         }
-                    }
-
-                    // 检查缓冲区大小，防止内存泄漏
-                    if buffer.len() > self.config.max_buffer_size {
-                        warn!(
-                            "buffer len: [{}], max_buffer_size: [{}]",
-                            buffer.len(),
-                            self.config.max_buffer_size
-                        );
-                        warn!("Buffer too large for connection {}, clearing", peer_addr);
-                        buffer.clear();
                     }
                 }
                 Err(e) => {

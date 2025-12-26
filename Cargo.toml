@@ -26,9 +26,9 @@ panic = "deny"
 # （按功能分组，便于维护）
 # =====================
 [workspace.dependencies]
-rex-core = { path = "./crates/rex-core", default-features = false }
-rex-client = { path = "./crates/rex-client", default-features = false }
-rex-server = { path = "./crates/rex-server", default-features = false }
+rex-core = { path = "./crates/rex-core" }
+rex-client = { path = "./crates/rex-client" }
+rex-server = { path = "./crates/rex-server" }
 
 # --- Async Runtime & Concurrency ---
 tokio = { version = "1.48", features = [
@@ -54,7 +54,7 @@ dashmap = "6.1"
 ahash = "0.8"
 hdrhistogram = "7.5"
 crc32fast = "1.5"
-rkyv = { version = "0.7", features = ["std", "validation"] }
+rkyv = { version = "0.7", features = ["validation"] }
 
 # --- IDs, Randomness ---
 uuid = { version = "1.19", features = ["v4"] }

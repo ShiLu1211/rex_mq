@@ -15,7 +15,6 @@ workspace = true
 default = ["sync"]
 sync = []
 async = ["dep:pyo3-async-runtimes"]
-skip_crc = ["rex-core/skip_crc", "rex-client/skip_crc"]
 
 
 [dependencies]

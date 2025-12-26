@@ -82,7 +82,7 @@ impl RexClientInner {
     }
 
     /// 多个title用;分隔
-    pub fn insert_title(&self, title: String) {
+    pub fn insert_title(&self, title: &str) {
         for t in title.split(';') {
             if !t.is_empty() {
                 self.titles.insert(t.to_string());

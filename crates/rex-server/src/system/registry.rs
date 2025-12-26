@@ -91,7 +91,7 @@ impl RexSystem {
             return;
         };
 
-        client.insert_title(title.to_string());
+        client.insert_title(title);
 
         let mut ids = self.title2ids.entry(title.to_string()).or_default();
         if !ids.contains(&client_id) {
