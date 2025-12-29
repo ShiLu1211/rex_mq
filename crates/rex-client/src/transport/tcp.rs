@@ -1,41 +1,33 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicU8, AtomicU64, Ordering},
 };
 use std::time::Duration;
 
 use anyhow::Result;
 use bytes::BytesMut;
-use quinn::{ClientConfig, Connection, Endpoint, RecvStream, crypto::rustls::QuicClientConfig};
 use rex_core::{
-    RexCommand, RexData,
-    utils::{new_uuid, now_secs},
+    RexClientInner, RexCommand, RexData,
+    utils::{force_set_value, new_uuid, now_secs},
 };
-use rustls::{
-    DigitallySignedStruct, SignatureScheme,
-    client::danger,
-    crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature},
-    pki_types::{CertificateDer, ServerName, UnixTime},
-};
+use rex_sender::TcpSender;
 use tokio::{
-    sync::{RwLock, broadcast},
+    io::AsyncReadExt,
+    net::{TcpSocket, tcp::OwnedReadHalf},
+    sync::broadcast,
     time::sleep,
 };
 use tracing::{debug, info, warn};
 
-use super::QuicSender;
-use crate::{ConnectionState, RexClientConfig, RexClientInner, RexClientTrait};
+use crate::{ConnectionState, RexClientConfig, RexClientTrait};
 
-pub struct QuicClient {
+pub struct TcpClient {
     // connection
-    endpoint: Endpoint,
-    connection: RwLock<Option<Connection>>,
-    client: RwLock<Option<Arc<RexClientInner>>>,
-    connection_state: Arc<RwLock<ConnectionState>>,
+    client: Option<Arc<RexClientInner>>,
+    connection_state: AtomicU8,
 
     // config
     config: RexClientConfig,
-    client_config: ClientConfig,
 
     // state management
     shutdown_tx: broadcast::Sender<()>,
@@ -43,23 +35,23 @@ pub struct QuicClient {
 }
 
 #[async_trait::async_trait]
-impl RexClientTrait for QuicClient {
+impl RexClientTrait for TcpClient {
     async fn send_data(&self, data: &mut RexData) -> Result<()> {
-        let state = *self.connection_state.read().await;
+        let state = self.connection_state();
 
         if state != ConnectionState::Connected {
             return Err(anyhow::anyhow!("Client not connected (state: {:?})", state));
         }
 
         if let Some(client) = self.get_client().await {
-            self.send_data_with_client(&client, data).await
+            self.send_data_with_client(client, data).await
         } else {
-            Err(anyhow::anyhow!("No active QUIC connection"))
+            Err(anyhow::anyhow!("No active TCP connection"))
         }
     }
 
     async fn close(&self) {
-        info!("Shutting down QuicClient...");
+        info!("Shutting down TcpClient...");
 
         // 发送关闭信号
         let _ = self.shutdown_tx.send(());
@@ -71,54 +63,24 @@ impl RexClientTrait for QuicClient {
             warn!("Error closing client connection: {}", e);
         }
 
-        // 关闭QUIC连接
-        if let Some(conn) = self.connection.write().await.take() {
-            conn.close(0u32.into(), b"client shutdown");
-        }
-
-        // 关闭endpoint
-        self.endpoint.close(0u32.into(), b"client shutdown");
-        self.endpoint.wait_idle().await;
-
         // 更新状态
-        *self.connection_state.write().await = ConnectionState::Disconnected;
+        self.set_connection_state(ConnectionState::Disconnected);
 
-        info!("QuicClient shutdown complete");
+        info!("TcpClient shutdown complete");
     }
 
-    async fn get_connection_state(&self) -> ConnectionState {
-        *self.connection_state.read().await
+    fn get_connection_state(&self) -> ConnectionState {
+        self.connection_state()
     }
 }
 
-impl QuicClient {
+impl TcpClient {
     pub async fn open(config: RexClientConfig) -> Result<Arc<dyn RexClientTrait>> {
         let (shutdown_tx, _) = broadcast::channel(4);
-
-        // 配置 QUIC 客户端
-        let crypto = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(SkipServerVerification::new())
-            .with_no_client_auth();
-
-        let mut client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto)?));
-
-        // 配置传输参数
-        let mut transport = quinn::TransportConfig::default();
-        transport.keep_alive_interval(Some(Duration::from_secs(5)));
-        transport.max_idle_timeout(Some(Duration::from_secs(60).try_into()?));
-        client_config.transport_config(Arc::new(transport));
-
-        // 创建 endpoint
-        let endpoint = Endpoint::client("0.0.0.0:0".parse()?)?;
-
         let client = Arc::new(Self {
-            endpoint,
-            connection: RwLock::new(None),
-            client: RwLock::new(None),
-            connection_state: Arc::new(RwLock::new(ConnectionState::Disconnected)),
+            client: None,
+            connection_state: AtomicU8::new(ConnectionState::Disconnected as u8),
             config,
-            client_config,
             shutdown_tx,
             last_heartbeat: AtomicU64::new(now_secs()),
         });
@@ -161,6 +123,16 @@ impl QuicClient {
         Ok(client)
     }
 
+    #[inline(always)]
+    fn connection_state(&self) -> ConnectionState {
+        self.connection_state.load(Ordering::Relaxed).into()
+    }
+
+    #[inline(always)]
+    fn set_connection_state(&self, state: ConnectionState) {
+        self.connection_state.store(state as u8, Ordering::Relaxed);
+    }
+
     async fn connect_with_retry(self: &Arc<Self>) -> Result<()> {
         let mut attempts = 0;
         let mut backoff = 1;
@@ -194,45 +166,38 @@ impl QuicClient {
     }
 
     async fn connect(self: &Arc<Self>) -> Result<()> {
-        *self.connection_state.write().await = ConnectionState::Connecting;
+        self.set_connection_state(ConnectionState::Connecting);
 
-        info!("Connecting QUIC to {}", self.config.server_addr);
+        info!("Connecting TCP to {}", self.config.server_addr);
 
-        // 建立新连接
-        let conn = self
-            .endpoint
-            .connect_with(
-                self.client_config.clone(),
-                self.config.server_addr,
-                "quic_server",
-            )?
-            .await?;
+        let socket = if self.config.server_addr.is_ipv4() {
+            TcpSocket::new_v4()?
+        } else {
+            TcpSocket::new_v6()?
+        };
+        socket.set_nodelay(true)?;
 
-        let local_addr = self.endpoint.local_addr()?;
+        let stream = socket.connect(self.config.server_addr).await?;
+        let local_addr = stream.local_addr()?;
+        let (rx, tx) = stream.into_split();
 
-        // 打开第一个单向流用于发送
-        let tx = conn.open_uni().await?;
-        let sender = Arc::new(QuicSender::new(tx));
+        let sender = Arc::new(TcpSender::new(tx));
 
         // 创建或更新客户端
         {
-            let mut client_guard = self.client.write().await;
-            if let Some(existing_client) = client_guard.as_ref() {
-                existing_client.set_sender(sender.clone()).await;
+            if let Some(existing_client) = self.client.as_ref() {
+                existing_client.set_sender(sender.clone());
             } else {
                 let id = new_uuid();
                 let new_client = Arc::new(RexClientInner::new(
                     id,
                     local_addr,
-                    &self.config.title().await,
+                    self.config.title(),
                     sender.clone(),
                 ));
-                *client_guard = Some(new_client);
+                force_set_value(&self.client, Some(new_client));
             }
         }
-
-        // 保存连接
-        *self.connection.write().await = Some(conn.clone());
 
         // 启动数据接收任务
         tokio::spawn({
@@ -240,7 +205,7 @@ impl QuicClient {
             let mut shutdown_rx = this.shutdown_tx.subscribe();
             async move {
                 tokio::select! {
-                    _ = this.receive_data_task(conn) => {
+                    _ = this.receive_data_task(rx) => {
                         warn!("Data receiving task ended");
                     }
                     _ = shutdown_rx.recv() => {
@@ -249,7 +214,7 @@ impl QuicClient {
                 }
 
                 // 标记连接断开
-                *this.connection_state.write().await = ConnectionState::Disconnected;
+                this.set_connection_state(ConnectionState::Disconnected);
             }
         });
 
@@ -257,48 +222,25 @@ impl QuicClient {
         self.login().await?;
 
         // 更新连接状态
-        *self.connection_state.write().await = ConnectionState::Connected;
+        self.set_connection_state(ConnectionState::Connected);
         self.last_heartbeat.store(now_secs(), Ordering::Relaxed);
 
         Ok(())
     }
 
-    async fn receive_data_task(self: &Arc<Self>, connection: Connection) {
-        info!("Starting QUIC receiver task");
-
-        loop {
-            match connection.accept_uni().await {
-                Ok(recv_stream) => {
-                    debug!("Accepted incoming stream from server");
-                    let this = self.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = this.handle_stream(recv_stream).await {
-                            warn!("Error handling stream: {}", e);
-                        }
-                    });
-                }
-                Err(e) => {
-                    info!("QUIC connection closed: {}", e);
-                    break;
-                }
-            }
-        }
-
-        info!("QUIC receiver task ended");
-    }
-
-    async fn handle_stream(self: &Arc<Self>, mut recv_stream: RecvStream) -> Result<()> {
+    async fn receive_data_task(self: &Arc<Self>, mut rx: OwnedReadHalf) {
         let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
-        let mut temp_buf = vec![0u8; self.config.read_buffer_size];
         let mut total_read = 0;
 
         loop {
-            match recv_stream.read(&mut temp_buf).await {
-                Ok(Some(n)) => {
+            match rx.read_buf(&mut buffer).await {
+                Ok(0) => {
+                    info!("Peer closed connection gracefully");
+                    break;
+                }
+                Ok(n) => {
                     total_read += n;
                     debug!("Buffered read: {} bytes (total: {})", n, total_read);
-
-                    buffer.extend_from_slice(&temp_buf[..n]);
 
                     // 尝试解析完整的数据包
                     loop {
@@ -329,23 +271,12 @@ impl QuicClient {
                         buffer.clear();
                     }
                 }
-                Ok(None) => {
-                    debug!("Stream finished, total read: {} bytes", total_read);
-
-                    if !buffer.is_empty() {
-                        warn!("Stream ended with {} bytes remaining", buffer.len());
-                    }
-
-                    break;
-                }
                 Err(e) => {
-                    warn!("QUIC read error: {}", e);
+                    warn!("TCP read error: {}", e);
                     break;
                 }
             }
         }
-
-        Ok(())
     }
 
     async fn connection_monitor_task(self: &Arc<Self>) {
@@ -354,16 +285,16 @@ impl QuicClient {
         loop {
             sleep(check_interval).await;
 
-            let current_state = *self.connection_state.read().await;
+            let current_state = self.connection_state();
 
             match current_state {
                 ConnectionState::Disconnected => {
                     info!("Connection lost, attempting to reconnect...");
-                    *self.connection_state.write().await = ConnectionState::Reconnecting;
+                    self.set_connection_state(ConnectionState::Reconnecting);
 
                     if let Err(e) = self.connect_with_retry().await {
                         warn!("Reconnection failed: {}", e);
-                        *self.connection_state.write().await = ConnectionState::Disconnected;
+                        self.set_connection_state(ConnectionState::Disconnected);
                     }
                 }
                 ConnectionState::Reconnecting => {
@@ -382,11 +313,12 @@ impl QuicClient {
         loop {
             sleep(heartbeat_interval).await;
 
-            if *self.connection_state.read().await != ConnectionState::Connected {
+            if self.connection_state() != ConnectionState::Connected {
                 continue;
             }
 
             let Some(client) = self.get_client().await else {
+                warn!("No client found, cannot send heartbeat");
                 continue;
             };
 
@@ -401,40 +333,23 @@ impl QuicClient {
             debug!("Sending heartbeat (idle: {}s)", idle_time);
             let ping = RexData::builder(RexCommand::Check).build().serialize();
 
-            // 获取连接并打开新的单向流发送心跳
-            let conn = {
-                let conn_guard = self.connection.read().await;
-                conn_guard.clone()
-            };
+            if let Err(e) = client.send_buf(&ping).await {
+                warn!("Heartbeat send failed: {}", e);
+                self.set_connection_state(ConnectionState::Disconnected);
+                continue;
+            }
 
-            if let Some(conn) = conn {
-                match conn.open_uni().await {
-                    Ok(mut stream) => {
-                        if let Err(e) = stream.write_all(&ping).await {
-                            warn!("Heartbeat send failed: {}", e);
-                            *self.connection_state.write().await = ConnectionState::Disconnected;
-                            continue;
-                        }
-                        let _ = stream.finish();
+            // 等待心跳响应
+            let before_ping = last_recv;
+            sleep(Duration::from_secs(self.config.pong_wait)).await;
+            let after_ping = client.last_recv();
 
-                        // 等待心跳响应
-                        let before_ping = last_recv;
-                        sleep(Duration::from_secs(self.config.pong_wait)).await;
-                        let after_ping = client.last_recv();
-
-                        if after_ping <= before_ping {
-                            warn!("Heartbeat timeout, marking connection as lost");
-                            *self.connection_state.write().await = ConnectionState::Disconnected;
-                        } else {
-                            debug!("Heartbeat successful");
-                            self.last_heartbeat.store(now_secs(), Ordering::Relaxed);
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to open stream for heartbeat: {}", e);
-                        *self.connection_state.write().await = ConnectionState::Disconnected;
-                    }
-                }
+            if after_ping <= before_ping {
+                warn!("Heartbeat timeout, marking connection as lost");
+                self.set_connection_state(ConnectionState::Disconnected);
+            } else {
+                debug!("Heartbeat successful");
+                self.last_heartbeat.store(now_secs(), Ordering::Relaxed);
             }
         }
     }
@@ -442,9 +357,9 @@ impl QuicClient {
     async fn login(self: &Arc<Self>) -> Result<()> {
         if let Some(client) = self.get_client().await {
             let mut data = RexData::builder(RexCommand::Login)
-                .data_from_string(self.config.title().await.clone())
+                .data_from_string(self.config.title())
                 .build();
-            self.send_data_with_client(&client, &mut data).await?;
+            self.send_data_with_client(client, &mut data).await?;
             info!("Login request sent");
         }
         Ok(())
@@ -452,7 +367,7 @@ impl QuicClient {
 
     async fn on_data(&self, data: RexData) {
         if let Some(client) = self.get_client().await {
-            self.handle_received_data(&client, data).await;
+            self.handle_received_data(client, data).await;
         }
     }
 
@@ -466,21 +381,21 @@ impl QuicClient {
 
         match data.header().command() {
             RexCommand::LoginReturn => {
-                info!("QUIC login successful");
+                info!("TCP login successful");
                 if let Err(e) = handler.login_ok(client.clone(), data).await {
                     warn!("Error in login_ok handler: {}", e);
                 }
             }
             RexCommand::RegTitleReturn => {
                 let title = data.data_as_string_lossy();
-                client.insert_title(title.clone());
-                self.config.set_title(client.title_str()).await;
+                client.insert_title(&title);
+                self.config.set_title(&client.title_str());
                 info!("Title registered: {}", title);
             }
             RexCommand::DelTitleReturn => {
                 let title = data.data_as_string_lossy();
                 client.remove_title(&title);
-                self.config.set_title(client.title_str()).await;
+                self.config.set_title(&client.title_str());
                 info!("Title removed: {}", title);
             }
             RexCommand::Title
@@ -502,8 +417,8 @@ impl QuicClient {
         client.update_last_recv();
     }
 
-    async fn get_client(&self) -> Option<Arc<RexClientInner>> {
-        self.client.read().await.clone()
+    async fn get_client(&self) -> &Option<Arc<RexClientInner>> {
+        &self.client
     }
 
     async fn send_data_with_client(
@@ -511,68 +426,13 @@ impl QuicClient {
         client: &Arc<RexClientInner>,
         data: &mut RexData,
     ) -> Result<()> {
-        let client_id = client.id().await;
+        let client_id = client.id();
         data.set_source(client_id);
         client.send_buf(&data.serialize()).await?;
         debug!(
-            "QUIC data sent successfully: command={:?}",
+            "TCP data sent successfully: command={:?}",
             data.header().command()
         );
         Ok(())
-    }
-}
-
-// 跳过服务器证书验证（仅用于开发/测试）
-#[derive(Debug)]
-struct SkipServerVerification(Arc<CryptoProvider>);
-
-impl SkipServerVerification {
-    fn new() -> Arc<Self> {
-        Arc::new(Self(Arc::new(rustls::crypto::ring::default_provider())))
-    }
-}
-
-impl danger::ServerCertVerifier for SkipServerVerification {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp: &[u8],
-        _now: UnixTime,
-    ) -> Result<danger::ServerCertVerified, rustls::Error> {
-        Ok(danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<danger::HandshakeSignatureValid, rustls::Error> {
-        verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<danger::HandshakeSignatureValid, rustls::Error> {
-        verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.0.signature_verification_algorithms.supported_schemes()
     }
 }

@@ -1,0 +1,59 @@
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-xml
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+      - id: check-docstring-first
+      - id: check-added-large-files
+      - id: check-json
+      - id: check-toml
+
+  # -------------------------
+  # Python 格式化
+  # -------------------------
+  - repo: https://github.com/google/yapf
+    rev: v0.43.0
+    hooks:
+      - id: yapf
+        name: Python YAPF formatter
+        args: ["--style", "google"]
+
+  - repo: https://github.com/PyCQA/isort
+    rev: 7.0.0
+    hooks:
+      - id: isort
+        name: Python import sorter
+
+  # -------------------------
+  # Java 格式化
+  # -------------------------
+  - repo: local
+    hooks:
+      - id: google-java-format
+        name: google-java-format (rex4j)
+        entry: mvn -q -f bindings/rex4j/pom.xml spotless:check
+        language: system
+        files: '^bindings/rex4j/.*\\.java$'
+        pass_filenames: false
+        always_run: true
+
+
+  # -------------------------
+  # Rust 格式化
+  # -------------------------
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: Rust cargo fmt
+        entry: cargo fmt --all
+        language: system
+        types: [rust]
+        pass_filenames: false

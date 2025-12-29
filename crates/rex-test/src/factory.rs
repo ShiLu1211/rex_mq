@@ -7,10 +7,9 @@ use std::{
 
 use anyhow::Result;
 use rex_client::{
-    ConnectionState, RexClientConfig, RexClientHandlerTrait, RexClientInner, RexClientTrait,
-    open_client,
+    ConnectionState, RexClientConfig, RexClientHandlerTrait, RexClientTrait, open_client,
 };
-use rex_core::{Protocol, RexCommand, RexData};
+use rex_core::{Protocol, RexClientInner, RexCommand, RexData};
 use rex_server::{RexServerConfig, RexServerTrait, RexSystem, RexSystemConfig, open_server};
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tracing::{info, warn};
@@ -39,7 +38,7 @@ impl TestClient {
     }
 
     pub async fn wait_connected(&self) {
-        while self.client.get_connection_state().await != ConnectionState::Connected {
+        while self.client.get_connection_state() != ConnectionState::Connected {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
@@ -59,7 +58,7 @@ impl RexClientHandlerTrait for TestClientHandler {
     async fn login_ok(&self, client: Arc<RexClientInner>, _data: RexData) -> Result<()> {
         info!(
             "login ok, client id: [{:032X}], title: [{}]",
-            client.id().await,
+            client.id(),
             client.title_str()
         );
         Ok(())
@@ -124,7 +123,7 @@ impl TestEnv {
         let addr = self.next_addr(proto);
         let (tx, rx) = channel(100);
         let handler = Arc::new(TestClientHandler { tx });
-        let cfg = RexClientConfig::new(proto, addr, title.into(), handler);
+        let cfg = RexClientConfig::new(proto, addr, title, handler);
         let client = open_client(cfg).await?;
         Ok(TestClient::new(client, rx))
     }

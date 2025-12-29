@@ -1,6 +1,6 @@
 use std::sync::{Arc, OnceLock};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bytes::{Bytes, BytesMut};
 use jni::{
     JNIEnv,
@@ -17,14 +17,24 @@ use crate::rex_handler::JavaHandler;
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
-#[allow(clippy::expect_used)]
-fn get_runtime() -> &'static Runtime {
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create Tokio runtime")
-    })
+fn get_runtime() -> Result<&'static Runtime> {
+    RUNTIME
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("Tokio Runtime is not initialized"))
+}
+
+fn init_runtime() -> Result<()> {
+    if RUNTIME.get().is_some() {
+        return Ok(());
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("Failed to build Tokio runtime")?;
+
+    let _ = RUNTIME.set(runtime);
+    Ok(())
 }
 
 #[unsafe(no_mangle)]
@@ -35,16 +45,22 @@ pub extern "system" fn Java_com_rex4j_jni_RexNative_init(
     handler_obj: JObject,
 ) -> jlong {
     if let Err(e) = RexGlobalCache::init(&mut env) {
-        error!("Failed to initialize cache: {}", e);
-        let _ = throw_exception(&mut env, &format!("Cache init failed: {}", e));
+        error!("Failed to initialize cache: {:#}", e);
+        let _ = throw_exception(&mut env, &format!("Cache init failed: {:#}", e));
+        return 0;
+    }
+
+    if let Err(e) = init_runtime() {
+        error!("Failed to initialize runtime: {:#}", e);
+        let _ = throw_exception(&mut env, &format!("Runtime init failed: {:#}", e));
         return 0;
     }
 
     match init_internal(&mut env, &config_obj, &handler_obj) {
         Ok(handle) => handle,
         Err(e) => {
-            error!("Init failed: {}", e);
-            let _ = throw_exception(&mut env, &format!("Init failed: {}", e));
+            error!("Init failed: {:#}", e);
+            let _ = throw_exception(&mut env, &format!("Init failed: {:#}", e));
             0
         }
     }
@@ -130,14 +146,6 @@ fn init_internal(env: &mut JNIEnv, config_obj: &JObject, handler_obj: &JObject) 
         )?
         .i()? as u32;
 
-    let read_buffer_size = env
-        .get_field_unchecked(
-            config_obj,
-            cache.config.read_buffer_size,
-            jni::signature::ReturnType::Primitive(jni::signature::Primitive::Int),
-        )?
-        .i()? as usize;
-
     let max_buffer_size = env
         .get_field_unchecked(
             config_obj,
@@ -159,16 +167,15 @@ fn init_internal(env: &mut JNIEnv, config_obj: &JObject, handler_obj: &JObject) 
 
     let handler = JavaHandler::new(env, handler_obj, &client_obj)?;
 
-    let mut config = RexClientConfig::new(protocol, server_addr, title_str, handler.clone());
+    let mut config = RexClientConfig::new(protocol, server_addr, &title_str, handler.clone());
     config.idle_timeout = idle_timeout;
     config.pong_wait = pong_wait;
     config.max_reconnect_attempts = max_reconnect;
-    config.read_buffer_size = read_buffer_size;
     config.max_buffer_size = max_buffer_size;
 
     info!("Opening client with config: {:?}", config.server_addr);
 
-    let client = get_runtime().block_on(open_client(config))?;
+    let client = get_runtime()?.block_on(open_client(config))?;
 
     info!("Client opened successfully");
 
@@ -191,8 +198,8 @@ pub extern "system" fn Java_com_rex4j_jni_RexNative_send(
     data_obj: JObject,
 ) {
     if let Err(e) = send_internal(&mut env, client_handle, &data_obj) {
-        error!("Send failed: {}", e);
-        let _ = throw_exception(&mut env, &format!("Send failed: {}", e));
+        error!("Send failed: {:#}", e);
+        let _ = throw_exception(&mut env, &format!("Send failed: {:#}", e));
     }
 }
 
@@ -257,7 +264,7 @@ fn send_internal(env: &mut JNIEnv, client_handle: jlong, data_obj: &JObject) -> 
         .data(data_bytesmut)
         .build();
 
-    get_runtime().block_on(client.send_data(&mut rex_data))?;
+    get_runtime()?.block_on(client.send_data(&mut rex_data))?;
 
     Ok(())
 }
@@ -274,14 +281,7 @@ pub extern "system" fn Java_com_rex4j_jni_RexNative_getConnectionState(
 
     let client = unsafe { &*(client_handle as *const Arc<dyn RexClientTrait>) };
 
-    let state = get_runtime().block_on(client.get_connection_state());
-
-    match state {
-        rex_client::ConnectionState::Disconnected => 0,
-        rex_client::ConnectionState::Connecting => 1,
-        rex_client::ConnectionState::Connected => 2,
-        rex_client::ConnectionState::Reconnecting => 3,
-    }
+    client.get_connection_state() as jint
 }
 
 #[unsafe(no_mangle)]
@@ -298,9 +298,15 @@ pub extern "system" fn Java_com_rex4j_jni_RexNative_close(
 
     let client = unsafe { Box::from_raw(client_handle as *mut Arc<dyn RexClientTrait>) };
 
-    get_runtime().block_on(client.close());
-
-    info!("Client closed");
+    match get_runtime() {
+        Ok(rt) => {
+            rt.block_on(client.close());
+            info!("Client closed");
+        }
+        Err(e) => {
+            error!("Runtime missing during close, skipped async close: {:#}", e);
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -311,8 +317,8 @@ pub extern "system" fn Java_com_rex4j_jni_RexNative_registerTitle(
     title: JString,
 ) {
     if let Err(e) = register_title_internal(&mut env, client_handle, &title) {
-        error!("Register title failed: {}", e);
-        let _ = throw_exception(&mut env, &format!("Register title failed: {}", e));
+        error!("Register title failed: {:#}", e);
+        let _ = throw_exception(&mut env, &format!("Register title failed: {:#}", e));
     }
 }
 
@@ -328,7 +334,7 @@ fn register_title_internal(env: &mut JNIEnv, client_handle: jlong, title: &JStri
         .data_from_string(title_str)
         .build();
 
-    get_runtime().block_on(client.send_data(&mut data))?;
+    get_runtime()?.block_on(client.send_data(&mut data))?;
 
     Ok(())
 }
@@ -341,8 +347,8 @@ pub extern "system" fn Java_com_rex4j_jni_RexNative_deleteTitle(
     title: JString,
 ) {
     if let Err(e) = delete_title_internal(&mut env, client_handle, &title) {
-        error!("Delete title failed: {}", e);
-        let _ = throw_exception(&mut env, &format!("Delete title failed: {}", e));
+        error!("Delete title failed: {:#}", e);
+        let _ = throw_exception(&mut env, &format!("Delete title failed: {:#}", e));
     }
 }
 
@@ -358,7 +364,7 @@ fn delete_title_internal(env: &mut JNIEnv, client_handle: jlong, title: &JString
         .data_from_string(title_str)
         .build();
 
-    get_runtime().block_on(client.send_data(&mut data))?;
+    get_runtime()?.block_on(client.send_data(&mut data))?;
 
     Ok(())
 }
@@ -372,8 +378,8 @@ pub extern "system" fn Java_com_rex4j_jni_RexNative_getClientId(
     match get_client_id_internal(&mut env, client_handle) {
         Ok(arr) => arr,
         Err(e) => {
-            error!("Get client ID failed: {}", e);
-            let _ = throw_exception(&mut env, &format!("Get client ID failed: {}", e));
+            error!("Get client ID failed: {:#}", e);
+            let _ = throw_exception(&mut env, &format!("Get client ID failed: {:#}", e));
             JObject::null().into_raw()
         }
     }

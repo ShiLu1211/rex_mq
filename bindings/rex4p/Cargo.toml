@@ -10,7 +10,20 @@ crate-type = ["cdylib"]
 [lints]
 workspace = true
 
+
+[features]
+default = ["sync"]
+sync = []
+async = ["dep:pyo3-async-runtimes"]
+
+
 [dependencies]
 rex-core = { path = "../../crates/rex-core" }
 rex-client = { path = "../../crates/rex-client" }
-pyo3 = { version = "0.27", features = ["abi3-py39", "abi3"] }
+pyo3.workspace = true
+pyo3-async-runtimes = { workspace = true, optional = true }
+tokio.workspace = true
+anyhow.workspace = true
+bytes.workspace = true
+async-trait.workspace = true
+kanal.workspace = true

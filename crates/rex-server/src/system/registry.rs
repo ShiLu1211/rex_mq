@@ -1,9 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
-use dashmap::{DashMap, DashSet};
+use ahash::RandomState;
+use dashmap::DashMap;
 use rand::seq::IteratorRandom;
-use rex_client::RexClientInner;
-use rex_core::utils::now_secs;
+use rex_core::{RexClientInner, utils::now_secs};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
@@ -11,26 +11,27 @@ use crate::RexSystemConfig;
 
 pub struct RexSystem {
     pub config: RexSystemConfig,
-    id2client: DashMap<u128, Arc<RexClientInner>>,
-    title2ids: DashMap<String, DashSet<u128>>,
+    id2client: DashMap<u128, Arc<RexClientInner>, RandomState>,
+    title2clients: DashMap<String, Vec<Arc<RexClientInner>>, RandomState>,
     shutdown_tx: Arc<broadcast::Sender<()>>,
 }
 
 impl RexSystem {
     pub fn new(config: RexSystemConfig) -> Arc<Self> {
         let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1);
+
         let system = Arc::new(Self {
             config,
-            id2client: DashMap::new(),
-            title2ids: DashMap::new(),
+            id2client: DashMap::with_hasher(RandomState::new()),
+            title2clients: DashMap::with_hasher(RandomState::new()),
             shutdown_tx: Arc::new(shutdown_tx),
         });
 
         tokio::spawn({
             let system_clone = system.clone();
             async move {
-                let check_interval = Duration::from_secs(system_clone.config.check_interval); // 检查频率
-                let client_timeout = system_clone.config.client_timeout; // 客户端超时时间（秒）
+                let check_interval = Duration::from_secs(system_clone.config.check_interval);
+                let client_timeout = system_clone.config.client_timeout;
 
                 loop {
                     tokio::select! {
@@ -49,66 +50,80 @@ impl RexSystem {
         system
     }
 
+    /* ---------------- client lifecycle ---------------- */
+
     pub async fn add_client(&self, client: Arc<RexClientInner>) {
-        let id = client.id().await;
+        let id = client.id();
         self.id2client.insert(id, client.clone());
 
-        for title in client.title_list() {
-            self.title2ids
-                .entry(title.to_string())
-                .or_default()
-                .insert(id);
+        for title in client.title_iter() {
+            let mut clients = self.title2clients.entry(title).or_default();
+            // 避免重复添加
+            if !clients.iter().any(|c| c.id() == id) {
+                clients.push(client.clone());
+            }
         }
     }
 
     pub async fn remove_client(&self, client_id: u128) {
-        if let Some((_id, client)) = self.id2client.remove(&client_id) {
-            for title in client.title_list() {
-                if let Some(clients) = self.title2ids.get_mut(&title) {
-                    clients.remove(&client_id);
+        let client = match self.id2client.remove(&client_id) {
+            Some((_id, client)) => client,
+            None => return,
+        };
+
+        for title in client.title_iter() {
+            if let Some(mut clients) = self.title2clients.get_mut(&title) {
+                clients.retain(|c| c.id() != client_id);
+                if clients.is_empty() {
+                    drop(clients);
+                    self.title2clients.remove(&title);
                 }
             }
-            if let Err(e) = client.close().await {
-                warn!("close client [{:032X}] error: {}", client_id, e);
-            } else {
-                info!("client [{:032X}] removed", client_id);
-            }
+        }
+
+        if let Err(e) = client.close().await {
+            warn!("close client [{:032X}] error: {}", client_id, e);
+        } else {
+            info!("client [{:032X}] removed", client_id);
         }
     }
 
     pub fn register_title(&self, client_id: u128, title: &str) {
-        if let Some(client) = self.id2client.get(&client_id) {
-            // 更新 client 自身的 title 列表
-            client.insert_title(title.to_string());
+        let Some(client) = self.id2client.get(&client_id) else {
+            return;
+        };
 
-            // 更新系统的映射
-            self.title2ids
-                .entry(title.to_string())
-                .or_default()
-                .insert(client_id);
+        client.insert_title(title);
+
+        let mut clients = self.title2clients.entry(title.to_string()).or_default();
+        // 避免重复添加
+        if !clients.iter().any(|c| c.id() == client_id) {
+            clients.push(client.clone());
         }
     }
 
     pub fn unregister_title(&self, client_id: u128, title: &str) {
-        if let Some(client) = self.id2client.get(&client_id) {
-            // 更新 client 自身的 title 列表
-            client.remove_title(title);
+        let Some(client) = self.id2client.get(&client_id) else {
+            return;
+        };
 
-            // 更新系统的映射
-            if let Some(clients) = self.title2ids.get_mut(title) {
-                clients.remove(&client_id);
-                if clients.is_empty() {
-                    // 没有 client 了，就把这个 title 清理掉
-                    self.title2ids.remove(title);
-                }
+        client.remove_title(title);
+
+        if let Some(mut clients) = self.title2clients.get_mut(title) {
+            clients.retain(|c| c.id() != client_id);
+            if clients.is_empty() {
+                drop(clients);
+                self.title2clients.remove(title);
             }
         }
     }
 
+    /* ---------------- query ---------------- */
+
     pub fn find_all(&self) -> Vec<Arc<RexClientInner>> {
         self.id2client
             .iter()
-            .map(|client| client.value().clone())
+            .map(|entry| entry.value().clone())
             .collect()
     }
 
@@ -117,15 +132,15 @@ impl RexSystem {
         title: &str,
         exclude: Option<u128>,
     ) -> Vec<Arc<RexClientInner>> {
-        if let Some(clients) = self.title2ids.get(title) {
-            clients
-                .iter()
-                .filter(|id| exclude.is_none_or(|ex| **id != ex)) // 如果 exclude=None 就不过滤
-                .filter_map(|id| self.id2client.get(&id).as_deref().cloned())
-                .collect()
-        } else {
-            vec![]
-        }
+        let Some(clients) = self.title2clients.get(title) else {
+            return Vec::new();
+        };
+
+        clients
+            .iter()
+            .filter(|c| exclude != Some(c.id()))
+            .cloned()
+            .collect()
     }
 
     pub fn find_one_by_title(
@@ -133,75 +148,75 @@ impl RexSystem {
         title: &str,
         exclude: Option<u128>,
     ) -> Option<Arc<RexClientInner>> {
-        if let Some(clients) = self.title2ids.get(title) {
-            let mut rng = rand::rng();
-            if let Some(id) = clients
-                .iter()
-                .filter(|id| exclude.is_none_or(|ex| **id != ex))
-                .choose(&mut rng)
-            {
-                return self.id2client.get(&id).as_deref().cloned();
-            }
-        }
+        let clients = self.title2clients.get(title)?;
+        let mut rng = rand::rng();
 
-        None
+        clients
+            .iter()
+            .filter(|c| exclude != Some(c.id()))
+            .choose(&mut rng)
+            .cloned()
     }
 
     pub fn find_some_by_id(&self, id: u128) -> Option<Arc<RexClientInner>> {
         self.id2client.get(&id).as_deref().cloned()
     }
 
+    /* ---------------- shutdown ---------------- */
+
     pub async fn close(&self) {
         let _ = self.shutdown_tx.send(());
 
-        for client in self.id2client.iter() {
-            if let Err(e) = client.close().await {
+        for entry in self.id2client.iter() {
+            if let Err(e) = entry.value().close().await {
                 warn!("close client error: {}", e);
             }
         }
 
         self.id2client.clear();
-        self.title2ids.clear();
+        self.title2clients.clear();
     }
 }
+
+/* ---------------- background cleanup ---------------- */
 
 impl RexSystem {
     async fn cleanup_inactive_clients(&self, timeout_secs: u64) {
         let now = now_secs();
         let mut to_remove = Vec::new();
 
-        // Step 1: 找出所有超时的 client
         for entry in self.id2client.iter() {
             let client = entry.value();
-            let last_active = client.last_recv();
-
-            if now - last_active > timeout_secs {
+            if now - client.last_recv() > timeout_secs {
                 to_remove.push(*entry.key());
             }
         }
 
-        // Step 2: 异步逐个删除
         for client_id in to_remove {
-            if let Some((_id, client)) = self.id2client.remove(&client_id) {
-                warn!(
-                    "Client [{:032X}] (addr: {}) timed out, removing...",
-                    client_id,
-                    client.local_addr()
-                );
+            let client = match self.id2client.remove(&client_id) {
+                Some((_id, client)) => client,
+                None => continue,
+            };
 
-                if let Err(e) = client.close().await {
-                    warn!("close client [{:032X}] error: {}", client_id, e);
-                } else {
-                    info!("client [{:032X}] removed", client_id);
-                }
+            warn!(
+                "Client [{:032X}] (addr: {}) timed out, removing...",
+                client_id,
+                client.local_addr()
+            );
 
-                // 同步清理 title2ids 映射
-                for title in client.title_list() {
-                    if let Some(clients) = self.title2ids.get_mut(&title) {
-                        clients.remove(&client_id);
-                        if clients.is_empty() {
-                            self.title2ids.remove(&title);
-                        }
+            if let Err(e) = client.close().await {
+                warn!("close client [{:032X}] error: {}", client_id, e);
+            } else {
+                info!("client [{:032X}] removed", client_id);
+            }
+
+            // 清理 title2clients
+            for title in client.title_iter() {
+                if let Some(mut clients) = self.title2clients.get_mut(&title) {
+                    clients.retain(|c| c.id() != client_id);
+                    if clients.is_empty() {
+                        drop(clients);
+                        self.title2clients.remove(&title);
                     }
                 }
             }

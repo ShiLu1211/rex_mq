@@ -1,4 +1,5 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+#[cfg(not(feature = "skip_crc"))]
 use crc32fast::Hasher as Crc32Hasher;
 
 use super::{RetCode, RexCommand};
@@ -183,8 +184,10 @@ impl ExtCodec {
 }
 
 /// CRC32 校验工具
+#[cfg(not(feature = "skip_crc"))]
 pub struct Crc32;
 
+#[cfg(not(feature = "skip_crc"))]
 impl Crc32 {
     /// 计算 CRC32
     #[inline]
@@ -245,7 +248,10 @@ impl MessageCodec {
         let ext_len = ext_bytes.as_ref().map_or(0, |b| b.len());
 
         // 计算 CRC
+        #[cfg(not(feature = "skip_crc"))]
         let crc = Crc32::compute(ext_bytes.as_ref().map_or(&[], |b| &b[..]), data);
+        #[cfg(feature = "skip_crc")]
+        let crc = 0;
 
         // 预分配精确大小
         let total_len = FIXED_HEADER_LEN + ext_len + data.len() + 4;
@@ -492,6 +498,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "skip_crc"))]
     fn test_crc_verification() {
         let data = b"test data";
         let ext = b"";

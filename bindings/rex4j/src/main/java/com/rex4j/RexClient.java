@@ -10,7 +10,10 @@ public class RexClient implements AutoCloseable {
   // 指向 Rust Arc<dyn RexClientTrait> 的指针
   private volatile long client;
   private final RexConfig config;
+
+  @SuppressWarnings("unused")
   private final RexHandler handler;
+
   private final AtomicBoolean closed = new AtomicBoolean(false);
 
   /**

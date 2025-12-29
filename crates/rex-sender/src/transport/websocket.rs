@@ -2,13 +2,12 @@ use anyhow::Result;
 use bytes::BytesMut;
 use futures_util::SinkExt;
 use futures_util::stream::SplitSink;
+use rex_core::RexSenderTrait;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::RexSenderTrait;
-
 // 支持服务端（TcpStream）和客户端（MaybeTlsStream）
-pub enum WsSink {
+enum WsSink {
     Server(SplitSink<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>, Message>),
     Client(
         SplitSink<

@@ -139,7 +139,6 @@ pub struct RexConfigCache {
     pub idle_timeout: JFieldID,
     pub pong_wait: JFieldID,
     pub max_reconnect_attempts: JFieldID,
-    pub read_buffer_size: JFieldID,
     pub max_buffer_size: JFieldID,
     pub protocol_value: JFieldID,
 }
@@ -157,7 +156,6 @@ impl RexConfigCache {
             idle_timeout: env.get_field_id(&cls, "idleTimeout", "J")?,
             pong_wait: env.get_field_id(&cls, "pongWait", "J")?,
             max_reconnect_attempts: env.get_field_id(&cls, "maxReconnectAttempts", "I")?,
-            read_buffer_size: env.get_field_id(&cls, "readBufferSize", "I")?,
             max_buffer_size: env.get_field_id(&cls, "maxBufferSize", "I")?,
             protocol_value: env.get_field_id(&protocol_cls, "value", "I")?,
         })

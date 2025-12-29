@@ -1,30 +1,30 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicU8, AtomicU64, Ordering},
 };
 use std::time::Duration;
 
 use anyhow::Result;
 use bytes::BytesMut;
+use futures_util::StreamExt;
 use rex_core::{
-    RexCommand, RexData,
+    RexClientInner, RexCommand, RexData,
     utils::{new_uuid, now_secs},
 };
+use rex_sender::WebSocketSender;
 use tokio::{
-    io::AsyncReadExt,
-    net::{TcpSocket, tcp::OwnedReadHalf},
     sync::{RwLock, broadcast},
     time::sleep,
 };
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
-use super::TcpSender;
-use crate::{ConnectionState, RexClientConfig, RexClientInner, RexClientTrait};
+use crate::{ConnectionState, RexClientConfig, RexClientTrait};
 
-pub struct TcpClient {
+pub struct WebSocketClient {
     // connection
     client: RwLock<Option<Arc<RexClientInner>>>,
-    connection_state: Arc<RwLock<ConnectionState>>,
+    connection_state: AtomicU8,
 
     // config
     config: RexClientConfig,
@@ -35,9 +35,9 @@ pub struct TcpClient {
 }
 
 #[async_trait::async_trait]
-impl RexClientTrait for TcpClient {
+impl RexClientTrait for WebSocketClient {
     async fn send_data(&self, data: &mut RexData) -> Result<()> {
-        let state = *self.connection_state.read().await;
+        let state = self.connection_state();
 
         if state != ConnectionState::Connected {
             return Err(anyhow::anyhow!("Client not connected (state: {:?})", state));
@@ -46,12 +46,12 @@ impl RexClientTrait for TcpClient {
         if let Some(client) = self.get_client().await {
             self.send_data_with_client(&client, data).await
         } else {
-            Err(anyhow::anyhow!("No active TCP connection"))
+            Err(anyhow::anyhow!("No active WebSocket connection"))
         }
     }
 
     async fn close(&self) {
-        info!("Shutting down TcpClient...");
+        info!("Shutting down WebSocketClient...");
 
         // 发送关闭信号
         let _ = self.shutdown_tx.send(());
@@ -64,22 +64,23 @@ impl RexClientTrait for TcpClient {
         }
 
         // 更新状态
-        *self.connection_state.write().await = ConnectionState::Disconnected;
+        self.set_connection_state(ConnectionState::Disconnected);
 
-        info!("TcpClient shutdown complete");
+        info!("WebSocketClient shutdown complete");
     }
 
-    async fn get_connection_state(&self) -> ConnectionState {
-        *self.connection_state.read().await
+    fn get_connection_state(&self) -> ConnectionState {
+        self.connection_state()
     }
 }
 
-impl TcpClient {
+impl WebSocketClient {
     pub async fn open(config: RexClientConfig) -> Result<Arc<dyn RexClientTrait>> {
         let (shutdown_tx, _) = broadcast::channel(4);
+
         let client = Arc::new(Self {
             client: RwLock::new(None),
-            connection_state: Arc::new(RwLock::new(ConnectionState::Disconnected)),
+            connection_state: AtomicU8::new(ConnectionState::Disconnected as u8),
             config,
             shutdown_tx,
             last_heartbeat: AtomicU64::new(now_secs()),
@@ -123,6 +124,16 @@ impl TcpClient {
         Ok(client)
     }
 
+    #[inline(always)]
+    fn connection_state(&self) -> ConnectionState {
+        self.connection_state.load(Ordering::Relaxed).into()
+    }
+
+    #[inline(always)]
+    fn set_connection_state(&self, state: ConnectionState) {
+        self.connection_state.store(state as u8, Ordering::Relaxed);
+    }
+
     async fn connect_with_retry(self: &Arc<Self>) -> Result<()> {
         let mut attempts = 0;
         let mut backoff = 1;
@@ -156,34 +167,28 @@ impl TcpClient {
     }
 
     async fn connect(self: &Arc<Self>) -> Result<()> {
-        *self.connection_state.write().await = ConnectionState::Connecting;
+        self.set_connection_state(ConnectionState::Connecting);
 
-        info!("Connecting TCP to {}", self.config.server_addr);
+        info!("Connecting WebSocket to {}", self.config.server_addr);
 
-        let socket = if self.config.server_addr.is_ipv4() {
-            TcpSocket::new_v4()?
-        } else {
-            TcpSocket::new_v6()?
-        };
-        socket.set_nodelay(true)?;
+        let url = format!("ws://{}", self.config.server_addr);
+        let (ws_stream, _) = connect_async(&url).await?;
 
-        let stream = socket.connect(self.config.server_addr).await?;
-        let local_addr = stream.local_addr()?;
-        let (rx, tx) = stream.into_split();
-
-        let sender = Arc::new(TcpSender::new(tx));
+        let (sink, stream) = ws_stream.split();
+        let sender = Arc::new(WebSocketSender::new_client(sink));
 
         // 创建或更新客户端
         {
             let mut client_guard = self.client.write().await;
             if let Some(existing_client) = client_guard.as_ref() {
-                existing_client.set_sender(sender.clone()).await;
+                existing_client.set_sender(sender.clone());
             } else {
                 let id = new_uuid();
+                let local_addr = "0.0.0.0:0".parse()?;
                 let new_client = Arc::new(RexClientInner::new(
                     id,
                     local_addr,
-                    &self.config.title().await,
+                    self.config.title(),
                     sender.clone(),
                 ));
                 *client_guard = Some(new_client);
@@ -196,7 +201,7 @@ impl TcpClient {
             let mut shutdown_rx = this.shutdown_tx.subscribe();
             async move {
                 tokio::select! {
-                    _ = this.receive_data_task(rx) => {
+                    _ = this.receive_data_task(stream) => {
                         warn!("Data receiving task ended");
                     }
                     _ = shutdown_rx.recv() => {
@@ -205,7 +210,7 @@ impl TcpClient {
                 }
 
                 // 标记连接断开
-                *this.connection_state.write().await = ConnectionState::Disconnected;
+                this.set_connection_state(ConnectionState::Disconnected);
             }
         });
 
@@ -213,28 +218,28 @@ impl TcpClient {
         self.login().await?;
 
         // 更新连接状态
-        *self.connection_state.write().await = ConnectionState::Connected;
+        self.set_connection_state(ConnectionState::Connected);
         self.last_heartbeat.store(now_secs(), Ordering::Relaxed);
 
         Ok(())
     }
 
-    async fn receive_data_task(self: &Arc<Self>, mut rx: OwnedReadHalf) {
+    async fn receive_data_task(
+        self: &Arc<Self>,
+        mut stream: futures_util::stream::SplitStream<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+        >,
+    ) {
         let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
-        let mut temp_buf = vec![0u8; self.config.read_buffer_size];
-        let mut total_read = 0;
 
         loop {
-            match rx.read(&mut temp_buf).await {
-                Ok(0) => {
-                    info!("Peer closed connection gracefully");
-                    break;
-                }
-                Ok(n) => {
-                    total_read += n;
-                    debug!("Buffered read: {} bytes (total: {})", n, total_read);
+            match stream.next().await {
+                Some(Ok(Message::Binary(data))) => {
+                    debug!("Buffered read: {} bytes", data.len());
 
-                    buffer.extend_from_slice(&temp_buf[..n]);
+                    buffer.extend_from_slice(&data);
 
                     // 尝试解析完整的数据包
                     loop {
@@ -265,8 +270,23 @@ impl TcpClient {
                         buffer.clear();
                     }
                 }
-                Err(e) => {
-                    warn!("TCP read error: {}", e);
+                Some(Ok(Message::Close(_))) => {
+                    info!("WebSocket connection closed by server");
+                    break;
+                }
+                Some(Ok(Message::Ping(_))) => {
+                    // WebSocket 库会自动处理 pong
+                    debug!("Received ping from server");
+                }
+                Some(Ok(_)) => {
+                    // 忽略其他类型的消息
+                }
+                Some(Err(e)) => {
+                    warn!("WebSocket read error: {}", e);
+                    break;
+                }
+                None => {
+                    info!("WebSocket stream ended");
                     break;
                 }
             }
@@ -279,16 +299,16 @@ impl TcpClient {
         loop {
             sleep(check_interval).await;
 
-            let current_state = *self.connection_state.read().await;
+            let current_state = self.connection_state();
 
             match current_state {
                 ConnectionState::Disconnected => {
                     info!("Connection lost, attempting to reconnect...");
-                    *self.connection_state.write().await = ConnectionState::Reconnecting;
+                    self.set_connection_state(ConnectionState::Reconnecting);
 
                     if let Err(e) = self.connect_with_retry().await {
                         warn!("Reconnection failed: {}", e);
-                        *self.connection_state.write().await = ConnectionState::Disconnected;
+                        self.set_connection_state(ConnectionState::Disconnected);
                     }
                 }
                 ConnectionState::Reconnecting => {
@@ -307,7 +327,7 @@ impl TcpClient {
         loop {
             sleep(heartbeat_interval).await;
 
-            if *self.connection_state.read().await != ConnectionState::Connected {
+            if self.connection_state() != ConnectionState::Connected {
                 continue;
             }
 
@@ -329,7 +349,7 @@ impl TcpClient {
 
             if let Err(e) = client.send_buf(&ping).await {
                 warn!("Heartbeat send failed: {}", e);
-                *self.connection_state.write().await = ConnectionState::Disconnected;
+                self.set_connection_state(ConnectionState::Disconnected);
                 continue;
             }
 
@@ -340,7 +360,7 @@ impl TcpClient {
 
             if after_ping <= before_ping {
                 warn!("Heartbeat timeout, marking connection as lost");
-                *self.connection_state.write().await = ConnectionState::Disconnected;
+                self.set_connection_state(ConnectionState::Disconnected);
             } else {
                 debug!("Heartbeat successful");
                 self.last_heartbeat.store(now_secs(), Ordering::Relaxed);
@@ -351,7 +371,7 @@ impl TcpClient {
     async fn login(self: &Arc<Self>) -> Result<()> {
         if let Some(client) = self.get_client().await {
             let mut data = RexData::builder(RexCommand::Login)
-                .data_from_string(self.config.title().await.clone())
+                .data_from_string(self.config.title())
                 .build();
             self.send_data_with_client(&client, &mut data).await?;
             info!("Login request sent");
@@ -375,21 +395,21 @@ impl TcpClient {
 
         match data.header().command() {
             RexCommand::LoginReturn => {
-                info!("TCP login successful");
+                info!("WebSocket login successful");
                 if let Err(e) = handler.login_ok(client.clone(), data).await {
                     warn!("Error in login_ok handler: {}", e);
                 }
             }
             RexCommand::RegTitleReturn => {
                 let title = data.data_as_string_lossy();
-                client.insert_title(title.clone());
-                self.config.set_title(client.title_str()).await;
+                client.insert_title(&title);
+                self.config.set_title(&client.title_str());
                 info!("Title registered: {}", title);
             }
             RexCommand::DelTitleReturn => {
                 let title = data.data_as_string_lossy();
                 client.remove_title(&title);
-                self.config.set_title(client.title_str()).await;
+                self.config.set_title(&client.title_str());
                 info!("Title removed: {}", title);
             }
             RexCommand::Title
@@ -420,11 +440,11 @@ impl TcpClient {
         client: &Arc<RexClientInner>,
         data: &mut RexData,
     ) -> Result<()> {
-        let client_id = client.id().await;
+        let client_id = client.id();
         data.set_source(client_id);
         client.send_buf(&data.serialize()).await?;
         debug!(
-            "TCP data sent successfully: command={:?}",
+            "WebSocket data sent successfully: command={:?}",
             data.header().command()
         );
         Ok(())

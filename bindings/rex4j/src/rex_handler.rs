@@ -7,8 +7,7 @@ use jni::{
     objects::{GlobalRef, JObject, JValue},
 };
 use rex_client::RexClientHandlerTrait;
-use rex_client::RexClientInner;
-use rex_core::{RexCommand, RexData};
+use rex_core::{RexClientInner, RexCommand, RexData};
 use tokio::sync::mpsc;
 use tracing::warn;
 

@@ -1,6 +1,7 @@
 use std::{
+    hint::spin_loop,
     net::SocketAddr,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
 
@@ -9,13 +10,12 @@ use bytes::{Bytes, BytesMut};
 use clap::Parser;
 use hdrhistogram::Histogram;
 use rand::{Rng, distr::Alphanumeric, rng};
-use rex_client::{RexClientConfig, RexClientHandlerTrait, RexClientInner, open_client};
+use rex_client::{RexClientConfig, RexClientHandlerTrait, open_client};
 use rex_core::{
-    Protocol, RexCommand, RexData,
+    Protocol, RexClientInner, RexCommand, RexData,
     utils::{now_micros, timestamp, timestamp_data},
 };
 use rex_server::{RexServerConfig, RexSystem, RexSystemConfig, open_server};
-use tokio::{sync::Mutex, time::sleep};
 
 #[derive(clap::Parser)]
 #[command(
@@ -104,7 +104,7 @@ pub async fn start_server(args: ServerArgs) -> Result<()> {
     let _server = open_server(system, config).await?;
 
     loop {
-        sleep(Duration::from_millis(1000)).await;
+        tokio::time::sleep(Duration::from_millis(1000)).await;
     }
 }
 
@@ -116,7 +116,7 @@ pub async fn start_recv(args: RecvArgs) -> Result<()> {
     let config = RexClientConfig::new(
         protocol,
         address,
-        args.titles,
+        &args.titles,
         Arc::new(RcvClientHandler::new(args.bench)),
     );
     let _client = open_client(config).await?;
@@ -125,7 +125,7 @@ pub async fn start_recv(args: RecvArgs) -> Result<()> {
         disp_metric().await;
     } else {
         loop {
-            sleep(Duration::from_millis(1000)).await;
+            tokio::time::sleep(Duration::from_millis(1000)).await;
         }
     }
     Ok(())
@@ -136,12 +136,7 @@ pub async fn start_bench(args: BenchArgs) -> Result<()> {
     let protocol = Protocol::from(args.protocol.as_str())
         .ok_or_else(|| anyhow!("invalid protocol: {}", args.protocol))?;
 
-    let config = RexClientConfig::new(
-        protocol,
-        address,
-        "".to_string(),
-        Arc::new(SndClientHandler),
-    );
+    let config = RexClientConfig::new(protocol, address, "", Arc::new(SndClientHandler));
     let client = open_client(config).await?;
 
     let command = match args.typ.as_str() {
@@ -177,10 +172,8 @@ pub async fn start_bench(args: BenchArgs) -> Result<()> {
             eprintln!("send data error: {}", e);
         }
 
-        loop {
-            if now.elapsed().as_micros() > args.interval {
-                break;
-            }
+        while now.elapsed().as_micros() < args.interval {
+            spin_loop();
         }
     }
 }
@@ -207,33 +200,52 @@ async fn main() {
     }
 }
 
-#[allow(clippy::expect_used)]
-static METRIC: LazyLock<Mutex<Histogram<u64>>> = LazyLock::new(|| {
-    Mutex::new(Histogram::<u64>::new(3).expect("failed to create histogram metric"))
-});
+static METRIC: LazyLock<Mutex<Option<Histogram<u64>>>> =
+    LazyLock::new(|| match Histogram::<u64>::new(3) {
+        Ok(hist) => Mutex::new(Some(hist)),
+        Err(e) => {
+            eprintln!("Failed to create histogram metric: {}", e);
+            Mutex::new(None)
+        }
+    });
 
 pub async fn disp_metric() {
     loop {
-        sleep(Duration::from_secs(1)).await;
-        let hist = {
-            let record = METRIC.lock().await;
-            record.clone()
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let hist_clone = {
+            match METRIC.lock() {
+                Ok(mut guard) => {
+                    if let Some(ref mut hist) = *guard {
+                        let cloned = hist.clone();
+                        hist.reset();
+                        Some(cloned)
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to lock METRIC: {}", e);
+                    None
+                }
+            }
         };
-        println!(
-            "tps:{} mean:{:.3} min:{} p50:{} p90:{} p95:{} p98:{} p99:{} max:{}",
-            hist.len(),
-            hist.mean(),
-            hist.min(),
-            hist.value_at_quantile(0.50),
-            hist.value_at_quantile(0.90),
-            hist.value_at_quantile(0.95),
-            hist.value_at_quantile(0.98),
-            hist.value_at_quantile(0.99),
-            hist.max(),
-        );
-        {
-            let mut hist = METRIC.lock().await;
-            hist.reset();
+
+        if let Some(hist) = hist_clone {
+            println!(
+                "tps:{} mean:{:.3} min:{} p50:{} p90:{} p95:{} p98:{} p99:{} max:{}",
+                hist.len(),
+                hist.mean(),
+                hist.min(),
+                hist.value_at_quantile(0.50),
+                hist.value_at_quantile(0.90),
+                hist.value_at_quantile(0.95),
+                hist.value_at_quantile(0.98),
+                hist.value_at_quantile(0.99),
+                hist.max(),
+            );
+        } else {
+            eprintln!("METRIC histogram not available");
         }
     }
 }
@@ -251,7 +263,7 @@ impl RcvClientHandler {
 #[async_trait::async_trait]
 impl RexClientHandlerTrait for RcvClientHandler {
     async fn login_ok(&self, client: Arc<RexClientInner>, _data: RexData) -> Result<()> {
-        println!("recv client login ok: [{:032X}]", client.id().await);
+        println!("recv client login ok: [{:032X}]", client.id());
         Ok(())
     }
 
@@ -271,9 +283,17 @@ impl RexClientHandlerTrait for RcvClientHandler {
                 // 使用 saturating_sub 防止时间回拨崩溃
                 let latency = now.saturating_sub(ts);
 
-                let mut record = METRIC.lock().await;
-                if let Err(e) = record.record(latency as u64) {
-                    eprintln!("record error: {}", e);
+                match METRIC.lock() {
+                    Ok(mut guard) => {
+                        if let Some(ref mut hist) = *guard
+                            && let Err(e) = hist.record(latency as u64)
+                        {
+                            eprintln!("record error: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to lock METRIC: {}", e);
+                    }
                 }
             }
         } else {
@@ -288,7 +308,7 @@ struct SndClientHandler;
 #[async_trait::async_trait]
 impl RexClientHandlerTrait for SndClientHandler {
     async fn login_ok(&self, client: Arc<RexClientInner>, _data: RexData) -> Result<()> {
-        println!("send client login ok: [{:032X}]", client.id().await);
+        println!("send client login ok: [{:032X}]", client.id());
         Ok(())
     }
 

@@ -2,28 +2,26 @@ use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use bytes::BytesMut;
-use futures_util::StreamExt;
-use rex_client::{RexClientInner, WebSocketSender};
-use rex_core::{RexData, utils::new_uuid};
+use rex_core::{RexClientInner, RexData, utils::new_uuid};
+use rex_sender::TcpSender;
 use tokio::{
-    net::{TcpListener, TcpStream},
+    io::AsyncReadExt,
+    net::{TcpListener, TcpStream, tcp::OwnedReadHalf},
     sync::{Semaphore, broadcast},
 };
-use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
 use crate::{RexServerConfig, RexServerTrait, RexSystem, handler::handle};
 
-pub struct WebSocketServer {
+pub struct TcpServer {
     system: Arc<RexSystem>,
     config: RexServerConfig,
     listener: Arc<TcpListener>,
     semaphore: Arc<Semaphore>,
     shutdown_tx: Arc<broadcast::Sender<()>>,
 }
-
 #[async_trait::async_trait]
-impl RexServerTrait for WebSocketServer {
+impl RexServerTrait for TcpServer {
     async fn close(&self) {
         // Send shutdown signal to all tasks
         if let Err(e) = self.shutdown_tx.send(()) {
@@ -34,7 +32,7 @@ impl RexServerTrait for WebSocketServer {
     }
 }
 
-impl WebSocketServer {
+impl TcpServer {
     pub async fn open(
         system: Arc<RexSystem>,
         config: RexServerConfig,
@@ -44,7 +42,7 @@ impl WebSocketServer {
         let semaphore = Arc::new(Semaphore::new(config.max_concurrent_handlers));
 
         let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1 + config.max_concurrent_handlers);
-        let server = Arc::new(WebSocketServer {
+        let server = Arc::new(TcpServer {
             system,
             config,
             listener: Arc::new(listener),
@@ -56,10 +54,10 @@ impl WebSocketServer {
         tokio::spawn({
             let server_ = server.clone();
             async move {
-                info!("Accepting WebSocket connections on {}", addr);
+                info!("Accepting connections on {}", addr);
                 loop {
                     tokio::select! {
-                        Ok((stream, peer_addr)) = server_.listener.accept() => {
+                        Ok((stream, peer_addr)) =  server_.listener.accept() => {
                             server_.clone().handle_connection(stream, peer_addr).await
                         }
                         _ = shutdown_rx.recv() => {
@@ -76,19 +74,14 @@ impl WebSocketServer {
     }
 
     async fn handle_connection(self: Arc<Self>, stream: TcpStream, peer_addr: SocketAddr) {
-        info!("New WebSocket connection from {}", peer_addr);
+        info!("New connection from {}", peer_addr);
 
-        // WebSocket握手
-        let ws_stream = match accept_async(stream).await {
-            Ok(ws) => ws,
-            Err(e) => {
-                warn!("WebSocket handshake failed for {}: {}", peer_addr, e);
-                return;
-            }
-        };
+        if let Err(e) = stream.set_nodelay(true) {
+            warn!("Error setting TCP_NODELAY for {}: {}", peer_addr, e);
+        }
 
-        let (sink, mut stream) = ws_stream.split();
-        let sender = Arc::new(WebSocketSender::new_server(sink));
+        let (reader, writer) = stream.into_split();
+        let sender = Arc::new(TcpSender::new(writer));
         let peer = Arc::new(RexClientInner::new(new_uuid(), peer_addr, "", sender));
 
         let permit = match self.semaphore.clone().acquire_owned().await {
@@ -98,7 +91,6 @@ impl WebSocketServer {
                 return;
             }
         };
-
         // 为每个连接启动处理任务
         tokio::spawn({
             let server_clone = self.clone();
@@ -106,10 +98,10 @@ impl WebSocketServer {
                 let _permit = permit;
 
                 server_clone
-                    .handle_connection_inner(peer.clone(), &mut stream)
+                    .handle_connection_inner(peer.clone(), reader)
                     .await;
 
-                let client_id = peer.id().await;
+                let client_id = peer.id();
                 server_clone.system.remove_client(client_id).await;
 
                 info!("Connection {} closed and cleaned up", peer_addr);
@@ -120,26 +112,25 @@ impl WebSocketServer {
     async fn handle_connection_inner(
         self: &Arc<Self>,
         peer: Arc<RexClientInner>,
-        stream: &mut futures_util::stream::SplitStream<
-            tokio_tungstenite::WebSocketStream<TcpStream>,
-        >,
+        mut reader: OwnedReadHalf,
     ) {
         let peer_addr = peer.local_addr();
-        info!("Handling WebSocket connection: {}", peer_addr);
+        info!("Handling new connection: {}", peer_addr);
 
         let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
+
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
         loop {
             tokio::select! {
-                // 从 WebSocket 流中读取数据
-                result = stream.next() => {
+                // 从 TCP 流中读取数据
+                result = reader.read_buf(&mut buffer) => {
                     match result {
-                        Some(Ok(Message::Binary(data))) => {
-                            // 将读取的数据添加到缓冲区
-                            buffer.extend_from_slice(&data);
-
-                            // 尝试解析完整的数据包
+                        Ok(0) => {
+                            info!("Connection {} closed by client", peer_addr);
+                            break;
+                        }
+                        Ok(_) => {
                             loop {
                                 match RexData::try_deserialize(&mut buffer) {
                                     Ok(Some(mut data)) => {
@@ -175,26 +166,8 @@ impl WebSocketServer {
                                 buffer.clear();
                             }
                         }
-                        Some(Ok(Message::Close(_))) => {
-                            info!("Connection {} closed by client", peer_addr);
-                            break;
-                        }
-                        Some(Ok(Message::Ping(data))) => {
-                            // 自动响应 Pong
-                            if let Err(e) = peer.send_buf(&BytesMut::from(Message::Pong(data).into_data())).await {
-                                warn!("Failed to send pong: {}", e);
-                            }
-                        }
-                        Some(Ok(_)) => {
-                            // 忽略其他类型的消息（Text, Pong等）
-                            debug!("Received non-binary message from {}", peer_addr);
-                        }
-                        Some(Err(e)) => {
-                            info!("Connection {} error: {}", peer_addr, e);
-                            break;
-                        }
-                        None => {
-                            info!("Connection {} stream ended", peer_addr);
+                        Err(e) => {
+                            info!("Connection {} read error: {}", peer_addr, e);
                             break;
                         }
                     }

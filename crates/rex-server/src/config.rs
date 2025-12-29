@@ -10,8 +10,6 @@ pub struct RexServerConfig {
     pub bind_addr: SocketAddr,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    #[serde(default = "default_read_buffer")]
-    pub read_buffer_size: usize,
     #[serde(default = "default_max_buffer")]
     pub max_buffer_size: usize,
     #[serde(default = "default_max_concurrent")]
@@ -20,9 +18,6 @@ pub struct RexServerConfig {
 
 fn default_enabled() -> bool {
     true
-}
-fn default_read_buffer() -> usize {
-    8192
 }
 fn default_max_buffer() -> usize {
     8 * 1024 * 1024
@@ -37,7 +32,6 @@ impl RexServerConfig {
             protocol,
             bind_addr,
             enabled: true,
-            read_buffer_size: 8192,
             max_buffer_size: 8 * 1024 * 1024,
             max_concurrent_handlers: 1000,
         }

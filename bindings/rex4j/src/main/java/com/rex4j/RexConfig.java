@@ -29,7 +29,6 @@ public class RexConfig {
   private long idleTimeout = 10; // 空闲超时（秒）
   private long pongWait = 5; // 心跳响应等待时间（秒）
   private int maxReconnectAttempts = 5; // 最大重连次数
-  private int readBufferSize = 8192; // 读缓冲区大小
   private int maxBufferSize = 8 * 1024 * 1024; // 最大缓冲区大小（8MB）
 
   /**
@@ -87,11 +86,6 @@ public class RexConfig {
       return this;
     }
 
-    public Builder readBufferSize(int size) {
-      config.readBufferSize = size;
-      return this;
-    }
-
     public Builder maxBufferSize(int size) {
       config.maxBufferSize = size;
       return this;
@@ -135,10 +129,6 @@ public class RexConfig {
     return maxReconnectAttempts;
   }
 
-  public int getReadBufferSize() {
-    return readBufferSize;
-  }
-
   public int getMaxBufferSize() {
     return maxBufferSize;
   }
@@ -165,10 +155,6 @@ public class RexConfig {
 
   public void setMaxReconnectAttempts(int maxReconnectAttempts) {
     this.maxReconnectAttempts = maxReconnectAttempts;
-  }
-
-  public void setReadBufferSize(int readBufferSize) {
-    this.readBufferSize = readBufferSize;
   }
 
   public void setMaxBufferSize(int maxBufferSize) {

@@ -1,5 +1,4 @@
 use bytes::{Bytes, BytesMut};
-use std::string::FromUtf8Error;
 
 use super::codec::{DecodedMessage, MessageCodec};
 use super::{RetCode, RexCommand};
@@ -29,34 +28,39 @@ impl RexHeader {
     }
 
     // Getters
-    #[inline]
+    #[inline(always)]
     pub fn command(&self) -> RexCommand {
         self.command
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn source(&self) -> u128 {
         self.source
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn target(&self) -> u128 {
         self.target
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn retcode(&self) -> RetCode {
         self.retcode
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn ext_len(&self) -> usize {
         self.ext_len
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn data_len(&self) -> usize {
         self.data_len
+    }
+
+    #[inline(always)]
+    pub fn is_success(&self) -> bool {
+        self.retcode.is_success()
     }
 
     // Setters
@@ -73,11 +77,6 @@ impl RexHeader {
     #[inline]
     pub fn set_data_len(&mut self, len: usize) {
         self.data_len = len;
-    }
-
-    #[inline]
-    pub fn is_success(&self) -> bool {
-        self.retcode.is_success()
     }
 
     pub fn total_len(&self) -> usize {
@@ -191,44 +190,44 @@ impl RexData {
 
     // === 访问器方法 ===
 
-    #[inline]
+    #[inline(always)]
     pub fn header(&self) -> &RexHeader {
         &self.header
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn data(&self) -> &[u8] {
         &self.data
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn retcode(&self) -> RetCode {
         self.header.retcode
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_success(&self) -> bool {
         self.header.is_success()
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn total_len(&self) -> usize {
         self.header.total_len()
     }
 
     /// 获取 Bytes 克隆（零拷贝 - 引用计数）
-    #[inline]
+    #[inline(always)]
     pub fn data_bytes(&self) -> Bytes {
         self.data.clone()
     }
 
     /// 获取数据切片
-    #[inline]
+    #[inline(always)]
     pub fn data_slice(&self) -> &[u8] {
         &self.data
     }
@@ -271,15 +270,18 @@ impl RexData {
 
     // === 数据处理方法 ===
 
-    pub fn data_as_string(&self) -> Result<String, FromUtf8Error> {
-        String::from_utf8(self.data.to_vec())
+    #[inline]
+    pub fn data_as_str(&self) -> Result<&str, std::str::Utf8Error> {
+        std::str::from_utf8(self.data())
     }
 
-    pub fn data_as_string_lossy(&self) -> String {
-        String::from_utf8_lossy(&self.data).to_string()
+    #[inline]
+    pub fn data_as_string_lossy(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(self.data())
     }
 
     /// 取出数据（零拷贝）
+    #[inline(always)]
     pub fn take_data(self) -> Bytes {
         self.data
     }
@@ -412,7 +414,7 @@ mod tests {
         assert_eq!(deserialized.header().command(), RexCommand::Login);
         assert_eq!(deserialized.header().source(), 100);
         assert_eq!(deserialized.header().target(), 200);
-        assert_eq!(deserialized.data_as_string().unwrap(), "test message");
+        assert_eq!(deserialized.data_as_str().unwrap(), "test message");
         assert!(deserialized.is_success());
         assert_eq!(serialized.len(), 0); // 完全消费
     }
@@ -433,10 +435,7 @@ mod tests {
         assert_eq!(deserialized.title(), Some("Error Message"));
         assert_eq!(deserialized.retcode(), RetCode::AuthFailed);
         assert!(!deserialized.is_success());
-        assert_eq!(
-            deserialized.data_as_string().unwrap(),
-            "Authentication failed"
-        );
+        assert_eq!(deserialized.data_as_str().unwrap(), "Authentication failed");
     }
 
     #[test]
@@ -479,7 +478,7 @@ mod tests {
         let decoded = result.unwrap();
         assert_eq!(decoded.header().command(), RexCommand::Title);
         assert_eq!(decoded.title(), Some("test"));
-        assert_eq!(decoded.data_as_string().unwrap(), "hello");
+        assert_eq!(decoded.data_as_str().unwrap(), "hello");
         assert_eq!(buf.len(), 0); // 完全消费
     }
 
@@ -514,7 +513,7 @@ mod tests {
         let response =
             msg.create_success_response(RexCommand::TitleReturn, BytesMut::from(&data[..]));
 
-        assert_eq!(response.data_as_string().unwrap(), "forward me");
+        assert_eq!(response.data_as_str().unwrap(), "forward me");
     }
 
     #[test]

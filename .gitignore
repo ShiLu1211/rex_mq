@@ -1,6 +1,9 @@
 target
 .idea
+.venv
 
 Cargo.lock
 dependency-reduced-pom.xml
 *.so
+*.svg
+perf.data*

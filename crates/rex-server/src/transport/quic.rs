@@ -3,10 +3,13 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::Result;
 use bytes::BytesMut;
 use quinn::{Connection, Endpoint, RecvStream, ServerConfig};
-use rex_client::{QuicSender, RexClientInner};
-use rex_core::{RexData, utils::new_uuid};
+use rex_core::{RexClientInner, RexData, utils::new_uuid};
+use rex_sender::QuicSender;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use tokio::sync::{Semaphore, broadcast};
+use tokio::{
+    io::AsyncReadExt,
+    sync::{Semaphore, broadcast},
+};
 use tracing::{debug, info, warn};
 
 use crate::{RexServerConfig, RexServerTrait, RexSystem, handler::handle};
@@ -138,7 +141,7 @@ impl QuicServer {
                     .handle_connection_inner(peer.clone(), connection)
                     .await;
 
-                let client_id = peer.id().await;
+                let client_id = peer.id();
                 server_clone.system.remove_client(client_id).await;
 
                 info!("Connection {} closed and cleaned up", peer_addr);
@@ -185,15 +188,16 @@ impl QuicServer {
         let peer_addr = peer.local_addr();
 
         let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
-        let mut temp_buf = vec![0u8; self.config.read_buffer_size];
 
         loop {
             // 从 QUIC 流中读取数据
-            match recv_stream.read(&mut temp_buf).await {
-                Ok(Some(n)) => {
-                    // 将读取的数据添加到缓冲区
-                    buffer.extend_from_slice(&temp_buf[..n]);
-
+            match recv_stream.read_buf(&mut buffer).await {
+                Ok(0) => {
+                    // Stream finished
+                    debug!("Stream from {} finished", peer_addr);
+                    break;
+                }
+                Ok(_) => {
                     // 尝试解析完整的数据包
                     loop {
                         match RexData::try_deserialize(&mut buffer) {
@@ -234,11 +238,6 @@ impl QuicServer {
                         warn!("Buffer too large for connection {}, clearing", peer_addr);
                         buffer.clear();
                     }
-                }
-                Ok(None) => {
-                    // Stream finished
-                    debug!("Stream from {} finished", peer_addr);
-                    break;
                 }
                 Err(e) => {
                     info!("Stream from {} read error: {}", peer_addr, e);

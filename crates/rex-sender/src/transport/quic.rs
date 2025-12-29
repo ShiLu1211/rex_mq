@@ -1,9 +1,8 @@
 use anyhow::Result;
 use bytes::BytesMut;
 use quinn::SendStream;
-use tokio::{io::AsyncWriteExt, sync::Mutex};
-
-use crate::RexSenderTrait;
+use rex_core::RexSenderTrait;
+use tokio::sync::Mutex;
 
 /// QUIC发送器，封装QUIC单向流
 pub struct QuicSender {
@@ -24,7 +23,6 @@ impl RexSenderTrait for QuicSender {
     async fn send_buf(&self, buf: &BytesMut) -> Result<()> {
         let mut stream = self.stream.lock().await;
         stream.write_all(buf).await?;
-        stream.flush().await?;
         Ok(())
     }
 
