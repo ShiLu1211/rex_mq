@@ -8,9 +8,10 @@ use anyhow::Result;
 use bytes::BytesMut;
 use quinn::{ClientConfig, Connection, Endpoint, RecvStream, crypto::rustls::QuicClientConfig};
 use rex_core::{
-    RexCommand, RexData,
+    RexClientInner, RexCommand, RexData,
     utils::{new_uuid, now_secs},
 };
+use rex_sender::QuicSender;
 use rustls::{
     DigitallySignedStruct, SignatureScheme,
     client::danger,
@@ -24,8 +25,7 @@ use tokio::{
 };
 use tracing::{debug, info, warn};
 
-use super::QuicSender;
-use crate::{ConnectionState, RexClientConfig, RexClientInner, RexClientTrait};
+use crate::{ConnectionState, RexClientConfig, RexClientTrait};
 
 pub struct QuicClient {
     // connection

@@ -3,8 +3,8 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::Result;
 use bytes::BytesMut;
 use futures_util::StreamExt;
-use rex_client::{RexClientInner, WebSocketSender};
-use rex_core::{RexData, utils::new_uuid};
+use rex_core::{RexClientInner, RexData, utils::new_uuid};
+use rex_sender::WebSocketSender;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{Semaphore, broadcast},

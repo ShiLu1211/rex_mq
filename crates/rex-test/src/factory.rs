@@ -7,10 +7,9 @@ use std::{
 
 use anyhow::Result;
 use rex_client::{
-    ConnectionState, RexClientConfig, RexClientHandlerTrait, RexClientInner, RexClientTrait,
-    open_client,
+    ConnectionState, RexClientConfig, RexClientHandlerTrait, RexClientTrait, open_client,
 };
-use rex_core::{Protocol, RexCommand, RexData};
+use rex_core::{Protocol, RexClientInner, RexCommand, RexData};
 use rex_server::{RexServerConfig, RexServerTrait, RexSystem, RexSystemConfig, open_server};
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tracing::{info, warn};

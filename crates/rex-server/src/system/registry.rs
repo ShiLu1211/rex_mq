@@ -3,8 +3,7 @@ use std::{sync::Arc, time::Duration};
 use ahash::RandomState;
 use dashmap::DashMap;
 use rand::seq::IteratorRandom;
-use rex_client::RexClientInner;
-use rex_core::utils::now_secs;
+use rex_core::{RexClientInner, utils::now_secs};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 

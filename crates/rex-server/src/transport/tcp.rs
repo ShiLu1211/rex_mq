@@ -2,8 +2,8 @@ use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use bytes::BytesMut;
-use rex_client::{RexClientInner, TcpSender};
-use rex_core::{RexData, utils::new_uuid};
+use rex_core::{RexClientInner, RexData, utils::new_uuid};
+use rex_sender::TcpSender;
 use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, TcpStream, tcp::OwnedReadHalf},

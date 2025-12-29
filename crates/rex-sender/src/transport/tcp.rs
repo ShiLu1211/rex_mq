@@ -1,8 +1,7 @@
 use anyhow::Result;
 use bytes::BytesMut;
+use rex_core::RexSenderTrait;
 use tokio::{io::AsyncWriteExt, net::tcp::OwnedWriteHalf, sync::Mutex};
-
-use crate::RexSenderTrait;
 
 /// TCP发送器，封装TCP写入流
 pub struct TcpSender {

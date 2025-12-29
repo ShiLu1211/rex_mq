@@ -1,7 +1,9 @@
 [workspace]
 members = [
-  "crates/rex-core",
+  "crates/rex-cli",
   "crates/rex-client",
+  "crates/rex-core",
+  "crates/rex-sender",
   "crates/rex-server",
   "crates/rex-test",
   "bindings/rex4p",
@@ -27,6 +29,7 @@ panic = "deny"
 # =====================
 [workspace.dependencies]
 rex-core = { path = "crates/rex-core", features = ["skip_crc"] }
+rex-sender = { path = "crates/rex-sender" }
 rex-client = { path = "crates/rex-client" }
 rex-server = { path = "crates/rex-server" }
 

@@ -8,9 +8,10 @@ use anyhow::Result;
 use bytes::BytesMut;
 use futures_util::StreamExt;
 use rex_core::{
-    RexCommand, RexData,
+    RexClientInner, RexCommand, RexData,
     utils::{new_uuid, now_secs},
 };
+use rex_sender::WebSocketSender;
 use tokio::{
     sync::{RwLock, broadcast},
     time::sleep,
@@ -18,8 +19,7 @@ use tokio::{
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
-use super::WebSocketSender;
-use crate::{ConnectionState, RexClientConfig, RexClientInner, RexClientTrait};
+use crate::{ConnectionState, RexClientConfig, RexClientTrait};
 
 pub struct WebSocketClient {
     // connection

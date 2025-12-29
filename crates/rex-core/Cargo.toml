@@ -19,3 +19,5 @@ strum_macros.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
+dashmap.workspace = true

@@ -3,8 +3,8 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::Result;
 use bytes::BytesMut;
 use quinn::{Connection, Endpoint, RecvStream, ServerConfig};
-use rex_client::{QuicSender, RexClientInner};
-use rex_core::{RexData, utils::new_uuid};
+use rex_core::{RexClientInner, RexData, utils::new_uuid};
+use rex_sender::QuicSender;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::{
     io::AsyncReadExt,

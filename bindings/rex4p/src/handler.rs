@@ -1,8 +1,8 @@
 use crate::types::PyRexData;
 use anyhow::Result;
 use pyo3::prelude::*;
-use rex_client::{RexClientHandlerTrait, RexClientInner};
-use rex_core::RexData;
+use rex_client::RexClientHandlerTrait;
+use rex_core::{RexClientInner, RexData};
 use std::sync::Arc;
 
 /// Python 回调处理器

@@ -1,9 +1,8 @@
 use anyhow::Result;
 use bytes::BytesMut;
 use quinn::SendStream;
+use rex_core::RexSenderTrait;
 use tokio::sync::Mutex;
-
-use crate::RexSenderTrait;
 
 /// QUIC发送器，封装QUIC单向流
 pub struct QuicSender {

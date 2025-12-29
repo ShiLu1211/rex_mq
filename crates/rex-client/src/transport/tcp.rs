@@ -7,9 +7,10 @@ use std::time::Duration;
 use anyhow::Result;
 use bytes::BytesMut;
 use rex_core::{
-    RexCommand, RexData,
+    RexClientInner, RexCommand, RexData,
     utils::{force_set_value, new_uuid, now_secs},
 };
+use rex_sender::TcpSender;
 use tokio::{
     io::AsyncReadExt,
     net::{TcpSocket, tcp::OwnedReadHalf},
@@ -18,8 +19,7 @@ use tokio::{
 };
 use tracing::{debug, info, warn};
 
-use super::TcpSender;
-use crate::{ConnectionState, RexClientConfig, RexClientInner, RexClientTrait};
+use crate::{ConnectionState, RexClientConfig, RexClientTrait};
 
 pub struct TcpClient {
     // connection

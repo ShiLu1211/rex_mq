@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
-use rex_client::{RexClientTrait, open_client};
+use rex_client::{ConnectionState, RexClientTrait, open_client};
 use rex_core::RexData;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -292,7 +292,7 @@ impl PyRexClient {
             let client_guard = client.read().await;
             if let Some(client) = client_guard.as_ref() {
                 let state = client.get_connection_state().await;
-                Ok(matches!(state, rex_client::ConnectionState::Connected))
+                Ok(matches!(state, ConnectionState::Connected))
             } else {
                 Ok(false)
             }
@@ -310,7 +310,7 @@ impl PyRexClient {
                 let client_guard = client.read().await;
                 if let Some(client) = client_guard.as_ref() {
                     let state = client.get_connection_state();
-                    Ok(matches!(state, rex_client::ConnectionState::Connected))
+                    Ok(matches!(state, ConnectionState::Connected))
                 } else {
                     Ok(false)
                 }

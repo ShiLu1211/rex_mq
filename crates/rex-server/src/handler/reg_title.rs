@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use rex_client::RexClientInner;
-use rex_core::{RetCode, RexCommand, RexData};
+use rex_core::{RetCode, RexClientInner, RexCommand, RexData};
 use tracing::{debug, warn};
 
 use crate::RexSystem;

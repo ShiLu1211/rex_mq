@@ -10,9 +10,9 @@ use bytes::{Bytes, BytesMut};
 use clap::Parser;
 use hdrhistogram::Histogram;
 use rand::{Rng, distr::Alphanumeric, rng};
-use rex_client::{RexClientConfig, RexClientHandlerTrait, RexClientInner, open_client};
+use rex_client::{RexClientConfig, RexClientHandlerTrait, open_client};
 use rex_core::{
-    Protocol, RexCommand, RexData,
+    Protocol, RexClientInner, RexCommand, RexData,
     utils::{now_micros, timestamp, timestamp_data},
 };
 use rex_server::{RexServerConfig, RexSystem, RexSystemConfig, open_server};
