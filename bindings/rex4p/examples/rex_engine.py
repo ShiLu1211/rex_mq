@@ -6,11 +6,12 @@ import time
 from collections import deque
 from threading import Lock, Thread
 
-from rex4p import *
+from rex4p import ClientConfig, RexClient, RexCommand, RexData, Protocol
 
 
 class LatencyStats:
     """延迟统计"""
+
     def __init__(self):
         self.latencies = deque()
         self.lock = Lock()
@@ -42,20 +43,21 @@ class LatencyStats:
         latencies_us = [lat / 1000 for lat in sorted_lat]
 
         return {
-            'count': count,
-            'min': min(latencies_us),
-            'max': max(latencies_us),
-            'mean': sum(latencies_us) / count,
-            'p50': percentile(50) / 1000,
-            'p90': percentile(90) / 1000,
-            'p95': percentile(95) / 1000,
-            'p98': percentile(98) / 1000,
-            'p99': percentile(99) / 1000,
+            "count": count,
+            "min": min(latencies_us),
+            "max": max(latencies_us),
+            "mean": sum(latencies_us) / count,
+            "p50": percentile(50) / 1000,
+            "p90": percentile(90) / 1000,
+            "p95": percentile(95) / 1000,
+            "p98": percentile(98) / 1000,
+            "p99": percentile(99) / 1000,
         }
 
 
 class RcvHandler:
     """接收端处理器"""
+
     def __init__(self, client=None):
         self.rcv_count = 0
         self.stats = LatencyStats()
@@ -66,6 +68,7 @@ class RcvHandler:
 
     def start_stats_thread(self):
         """启动统计线程"""
+
         def stats_loop():
             while self.running:
                 time.sleep(1)
@@ -73,15 +76,17 @@ class RcvHandler:
                 stats = self.stats.calculate_stats(latencies)
 
                 if stats:
-                    print(f"tps: {stats['count']}, "
-                          f"mean: {stats['mean']:.3f} µs, "
-                          f"min: {stats['min']:.0f} µs, "
-                          f"P50: {stats['p50']:.0f} µs, "
-                          f"P90: {stats['p90']:.0f} µs, "
-                          f"P95: {stats['p95']:.0f} µs, "
-                          f"P98: {stats['p98']:.0f} µs, "
-                          f"P99: {stats['p99']:.0f} µs, "
-                          f"max: {stats['max']:.0f} µs")
+                    print(
+                        f"tps: {stats['count']}, "
+                        f"mean: {stats['mean']:.3f} µs, "
+                        f"min: {stats['min']:.0f} µs, "
+                        f"P50: {stats['p50']:.0f} µs, "
+                        f"P90: {stats['p90']:.0f} µs, "
+                        f"P95: {stats['p95']:.0f} µs, "
+                        f"P98: {stats['p98']:.0f} µs, "
+                        f"P99: {stats['p99']:.0f} µs, "
+                        f"max: {stats['max']:.0f} µs"
+                    )
 
         thread = Thread(target=stats_loop, daemon=True)
         thread.start()
@@ -95,7 +100,7 @@ class RcvHandler:
         # 解析时间戳
         data_bytes = data.data
         if len(data_bytes) >= 8:
-            timestamp = struct.unpack('<q', data_bytes[:8])[0]
+            timestamp = struct.unpack("<q", data_bytes[:8])[0]
 
             # 检查是否是停止信号
             if timestamp == -10086:
@@ -108,14 +113,17 @@ class RcvHandler:
             latency = now - timestamp
 
             if latency < 0:
-                print(f"Warning: negative latency - timestamp: {timestamp}, now: {now}",
-                      file=sys.stderr)
+                print(
+                    f"Warning: negative latency - timestamp: {timestamp}, now: {now}",
+                    file=sys.stderr,
+                )
             else:
                 self.stats.record(latency)
 
 
 class SndHandler:
     """发送端处理器"""
+
     def on_login(self, data):
         print("snd client login ok")
 
@@ -127,7 +135,7 @@ def wrap_data(size):
     """打包数据，前8字节为时间戳"""
     timestamp = time.time_ns()
     data = bytearray(size)
-    struct.pack_into('<q', data, 0, timestamp)
+    struct.pack_into("<q", data, 0, timestamp)
     return bytes(data)
 
 
@@ -135,10 +143,7 @@ def rcv_mode(args):
     """接收模式"""
     handler = RcvHandler()
     config = ClientConfig(
-        f"{args.host}:{args.port}",
-        Protocol.tcp(),
-        args.title,
-        handler
+        f"{args.host}:{args.port}", Protocol.tcp(), args.title, handler
     )
 
     client = RexClient()
@@ -166,12 +171,7 @@ def rcv_mode(args):
 def snd_mode(args):
     """发送模式"""
     handler = SndHandler()
-    config = ClientConfig(
-        f"{args.host}:{args.port}",
-        Protocol.tcp(),
-        args.title,
-        handler
-    )
+    config = ClientConfig(f"{args.host}:{args.port}", Protocol.tcp(), "", handler)
 
     client = RexClient()
     client.connect(config)
@@ -186,9 +186,9 @@ def snd_mode(args):
 
     # 转换命令
     command_map = {
-        'Title': RexCommand.Title,
-        'Group': RexCommand.Group,
-        'Cast': RexCommand.Cast,
+        "Title": RexCommand.Title,
+        "Group": RexCommand.Group,
+        "Cast": RexCommand.Cast,
     }
     command = command_map.get(args.command, RexCommand.Title)
 
@@ -202,7 +202,7 @@ def snd_mode(args):
 
             # 发送数据
             data_bytes = wrap_data(args.size)
-            data = RexData(command, data_bytes)
+            data = RexData(command, args.title, data_bytes)
             client.send(data)
             snd_count += 1
 
@@ -216,10 +216,10 @@ def snd_mode(args):
                 #     time.sleep(0.000001)
 
         # 发送停止信号
-        print(f"\nSending stop signal...")
+        print("\nSending stop signal...")
         stop_data = bytearray(8)
-        struct.pack_into('<q', stop_data, 0, -10086)
-        stop_msg = RexData(command, bytes(stop_data))
+        struct.pack_into("<q", stop_data, 0, -10086)
+        stop_msg = RexData(command, args.title, bytes(stop_data))
         client.send(stop_msg)
 
         print(f"send total: [{snd_count}]")
@@ -233,25 +233,35 @@ def snd_mode(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Rex Engine Performance Test')
-    parser.add_argument('-H', '--host', required=True, help='服务器IP地址')
-    parser.add_argument('-p', '--port', type=int, required=True, help='服务器端口')
-    parser.add_argument('-t', '--title', default='', help='标题，多个用;分隔')
-    parser.add_argument('-y', '--type', required=True, choices=['rcv', 'snd'],
-                       help='模式：rcv(接收) 或 snd(发送)')
-    parser.add_argument('-s', '--size', type=int, default=1024, help='包大小(字节)')
-    parser.add_argument('-T', '--time', type=int, default=60, help='发送持续时间(秒)')
-    parser.add_argument('-i', '--interval', type=int, default=50, help='发送间隔(微秒)')
-    parser.add_argument('-c', '--command', default='Title',
-                       choices=['Title', 'Group', 'Cast'], help='命令类型')
+    parser = argparse.ArgumentParser(description="Rex Engine Performance Test")
+    parser.add_argument("-H", "--host", required=True, help="服务器IP地址")
+    parser.add_argument("-p", "--port", type=int, required=True, help="服务器端口")
+    parser.add_argument("-t", "--title", default="", help="标题，多个用;分隔")
+    parser.add_argument(
+        "-y",
+        "--type",
+        required=True,
+        choices=["rcv", "snd"],
+        help="模式：rcv(接收) 或 snd(发送)",
+    )
+    parser.add_argument("-s", "--size", type=int, default=1024, help="包大小(字节)")
+    parser.add_argument("-T", "--time", type=int, default=60, help="发送持续时间(秒)")
+    parser.add_argument("-i", "--interval", type=int, default=50, help="发送间隔(微秒)")
+    parser.add_argument(
+        "-c",
+        "--command",
+        default="Title",
+        choices=["Title", "Group", "Cast"],
+        help="命令类型",
+    )
 
     args = parser.parse_args()
 
-    if args.type == 'rcv':
+    if args.type == "rcv":
         rcv_mode(args)
     else:
         snd_mode(args)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

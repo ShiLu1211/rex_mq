@@ -9,7 +9,6 @@ use std::hint::black_box;
 fn make_msg(title: &str, data_size: usize) -> RexData {
     RexData::new(
         RexCommand::Title,
-        12345678901234567890u128,
         title.to_string(),
         vec![0x42u8; data_size],
     )
@@ -21,7 +20,6 @@ fn make_batch(count: usize, data_size: usize) -> Vec<RexData> {
         .map(|i| {
             RexData::new(
                 RexCommand::Title,
-                i as u128,
                 format!("room_{}", i % 100),
                 vec![0x42u8; data_size],
             )

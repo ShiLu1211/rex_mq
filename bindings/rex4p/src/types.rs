@@ -166,14 +166,14 @@ pub struct PyRexData {
 #[pymethods]
 impl PyRexData {
     #[new]
-    fn new(command: PyRexCommand, data: Vec<u8>) -> Self {
-        let inner = RexData::new(command.into(), 0, "".to_string(), data);
+    fn new(command: PyRexCommand, title: String, data: Vec<u8>) -> Self {
+        let inner = RexData::new(command.into(), title, data);
         Self { inner }
     }
 
     #[staticmethod]
-    fn from_string(command: PyRexCommand, text: &str) -> Self {
-        let inner = RexData::new(command.into(), 0, "".to_string(), text.into());
+    fn from_string(command: PyRexCommand, title: String, text: &str) -> Self {
+        let inner = RexData::new(command.into(), title, text.into());
         Self { inner }
     }
 

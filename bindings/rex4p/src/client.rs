@@ -1,15 +1,15 @@
 use pyo3::prelude::*;
 use rex_client::{ConnectionState, RexClientTrait, open_client};
 use rex_core::RexData;
+use rex_core::utils::force_set_value;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 use crate::{PyConnectionState, PyRexData, PyRexError};
 
 /// Rex 客户端
 #[pyclass(name = "RexClient")]
 pub struct PyRexClient {
-    client: Arc<RwLock<Option<Arc<dyn RexClientTrait>>>>,
+    client: Option<Arc<dyn RexClientTrait>>,
 
     #[cfg(feature = "sync")]
     runtime: Arc<tokio::runtime::Runtime>,
@@ -25,16 +25,14 @@ impl PyRexClient {
                 .map_err(|e| PyRexError::new_err(format!("Failed to create runtime: {}", e)))?;
 
             Ok(Self {
-                client: Arc::new(RwLock::new(None)),
+                client: None,
                 runtime: Arc::new(runtime),
             })
         }
 
         #[cfg(feature = "async")]
         {
-            Ok(Self {
-                client: Arc::new(RwLock::new(None)),
-            })
+            Ok(Self { client: None })
         }
     }
 
@@ -68,7 +66,6 @@ impl PyRexClient {
     ///     config: ClientConfig 配置对象
     #[cfg(feature = "sync")]
     fn connect(&self, py: Python, config: PyRef<crate::types::PyClientConfig>) -> PyResult<()> {
-        let client = self.client.clone();
         let rust_config = config.into_rust_config()?;
         let runtime = self.runtime.clone();
 
@@ -78,7 +75,7 @@ impl PyRexClient {
                     .await
                     .map_err(|e| PyRexError::new_err(format!("Connection failed: {}", e)))?;
 
-                *client.write().await = Some(rex_client);
+                force_set_value(&self.client, Some(rex_client));
 
                 Ok(())
             })
@@ -114,17 +111,13 @@ impl PyRexClient {
     ///     data: RexData 消息对象
     #[cfg(feature = "sync")]
     fn send(&self, py: Python, mut data: PyRexData) -> PyResult<()> {
-        let client = self.client.clone();
         let runtime = self.runtime.clone();
 
         py.detach(|| {
             runtime.block_on(async {
-                let client_guard = client.read().await;
-                let client = client_guard
+                self.client
                     .as_ref()
-                    .ok_or_else(|| PyRexError::new_err("Client not connected"))?;
-
-                client
+                    .ok_or_else(|| PyRexError::new_err("Client not connected"))?
                     .send_data(data.inner_mut())
                     .await
                     .map_err(|e| PyRexError::new_err(format!("Send failed: {}", e)))?;
@@ -189,19 +182,15 @@ impl PyRexClient {
         text: String,
         title: String,
     ) -> PyResult<()> {
-        let client = self.client.clone();
         let runtime = self.runtime.clone();
 
         py.detach(|| {
             runtime.block_on(async {
-                let client_guard = client.read().await;
-                let client = client_guard
+                let mut data = RexData::new(command.into(), title, text.into());
+
+                self.client
                     .as_ref()
-                    .ok_or_else(|| PyRexError::new_err("Client not connected"))?;
-
-                let mut data = RexData::new(command.into(), 0, title, text.into());
-
-                client
+                    .ok_or_else(|| PyRexError::new_err("Client not connected"))?
                     .send_data(&mut data)
                     .await
                     .map_err(|e| PyRexError::new_err(format!("Send failed: {}", e)))?;
@@ -229,21 +218,13 @@ impl PyRexClient {
 
     /// 同步获取连接状态
     #[cfg(feature = "sync")]
-    fn get_state(&self, py: Python) -> PyResult<PyConnectionState> {
-        let client = self.client.clone();
-        let runtime = self.runtime.clone();
-
-        py.detach(|| {
-            runtime.block_on(async {
-                let client_guard = client.read().await;
-                let client = client_guard
-                    .as_ref()
-                    .ok_or_else(|| PyRexError::new_err("Client not initialized"))?;
-
-                let state = client.get_connection_state();
-                Ok(PyConnectionState::from(state))
-            })
-        })
+    fn get_state(&self, _py: Python) -> PyResult<PyConnectionState> {
+        let state = self
+            .client
+            .as_ref()
+            .ok_or_else(|| PyRexError::new_err("Client not initialized"))?
+            .get_connection_state();
+        Ok(PyConnectionState::from(state))
     }
 
     /// 关闭连接
@@ -263,15 +244,15 @@ impl PyRexClient {
     /// 同步关闭连接
     #[cfg(feature = "sync")]
     fn close(&self, py: Python) -> PyResult<()> {
-        let client = self.client.clone();
         let runtime = self.runtime.clone();
 
         py.detach(|| {
             runtime.block_on(async {
-                let client_guard = client.read().await;
-                if let Some(client) = client_guard.as_ref() {
-                    client.close().await;
-                }
+                self.client
+                    .as_ref()
+                    .ok_or_else(|| PyRexError::new_err("Client not initialized"))?
+                    .close()
+                    .await;
                 Ok(())
             })
         })
@@ -295,20 +276,12 @@ impl PyRexClient {
 
     /// 同步检查是否已连接
     #[cfg(feature = "sync")]
-    fn is_connected(&self, py: Python) -> PyResult<bool> {
-        let client = self.client.clone();
-        let runtime = self.runtime.clone();
-
-        py.detach(|| {
-            runtime.block_on(async {
-                let client_guard = client.read().await;
-                if let Some(client) = client_guard.as_ref() {
-                    let state = client.get_connection_state();
-                    Ok(matches!(state, ConnectionState::Connected))
-                } else {
-                    Ok(false)
-                }
-            })
-        })
+    fn is_connected(&self, _py: Python) -> PyResult<bool> {
+        if let Some(client) = self.client.as_ref() {
+            let state = client.get_connection_state();
+            Ok(matches!(state, ConnectionState::Connected))
+        } else {
+            Ok(false)
+        }
     }
 }

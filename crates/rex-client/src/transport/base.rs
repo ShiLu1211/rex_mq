@@ -67,12 +67,7 @@ impl ClientBase {
     /// 通用的登录逻辑
     pub async fn login(&self) -> Result<()> {
         if let Some(client) = self.get_client() {
-            let mut data = RexData::new(
-                RexCommand::Login,
-                0,
-                self.config.title().to_string(),
-                vec![],
-            );
+            let mut data = RexData::new(RexCommand::Login, self.config.title().to_string(), vec![]);
             self.send_data_with_client(client, &mut data).await?;
             info!("Login request sent");
         }
@@ -160,7 +155,7 @@ impl ClientBase {
 
             debug!("Sending heartbeat (idle: {}s)", idle_time);
 
-            let ping_bytes = RexData::new(RexCommand::Check, 0, "".to_string(), vec![]).serialize();
+            let ping_bytes = RexData::new(RexCommand::Check, "".to_string(), vec![]).serialize();
 
             if let Err(e) = client.send_buf(&ping_bytes).await {
                 warn!("Heartbeat send failed: {}", e);

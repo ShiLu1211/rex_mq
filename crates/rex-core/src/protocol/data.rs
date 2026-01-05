@@ -5,7 +5,7 @@ use rkyv::util::AlignedVec;
 use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
 use rkyv::{api::high::to_bytes_with_alloc, ser::allocator::Arena};
 use rkyv::{munge::munge, seal::Seal};
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::{RetCode, RexCommand};
 
@@ -18,18 +18,18 @@ pub struct RexHeader {
 }
 
 impl RexHeader {
-    pub fn new(command: RexCommand, source: u128) -> Self {
+    pub fn new(command: RexCommand) -> Self {
         Self {
             command: command.as_u32(),
-            source,
+            source: 0,
             retcode: RetCode::Success.as_u32(),
         }
     }
 
-    pub fn with_retcode(command: RexCommand, source: u128, retcode: RetCode) -> Self {
+    pub fn with_retcode(command: RexCommand, retcode: RetCode) -> Self {
         Self {
             command: command.as_u32(),
-            source,
+            source: 0,
             retcode: retcode.as_u32(),
         }
     }
@@ -44,23 +44,18 @@ pub struct RexData {
 }
 
 impl RexData {
-    pub fn new(command: RexCommand, source: u128, title: String, data: Vec<u8>) -> Self {
+    pub fn new(command: RexCommand, title: String, data: Vec<u8>) -> Self {
         Self {
-            header: RexHeader::new(command, source),
+            header: RexHeader::new(command),
             title,
             data,
         }
     }
 
     /// 序列化为带长度前缀的字节流（用于网络传输）
-    /// 格式: [4字节长度(大端)] + [rkyv数据]
-    pub fn serialize(&self) -> Vec<u8> {
-        if let Ok(bytes) = self.encode() {
-            bytes.to_vec()
-        } else {
-            warn!("Failed to serialize RexData");
-            vec![]
-        }
+    /// 格式: [rkyv数据]
+    pub fn serialize(&self) -> AlignedVec {
+        self.encode().unwrap_or_default()
     }
 
     pub fn try_deserialize(buffer: &mut BytesMut) -> Result<Option<Vec<u8>>> {

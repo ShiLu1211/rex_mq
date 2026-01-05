@@ -147,7 +147,7 @@ pub async fn start_bench(args: BenchArgs) -> Result<()> {
     let title = args.title;
 
     let buf: Vec<u8> = rng().sample_iter(&Alphanumeric).take(args.len).collect();
-    let mut data = RexData::new(command, 0, title, buf);
+    let mut data = RexData::new(command, title, buf);
     let mut cnt = 0;
 
     loop {

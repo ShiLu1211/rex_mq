@@ -19,3 +19,4 @@ async-trait.workspace = true
 tokio.workspace = true
 bytes.workspace = true
 jni.workspace = true
+rkyv.workspace = true

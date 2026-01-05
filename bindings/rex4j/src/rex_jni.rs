@@ -255,7 +255,7 @@ fn send_internal(env: &mut JNIEnv, client_handle: jlong, data_obj: &JObject) -> 
 
     let rex_command = RexCommand::from_u32(command as u32);
 
-    let mut rex_data = RexData::new(rex_command, 0, title, data_bytes);
+    let mut rex_data = RexData::new(rex_command, title, data_bytes);
 
     get_runtime()?.block_on(client.send_data(&mut rex_data))?;
 
@@ -323,7 +323,7 @@ fn register_title_internal(env: &mut JNIEnv, client_handle: jlong, title: &JStri
     let client = unsafe { &*(client_handle as *const Arc<dyn RexClientTrait>) };
     let title_str: String = env.get_string(title)?.into();
 
-    let mut data = RexData::new(RexCommand::RegTitle, 0, title_str, vec![]);
+    let mut data = RexData::new(RexCommand::RegTitle, title_str, vec![]);
 
     get_runtime()?.block_on(client.send_data(&mut data))?;
 
@@ -351,7 +351,7 @@ fn delete_title_internal(env: &mut JNIEnv, client_handle: jlong, title: &JString
     let client = unsafe { &*(client_handle as *const Arc<dyn RexClientTrait>) };
     let title_str: String = env.get_string(title)?.into();
 
-    let mut data = RexData::new(RexCommand::DelTitle, 0, title_str, vec![]);
+    let mut data = RexData::new(RexCommand::DelTitle, title_str, vec![]);
 
     get_runtime()?.block_on(client.send_data(&mut data))?;
 
