@@ -187,7 +187,7 @@ impl PyRexClient {
         py: Python,
         command: crate::types::PyRexCommand,
         text: String,
-        title: Option<String>,
+        title: String,
     ) -> PyResult<()> {
         let client = self.client.clone();
         let runtime = self.runtime.clone();
@@ -199,13 +199,7 @@ impl PyRexClient {
                     .as_ref()
                     .ok_or_else(|| PyRexError::new_err("Client not connected"))?;
 
-                let mut builder = RexData::builder(command.into()).data_from_string(text);
-
-                if let Some(ttl) = title {
-                    builder = builder.title(ttl);
-                }
-
-                let mut data = builder.build();
+                let mut data = RexData::new(command.into(), 0, title, text.into());
 
                 client
                     .send_data(&mut data)

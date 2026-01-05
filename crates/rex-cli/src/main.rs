@@ -1,3 +1,6 @@
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+#![allow(clippy::panic)]
 use std::{
     hint::spin_loop,
     net::SocketAddr,
@@ -6,15 +9,11 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use bytes::{Bytes, BytesMut};
 use clap::Parser;
 use hdrhistogram::Histogram;
 use rand::{Rng, distr::Alphanumeric, rng};
 use rex_client::{RexClientConfig, RexClientHandlerTrait, open_client};
-use rex_core::{
-    Protocol, RexClientInner, RexCommand, RexData,
-    utils::{now_micros, timestamp, timestamp_data},
-};
+use rex_core::{Protocol, RexClientInner, RexCommand, RexData, utils::now_micros};
 use rex_server::{RexServerConfig, RexSystem, RexSystemConfig, open_server};
 
 #[derive(clap::Parser)]
@@ -148,24 +147,16 @@ pub async fn start_bench(args: BenchArgs) -> Result<()> {
     let title = args.title;
 
     let buf: Vec<u8> = rng().sample_iter(&Alphanumeric).take(args.len).collect();
+    let mut data = RexData::new(command, 0, title, buf);
     let mut cnt = 0;
 
     loop {
         let now = Instant::now();
-        let msg = timestamp_data(buf.clone());
         cnt += 1;
-        let mut data = if args.bench {
-            let msg_bytes = Bytes::from(msg);
-            let msg_bytesmut = BytesMut::from(msg_bytes);
-            RexData::builder(command)
-                .title(title.clone())
-                .data(msg_bytesmut)
-                .build()
+        if args.bench {
+            data.data[0..TS_LEN].copy_from_slice(&now_micros().to_be_bytes());
         } else {
-            RexData::builder(command)
-                .title(title.clone())
-                .data(cnt.to_string().as_bytes().into())
-                .build()
+            data.data = cnt.to_string().as_bytes().into();
         };
 
         if let Err(e) = client.send_data(&mut data).await {
@@ -200,53 +191,53 @@ async fn main() {
     }
 }
 
-static METRIC: LazyLock<Mutex<Option<Histogram<u64>>>> =
-    LazyLock::new(|| match Histogram::<u64>::new(3) {
-        Ok(hist) => Mutex::new(Some(hist)),
-        Err(e) => {
-            eprintln!("Failed to create histogram metric: {}", e);
-            Mutex::new(None)
-        }
-    });
+static METRIC: LazyLock<Mutex<Histogram<u64>>> =
+    LazyLock::new(|| Mutex::new(Histogram::<u64>::new(3).expect("create histogram failed")));
 
-pub async fn disp_metric() {
+const TS_LEN: usize = 16;
+
+fn timestamp(data: &[u8]) -> Option<u128> {
+    if data.len() < TS_LEN {
+        return None;
+    }
+
+    let mut buf = [0u8; TS_LEN];
+    buf.copy_from_slice(&data[..TS_LEN]);
+    Some(u128::from_be_bytes(buf))
+}
+
+async fn disp_metric() {
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        let hist_clone = {
-            match METRIC.lock() {
-                Ok(mut guard) => {
-                    if let Some(ref mut hist) = *guard {
-                        let cloned = hist.clone();
-                        hist.reset();
-                        Some(cloned)
-                    } else {
-                        None
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to lock METRIC: {}", e);
-                    None
-                }
+        let mut hist = match METRIC.lock() {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("Failed to lock METRIC: {}", e);
+                continue;
             }
         };
 
-        if let Some(hist) = hist_clone {
-            println!(
-                "tps:{} mean:{:.3} min:{} p50:{} p90:{} p95:{} p98:{} p99:{} max:{}",
-                hist.len(),
-                hist.mean(),
-                hist.min(),
-                hist.value_at_quantile(0.50),
-                hist.value_at_quantile(0.90),
-                hist.value_at_quantile(0.95),
-                hist.value_at_quantile(0.98),
-                hist.value_at_quantile(0.99),
-                hist.max(),
-            );
-        } else {
-            eprintln!("METRIC histogram not available");
+        if hist.is_empty() {
+            println!("tps:0");
+            hist.reset();
+            continue;
         }
+
+        println!(
+            "tps:{} mean:{:.3} min:{} p50:{} p90:{} p95:{} p98:{} p99:{} max:{}",
+            hist.len(),
+            hist.mean(),
+            hist.min(),
+            hist.value_at_quantile(0.50),
+            hist.value_at_quantile(0.90),
+            hist.value_at_quantile(0.95),
+            hist.value_at_quantile(0.98),
+            hist.value_at_quantile(0.99),
+            hist.max(),
+        );
+
+        hist.reset();
     }
 }
 
@@ -269,7 +260,7 @@ impl RexClientHandlerTrait for RcvClientHandler {
 
     async fn handle(&self, _client: Arc<RexClientInner>, data: RexData) -> Result<()> {
         if self.bench {
-            let command = data.header().command();
+            let command = data.command();
             if command == RexCommand::Title
                 || command == RexCommand::Group
                 || command == RexCommand::Cast
@@ -283,17 +274,16 @@ impl RexClientHandlerTrait for RcvClientHandler {
                 // 使用 saturating_sub 防止时间回拨崩溃
                 let latency = now.saturating_sub(ts);
 
-                match METRIC.lock() {
-                    Ok(mut guard) => {
-                        if let Some(ref mut hist) = *guard
-                            && let Err(e) = hist.record(latency as u64)
-                        {
-                            eprintln!("record error: {}", e);
-                        }
-                    }
+                let mut hist = match METRIC.lock() {
+                    Ok(h) => h,
                     Err(e) => {
                         eprintln!("Failed to lock METRIC: {}", e);
+                        return Ok(());
                     }
+                };
+
+                if let Err(e) = hist.record(latency as u64) {
+                    eprintln!("record error: {}", e);
                 }
             }
         } else {

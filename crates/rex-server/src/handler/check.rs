@@ -9,14 +9,13 @@ use crate::RexSystem;
 pub async fn handle(
     _system: &Arc<RexSystem>,
     source_client: &Arc<RexClientInner>,
-    data: &mut RexData,
+    data_bytes: &mut [u8],
 ) -> Result<()> {
-    let client_id = data.header().source();
+    let data = RexData::as_archive(data_bytes);
+    let client_id: u128 = data.header.source.into();
     debug!("[{:032X}] Received check online", client_id);
-    if let Err(e) = source_client
-        .send_buf(&data.set_command(RexCommand::CheckReturn).serialize())
-        .await
-    {
+    RexData::update_header(data_bytes, Some(RexCommand::CheckReturn), None, None);
+    if let Err(e) = source_client.send_buf(data_bytes).await {
         warn!(
             "[{:032X}] Send check return message error: {}",
             client_id, e

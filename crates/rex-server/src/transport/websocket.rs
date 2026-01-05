@@ -3,34 +3,25 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::Result;
 use bytes::BytesMut;
 use futures_util::StreamExt;
-use rex_core::{RexClientInner, RexData, utils::new_uuid};
+use rex_core::{RexClientInner, utils::new_uuid};
 use rex_sender::WebSocketSender;
-use tokio::{
-    net::{TcpListener, TcpStream},
-    sync::{Semaphore, broadcast},
-};
+use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
-use crate::{RexServerConfig, RexServerTrait, RexSystem, handler::handle};
+use super::base::ServerBase;
+use crate::{RexServerConfig, RexServerTrait, RexSystem};
 
 pub struct WebSocketServer {
-    system: Arc<RexSystem>,
-    config: RexServerConfig,
+    base: ServerBase,
     listener: Arc<TcpListener>,
-    semaphore: Arc<Semaphore>,
-    shutdown_tx: Arc<broadcast::Sender<()>>,
 }
 
 #[async_trait::async_trait]
 impl RexServerTrait for WebSocketServer {
     async fn close(&self) {
-        // Send shutdown signal to all tasks
-        if let Err(e) = self.shutdown_tx.send(()) {
-            warn!("Error sending shutdown signal: {}", e);
-        }
-
-        info!("Shutdown complete");
+        self.base.send_shutdown_signal();
+        info!("WebSocketServer shutdown complete");
     }
 }
 
@@ -41,34 +32,31 @@ impl WebSocketServer {
     ) -> Result<Arc<dyn RexServerTrait>> {
         let addr = config.bind_addr;
         let listener = TcpListener::bind(addr).await?;
-        let semaphore = Arc::new(Semaphore::new(config.max_concurrent_handlers));
 
-        let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1 + config.max_concurrent_handlers);
+        let (base, mut shutdown_rx) = ServerBase::new(system, config);
+
         let server = Arc::new(WebSocketServer {
-            system,
-            config,
+            base,
             listener: Arc::new(listener),
-            semaphore,
-            shutdown_tx: Arc::new(shutdown_tx),
         });
 
         // 服务器连接处理任务
         tokio::spawn({
-            let server_ = server.clone();
+            let server = server.clone();
             async move {
                 info!("Accepting WebSocket connections on {}", addr);
                 loop {
                     tokio::select! {
-                        Ok((stream, peer_addr)) = server_.listener.accept() => {
-                            server_.clone().handle_connection(stream, peer_addr).await
+                        Ok((stream, peer_addr)) = server.listener.accept() => {
+                            server.clone().handle_connection(stream, peer_addr).await;
                         }
                         _ = shutdown_rx.recv() => {
-                            info!("Server received shutdown signal, stopping.");
+                            info!("WebSocket server received shutdown signal, stopping.");
                             break;
                         }
                     }
                 }
-                info!("Stopped accepting connections");
+                info!("Stopped accepting WebSocket connections");
             }
         });
 
@@ -78,7 +66,7 @@ impl WebSocketServer {
     async fn handle_connection(self: Arc<Self>, stream: TcpStream, peer_addr: SocketAddr) {
         info!("New WebSocket connection from {}", peer_addr);
 
-        // WebSocket握手
+        // WebSocket 握手
         let ws_stream = match accept_async(stream).await {
             Ok(ws) => ws,
             Err(e) => {
@@ -91,28 +79,28 @@ impl WebSocketServer {
         let sender = Arc::new(WebSocketSender::new_server(sink));
         let peer = Arc::new(RexClientInner::new(new_uuid(), peer_addr, "", sender));
 
-        let permit = match self.semaphore.clone().acquire_owned().await {
+        let permit = match self.base.acquire_connection_permit().await {
             Ok(permit) => permit,
             Err(e) => {
-                warn!("Too many connections, rejecting {}, {}", peer_addr, e);
+                warn!("Too many connections, rejecting {}: {}", peer_addr, e);
                 return;
             }
         };
 
         // 为每个连接启动处理任务
         tokio::spawn({
-            let server_clone = self.clone();
+            let server = self.clone();
             async move {
                 let _permit = permit;
 
-                server_clone
+                server
                     .handle_connection_inner(peer.clone(), &mut stream)
                     .await;
 
                 let client_id = peer.id();
-                server_clone.system.remove_client(client_id).await;
+                server.base.system.remove_client(client_id).await;
 
-                info!("Connection {} closed and cleaned up", peer_addr);
+                info!("WebSocket connection {} closed and cleaned up", peer_addr);
             }
         });
     }
@@ -127,8 +115,8 @@ impl WebSocketServer {
         let peer_addr = peer.local_addr();
         info!("Handling WebSocket connection: {}", peer_addr);
 
-        let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let mut buffer = BytesMut::with_capacity(self.base.config.max_buffer_size);
+        let mut shutdown_rx = self.base.shutdown_tx.subscribe();
 
         loop {
             tokio::select! {
@@ -139,72 +127,44 @@ impl WebSocketServer {
                             // 将读取的数据添加到缓冲区
                             buffer.extend_from_slice(&data);
 
-                            // 尝试解析完整的数据包
-                            loop {
-                                match RexData::try_deserialize(&mut buffer) {
-                                    Ok(Some(mut data)) => {
-                                        debug!(
-                                            "Received data from {}: command={:?}",
-                                            peer_addr,
-                                            data.header().command(),
-                                        );
-
-                                        if let Err(e) = handle(&self.system, &peer, &mut data).await {
-                                            warn!("Error handling data from {}: {}", peer_addr, e);
-                                        }
-
-                                        peer.update_last_recv();
-                                    }
-                                    Ok(None) => {
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            "Error parsing data from {}: {}, clearing buffer",
-                                            peer_addr, e
-                                        );
-                                        buffer.clear();
-                                        break;
-                                    }
-                                }
-                            }
-
-                            // 检查缓冲区大小，防止内存泄漏
-                            if buffer.len() > self.config.max_buffer_size {
-                                warn!("Buffer too large for connection {}, clearing", peer_addr);
-                                buffer.clear();
+                            // 使用 ServerBase 的通用解析和处理逻辑
+                            if let Err(e) = self.base.parse_and_handle_buffer(&peer, &mut buffer).await {
+                                warn!("Error processing buffer for {}: {}", peer_addr, e);
                             }
                         }
                         Some(Ok(Message::Close(_))) => {
-                            info!("Connection {} closed by client", peer_addr);
+                            info!("WebSocket connection {} closed by client", peer_addr);
                             break;
                         }
                         Some(Ok(Message::Ping(data))) => {
                             // 自动响应 Pong
-                            if let Err(e) = peer.send_buf(&BytesMut::from(Message::Pong(data).into_data())).await {
-                                warn!("Failed to send pong: {}", e);
+                            debug!("Received ping from {}, sending pong", peer_addr);
+                            if let Err(e) = peer.send_buf(&Message::Pong(data).into_data()).await {
+                                warn!("Failed to send pong to {}: {}", peer_addr, e);
                             }
                         }
                         Some(Ok(_)) => {
-                            // 忽略其他类型的消息（Text, Pong等）
+                            // 忽略其他类型的消息(Text, Pong等)
                             debug!("Received non-binary message from {}", peer_addr);
                         }
                         Some(Err(e)) => {
-                            info!("Connection {} error: {}", peer_addr, e);
+                            info!("WebSocket connection {} error: {}", peer_addr, e);
                             break;
                         }
                         None => {
-                            info!("Connection {} stream ended", peer_addr);
+                            info!("WebSocket connection {} stream ended", peer_addr);
                             break;
                         }
                     }
                 }
                 // 监听关闭信号
                 _ = shutdown_rx.recv() => {
-                    info!("Connection {} shutting down due to server shutdown", peer_addr);
+                    info!("WebSocket connection {} shutting down due to server shutdown", peer_addr);
                     break;
                 }
             }
         }
+
+        info!("Finished handling WebSocket connection: {}", peer_addr);
     }
 }

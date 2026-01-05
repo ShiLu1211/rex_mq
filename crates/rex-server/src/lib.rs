@@ -1,9 +1,9 @@
-pub mod aggregate;
+mod aggregate;
 mod config;
 pub mod handler;
 mod server;
-pub mod system;
-pub mod transport;
+mod system;
+mod transport;
 
 pub use crate::config::RexServerConfig;
 pub use crate::transport::{QuicServer, TcpServer, WebSocketServer};

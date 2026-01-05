@@ -17,18 +17,20 @@ use crate::RexSystem;
 pub async fn handle(
     system: &Arc<RexSystem>,
     client: &Arc<RexClientInner>,
-    data: &mut RexData,
+    data_bytes: &mut [u8],
 ) -> Result<()> {
-    match data.header().command() {
-        RexCommand::Title => title::handle(system, client, data).await,
-        RexCommand::Group => group::handle(system, client, data).await,
-        RexCommand::Cast => cast::handle(system, client, data).await,
-        RexCommand::Login => login::handle(system, client, data).await,
-        RexCommand::Check => check::handle(system, client, data).await,
-        RexCommand::RegTitle => reg_title::handle(system, client, data).await,
-        RexCommand::DelTitle => del_title::handle(system, client, data).await,
+    let data = RexData::as_archive(data_bytes);
+    let cmd = RexCommand::from_u32(data.header.command.into());
+    match cmd {
+        RexCommand::Title => title::handle(system, client, data_bytes).await,
+        RexCommand::Group => group::handle(system, client, data_bytes).await,
+        RexCommand::Cast => cast::handle(system, client, data_bytes).await,
+        RexCommand::Login => login::handle(system, client, data_bytes).await,
+        RexCommand::Check => check::handle(system, client, data_bytes).await,
+        RexCommand::RegTitle => reg_title::handle(system, client, data_bytes).await,
+        RexCommand::DelTitle => del_title::handle(system, client, data_bytes).await,
         _ => {
-            debug!("no handle command: {:?}", data.header().command());
+            debug!("no handle command: {:?}", cmd);
             Ok(())
         }
     }

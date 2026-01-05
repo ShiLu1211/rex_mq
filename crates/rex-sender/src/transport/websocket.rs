@@ -1,5 +1,4 @@
 use anyhow::Result;
-use bytes::BytesMut;
 use futures_util::SinkExt;
 use futures_util::stream::SplitSink;
 use rex_core::RexSenderTrait;
@@ -49,17 +48,23 @@ impl WebSocketSender {
 
 #[async_trait::async_trait]
 impl RexSenderTrait for WebSocketSender {
-    /// 发送数据缓冲区
-    async fn send_buf(&self, buf: &BytesMut) -> Result<()> {
+    async fn send_buf(&self, buf: &[u8]) -> Result<()> {
         let mut sink = self.sink.lock().await;
+
+        let len = buf.len() as u32;
+        let mut packet = Vec::with_capacity(4 + buf.len());
+
+        packet.extend_from_slice(&len.to_be_bytes());
+        packet.extend_from_slice(buf);
+
         match &mut *sink {
-            WsSink::Server(s) => s.send(Message::Binary(buf.clone().freeze())).await?,
-            WsSink::Client(s) => s.send(Message::Binary(buf.clone().freeze())).await?,
+            WsSink::Server(s) => s.send(Message::Binary(packet.into())).await?,
+            WsSink::Client(s) => s.send(Message::Binary(packet.into())).await?,
         }
+
         Ok(())
     }
 
-    /// 关闭连接
     async fn close(&self) -> Result<()> {
         let mut sink = self.sink.lock().await;
         match &mut *sink {

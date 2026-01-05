@@ -30,10 +30,7 @@ impl TestClient {
     }
 
     pub async fn send(&self, cmd: RexCommand, title: &str, data: &[u8]) -> Result<()> {
-        let mut d = RexData::builder(cmd)
-            .title(title.to_string())
-            .data(data.into())
-            .build();
+        let mut d = RexData::new(cmd, 0, title.to_string(), data.into());
         self.client.send_data(&mut d).await
     }
 
@@ -66,7 +63,7 @@ impl RexClientHandlerTrait for TestClientHandler {
 
     async fn handle(&self, _client: Arc<RexClientInner>, data: RexData) -> Result<()> {
         if data.data().is_empty() {
-            warn!("recv empty from [{:032X}]", data.header().source());
+            warn!("recv empty from [{:032X}]", data.source());
         } else {
             info!(
                 "recv {:?}, len [{}]",

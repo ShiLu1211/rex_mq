@@ -1,5 +1,4 @@
 use anyhow::Result;
-use bytes::BytesMut;
 use rex_core::RexSenderTrait;
 use tokio::{io::AsyncWriteExt, net::tcp::OwnedWriteHalf, sync::Mutex};
 
@@ -19,9 +18,16 @@ impl TcpSender {
 #[async_trait::async_trait]
 impl RexSenderTrait for TcpSender {
     /// 发送数据缓冲区
-    async fn send_buf(&self, buf: &BytesMut) -> Result<()> {
+    async fn send_buf(&self, buf: &[u8]) -> Result<()> {
         let mut writer = self.writer.lock().await;
-        writer.write_all(buf).await?;
+
+        let len = buf.len() as u32;
+        let mut packet = Vec::with_capacity(4 + buf.len());
+
+        packet.extend_from_slice(&len.to_be_bytes());
+        packet.extend_from_slice(buf);
+
+        writer.write_all(&packet).await?;
         Ok(())
     }
 

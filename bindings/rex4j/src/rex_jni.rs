@@ -1,7 +1,6 @@
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
-use bytes::{Bytes, BytesMut};
 use jni::{
     JNIEnv,
     objects::{JByteArray, JClass, JObject, JString},
@@ -254,15 +253,9 @@ fn send_internal(env: &mut JNIEnv, client_handle: jlong, data_obj: &JObject) -> 
     };
     let _ = env.delete_local_ref(data_bytes_obj);
 
-    let data_bytesmut = BytesMut::from(Bytes::from(data_bytes));
+    let rex_command = RexCommand::from_u32(command as u32);
 
-    let rex_command = RexCommand::try_from(command as u32)
-        .map_err(|_| anyhow::anyhow!("Invalid command: {}", command))?;
-
-    let mut rex_data = RexData::builder(rex_command)
-        .title(title)
-        .data(data_bytesmut)
-        .build();
+    let mut rex_data = RexData::new(rex_command, 0, title, data_bytes);
 
     get_runtime()?.block_on(client.send_data(&mut rex_data))?;
 
@@ -330,9 +323,7 @@ fn register_title_internal(env: &mut JNIEnv, client_handle: jlong, title: &JStri
     let client = unsafe { &*(client_handle as *const Arc<dyn RexClientTrait>) };
     let title_str: String = env.get_string(title)?.into();
 
-    let mut data = RexData::builder(RexCommand::RegTitle)
-        .data_from_string(title_str)
-        .build();
+    let mut data = RexData::new(RexCommand::RegTitle, 0, title_str, vec![]);
 
     get_runtime()?.block_on(client.send_data(&mut data))?;
 
@@ -360,9 +351,7 @@ fn delete_title_internal(env: &mut JNIEnv, client_handle: jlong, title: &JString
     let client = unsafe { &*(client_handle as *const Arc<dyn RexClientTrait>) };
     let title_str: String = env.get_string(title)?.into();
 
-    let mut data = RexData::builder(RexCommand::DelTitle)
-        .data_from_string(title_str)
-        .build();
+    let mut data = RexData::new(RexCommand::DelTitle, 0, title_str, vec![]);
 
     get_runtime()?.block_on(client.send_data(&mut data))?;
 
