@@ -259,13 +259,13 @@ impl RexClientHandlerTrait for RcvClientHandler {
     }
 
     async fn handle(&self, _client: Arc<RexClientInner>, data: RexData) -> Result<()> {
+        let now = now_micros();
         if self.bench {
             let command = data.command();
             if command == RexCommand::Title
                 || command == RexCommand::Group
                 || command == RexCommand::Cast
             {
-                let now = now_micros();
                 let Some(ts) = timestamp(data.data()) else {
                     eprintln!("cannot get timestamp from data");
                     return Ok(());
