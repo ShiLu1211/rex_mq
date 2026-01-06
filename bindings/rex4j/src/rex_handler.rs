@@ -1,15 +1,12 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use bytes::BytesMut;
 use jni::{
     JNIEnv,
     objects::{GlobalRef, JObject, JValue},
 };
 use rex_client::RexClientHandlerTrait;
 use rex_core::{RexClientInner, RexCommand, RexData};
-use rkyv::util::AlignedVec;
-use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::rex_cache::RexGlobalCache;
@@ -20,7 +17,7 @@ pub struct JavaHandler {
     handler_obj: GlobalRef,
     client_obj: GlobalRef,
 
-    tx: mpsc::Sender<AlignedVec>,
+    tx: kanal::Sender<RexData>,
 }
 
 impl JavaHandler {
@@ -29,7 +26,7 @@ impl JavaHandler {
         let handler_obj = env.new_global_ref(handler)?;
         let client_obj = env.new_global_ref(client)?;
 
-        let (tx, mut rx) = mpsc::channel::<AlignedVec>(10000);
+        let (tx, rx) = kanal::bounded::<RexData>(10000);
 
         let jvm_thread = Arc::new(jvm);
         let jvm = jvm_thread.clone();
@@ -52,11 +49,8 @@ impl JavaHandler {
                         }
                     };
 
-                    while let Some(buf) = rx.blocking_recv() {
+                    while let Ok(data) = rx.recv() {
                         if let Err(e) = (|| -> Result<()> {
-                            let buf_mut = BytesMut::from(buf.as_slice());
-                            let data = RexData::decode(&buf_mut)?;
-
                             // 创建 Java RexData 对象
                             let data_obj = env.alloc_object(&cache.data.cls)?;
                             handler.init_java_data(&mut env, &data, &data_obj)?;
@@ -180,7 +174,7 @@ impl RexClientHandlerTrait for JavaHandler {
         if matches!(data.command(), RexCommand::Check | RexCommand::CheckReturn) {
             return Ok(());
         }
-        if let Err(e) = self.tx.send(data.serialize()).await {
+        if let Err(e) = self.tx.send(data) {
             warn!("Failed to enqueue message for Java handler: {}", e);
         }
         Ok(())
