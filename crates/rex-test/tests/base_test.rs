@@ -35,10 +35,7 @@ mod tests {
             .send(RexCommand::Title, "abc999", &[b'a'; 1024])
             .await
             .unwrap();
-        assert_eq!(
-            RetCode::NoTargetAvailable,
-            client1.recv().await.unwrap().retcode()
-        );
+        assert_eq!(RetCode::NoTarget, client1.recv().await.unwrap().retcode());
 
         // 大数据测试
         let a = vec![1; 8192 * 10];

@@ -9,11 +9,11 @@ use crate::RexSystem;
 pub async fn handle(
     system: &Arc<RexSystem>,
     source_client: &Arc<RexClientInner>,
-    data: &mut RexData,
+    rex_data: &mut RexData,
 ) -> Result<()> {
-    let title = data.title().unwrap_or_default();
+    let title = rex_data.title();
     debug!("Received cast message: {}", title);
-    let client_id = data.header().source();
+    let client_id = rex_data.source();
 
     let matching_clients = system.find_all_by_title(title, Some(client_id));
 
@@ -21,10 +21,10 @@ pub async fn handle(
         warn!("No clients found for cast title: {}", title);
         if let Err(e) = source_client
             .send_buf(
-                &data
+                rex_data
                     .set_command(RexCommand::CastReturn)
-                    .set_retcode(RetCode::NoTargetAvailable)
-                    .serialize(),
+                    .set_retcode(RetCode::NoTarget)
+                    .pack_ref(),
             )
             .await
         {
@@ -38,9 +38,8 @@ pub async fn handle(
 
     for client in matching_clients {
         let client_id = client.id();
-        data.set_target(client_id);
 
-        if let Err(e) = client.send_buf(&data.serialize()).await {
+        if let Err(e) = client.send_buf(rex_data.pack_ref()).await {
             warn!(
                 "Failed to send cast message to client [{:032X}]: {}",
                 client_id, e
@@ -65,14 +64,15 @@ pub async fn handle(
     if success_count == 0
         && let Err(e) = source_client
             .send_buf(
-                &data
+                rex_data
                     .set_command(RexCommand::CastReturn)
-                    .set_retcode(RetCode::NoTargetAvailable)
-                    .serialize(),
+                    .set_retcode(RetCode::NoTarget)
+                    .pack_ref(),
             )
             .await
     {
         warn!("client [{:032X}] error back: {}", client_id, e);
     }
+
     Ok(())
 }

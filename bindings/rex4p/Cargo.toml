@@ -18,12 +18,12 @@ async = ["dep:pyo3-async-runtimes"]
 
 
 [dependencies]
-rex-core = { path = "../../crates/rex-core" }
-rex-client = { path = "../../crates/rex-client" }
+rex-core.workspace = true
+rex-client.workspace = true
 pyo3.workspace = true
 pyo3-async-runtimes = { workspace = true, optional = true }
 tokio.workspace = true
 anyhow.workspace = true
-bytes.workspace = true
 async-trait.workspace = true
 kanal.workspace = true
+arc-swap.workspace = true

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use bytes::BytesMut;
 use pyo3::{exceptions::PyValueError, prelude::*};
 use rex_client::RexClientConfig;
 use rex_core::{Protocol, RetCode, RexCommand, RexData};
@@ -143,54 +142,53 @@ impl From<RexCommand> for PyRexCommand {
 #[derive(Clone, Copy)]
 pub enum PyRetCode {
     Success,
-    InvalidRequest,
-    InvalidParameter,
-    InternalError,
-    AuthFailed,
-    NoTargetAvailable,
+    Error,
+    NoTarget,
 }
 
 impl From<RetCode> for PyRetCode {
     fn from(code: RetCode) -> Self {
         match code {
             RetCode::Success => PyRetCode::Success,
-            RetCode::InvalidRequest => PyRetCode::InvalidRequest,
-            RetCode::InvalidParameter => PyRetCode::InvalidParameter,
-            RetCode::InternalError => PyRetCode::InternalError,
-            RetCode::AuthFailed => PyRetCode::AuthFailed,
-            RetCode::NoTargetAvailable => PyRetCode::NoTargetAvailable,
-            _ => PyRetCode::InternalError,
+            RetCode::Error => PyRetCode::Error,
+            RetCode::NoTarget => PyRetCode::NoTarget,
         }
     }
 }
 
 /// 消息数据
 #[pyclass(name = "RexData")]
-#[derive(Clone)]
 pub struct PyRexData {
     inner: RexData,
+}
+
+impl Clone for PyRexData {
+    fn clone(&self) -> Self {
+        Self {
+            inner: RexData {
+                content: self.inner.content.clone(),
+            },
+        }
+    }
 }
 
 #[pymethods]
 impl PyRexData {
     #[new]
-    fn new(command: PyRexCommand, data: Vec<u8>) -> Self {
-        let bytes_data = BytesMut::from(&data[..]);
-        let inner = RexData::builder(command.into()).data(bytes_data).build();
+    fn new(command: PyRexCommand, title: String, data: Vec<u8>) -> Self {
+        let inner = RexData::new(command.into(), &title, &data);
         Self { inner }
     }
 
     #[staticmethod]
-    fn from_string(command: PyRexCommand, text: &str) -> Self {
-        let inner = RexData::builder(command.into())
-            .data_from_string(text)
-            .build();
+    fn from_string(command: PyRexCommand, title: String, text: &str) -> Self {
+        let inner = RexData::new(command.into(), &title, text.as_bytes());
         Self { inner }
     }
 
     #[getter]
     fn command(&self) -> PyRexCommand {
-        self.inner.header().command().into()
+        self.inner.command().into()
     }
 
     #[getter]
@@ -199,13 +197,13 @@ impl PyRexData {
     }
 
     #[getter]
-    fn text(&self) -> Option<String> {
-        self.inner.data_as_str().map(|s| s.to_string()).ok()
+    fn text(&self) -> String {
+        self.inner.data_as_string_lossy()
     }
 
     #[getter]
-    fn title(&self) -> Option<String> {
-        self.inner.title().map(|s| s.to_string())
+    fn title(&self) -> &str {
+        self.inner.title()
     }
 
     #[getter]
@@ -215,12 +213,7 @@ impl PyRexData {
 
     #[getter]
     fn source(&self) -> u128 {
-        self.inner.header().source()
-    }
-
-    #[getter]
-    fn target(&self) -> u128 {
-        self.inner.header().target()
+        self.inner.source()
     }
 
     fn is_success(&self) -> bool {
@@ -229,10 +222,9 @@ impl PyRexData {
 
     fn __str__(&self) -> String {
         format!(
-            "RexData(command={:?}, source={}, target={}, len={})",
+            "RexData(command={:?}, source={}, len={})",
             self.command(),
             self.source(),
-            self.target(),
             self.inner.data().len()
         )
     }

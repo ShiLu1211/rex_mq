@@ -9,18 +9,19 @@ use crate::RexSystem;
 pub async fn handle(
     system: &Arc<RexSystem>,
     source_client: &Arc<RexClientInner>,
-    data: &mut RexData,
+    rex_data: &mut RexData,
 ) -> Result<()> {
-    let client_id = data.header().source();
+    let client_id: u128 = rex_data.source();
     debug!("[{:032X}] Received login message", client_id);
-    let title = data.data_as_string_lossy();
+    let title = rex_data.title().to_owned();
 
     if let Some(client) = system.find_some_by_id(client_id) {
         warn!("[{:032X}] Client already exists", client_id);
         client.set_sender(source_client.sender().clone());
         client.insert_title(&title);
+
         if let Err(e) = client
-            .send_buf(&data.set_command(RexCommand::LoginReturn).serialize())
+            .send_buf(rex_data.set_command(RexCommand::LoginReturn).pack_ref())
             .await
         {
             warn!(
@@ -30,8 +31,7 @@ pub async fn handle(
         } else {
             info!(
                 "Client [{:032X}] logged in with title: {}",
-                client_id,
-                data.data_as_string_lossy()
+                client_id, title
             );
         }
     } else {
@@ -41,7 +41,7 @@ pub async fn handle(
         system.add_client(source_client.clone()).await;
 
         if let Err(e) = source_client
-            .send_buf(&data.set_command(RexCommand::LoginReturn).serialize())
+            .send_buf(rex_data.set_command(RexCommand::LoginReturn).pack_ref())
             .await
         {
             warn!(
@@ -52,7 +52,7 @@ pub async fn handle(
             info!(
                 "New client [{:032X}] logged in with title: {}",
                 source_client.id(),
-                data.data_as_string_lossy()
+                title
             );
         }
     }

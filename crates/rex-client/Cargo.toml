@@ -18,4 +18,3 @@ tracing.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true
 tokio-tungstenite.workspace = true
-dashmap.workspace = true

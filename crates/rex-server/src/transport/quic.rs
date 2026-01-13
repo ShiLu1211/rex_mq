@@ -3,32 +3,25 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::Result;
 use bytes::BytesMut;
 use quinn::{Connection, Endpoint, RecvStream, ServerConfig};
-use rex_core::{RexClientInner, RexData, utils::new_uuid};
+use rex_core::{RexClientInner, utils::new_uuid};
 use rex_sender::QuicSender;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use tokio::{
-    io::AsyncReadExt,
-    sync::{Semaphore, broadcast},
-};
+use tokio::io::AsyncReadExt;
 use tracing::{debug, info, warn};
 
-use crate::{RexServerConfig, RexServerTrait, RexSystem, handler::handle};
+use super::base::ServerBase;
+use crate::{RexServerConfig, RexServerTrait, RexSystem};
 
 pub struct QuicServer {
-    system: Arc<RexSystem>,
-    config: RexServerConfig,
+    base: ServerBase,
     endpoint: Endpoint,
-    semaphore: Arc<Semaphore>,
-    shutdown_tx: Arc<broadcast::Sender<()>>,
 }
 
 #[async_trait::async_trait]
 impl RexServerTrait for QuicServer {
     async fn close(&self) {
-        // Send shutdown signal to all tasks
-        if let Err(e) = self.shutdown_tx.send(()) {
-            warn!("Error sending shutdown signal: {}", e);
-        }
+        self.base.send_shutdown_signal();
+
         // Close endpoint
         self.endpoint.close(0u32.into(), b"server shutdown");
 
@@ -36,7 +29,7 @@ impl RexServerTrait for QuicServer {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         self.endpoint.wait_idle().await;
 
-        info!("Shutdown complete");
+        info!("QuicServer shutdown complete");
     }
 }
 
@@ -53,36 +46,22 @@ impl QuicServer {
         // 配置服务器
         let server_config = ServerConfig::with_single_cert(vec![cert], key)?;
 
-        // 配置传输参数
-        // let mut transport = quinn::TransportConfig::default();
-        // transport.keep_alive_interval(Some(std::time::Duration::from_secs(5)));
-        // transport.max_idle_timeout(Some(std::time::Duration::from_secs(60).try_into()?));
-        // transport.max_concurrent_uni_streams(1000u32.into());
-        // server_config.transport_config(Arc::new(transport));
-
-        // 创建endpoint
+        // 创建 endpoint
         let endpoint = Endpoint::server(server_config, addr)?;
 
-        let semaphore = Arc::new(Semaphore::new(config.max_concurrent_handlers));
-        let (shutdown_tx, mut shutdown_rx) = broadcast::channel(2);
+        let (base, mut shutdown_rx) = ServerBase::new(system, config);
 
-        let server = Arc::new(QuicServer {
-            system,
-            config,
-            endpoint,
-            semaphore,
-            shutdown_tx: Arc::new(shutdown_tx),
-        });
+        let server = Arc::new(QuicServer { base, endpoint });
 
         // 服务器连接处理任务
         tokio::spawn({
-            let server_ = server.clone();
+            let server = server.clone();
             async move {
                 info!("Accepting QUIC connections on {}", addr);
                 loop {
                     tokio::select! {
-                        Some(incoming) = server_.endpoint.accept() => {
-                            let server_clone = server_.clone();
+                        Some(incoming) = server.endpoint.accept() => {
+                            let server_clone = server.clone();
                             tokio::spawn(async move {
                                 match incoming.await {
                                     Ok(connection) => {
@@ -91,18 +70,18 @@ impl QuicServer {
                                         server_clone.handle_connection(connection, remote_addr).await;
                                     }
                                     Err(e) => {
-                                        warn!("Failed to establish connection: {}", e);
+                                        warn!("Failed to establish QUIC connection: {}", e);
                                     }
                                 }
                             });
                         }
                         _ = shutdown_rx.recv() => {
-                            info!("Server received shutdown signal, stopping.");
+                            info!("QUIC server received shutdown signal, stopping.");
                             break;
                         }
                     }
                 }
-                info!("Stopped accepting connections");
+                info!("Stopped accepting QUIC connections");
             }
         });
 
@@ -123,28 +102,28 @@ impl QuicServer {
 
         let peer = Arc::new(RexClientInner::new(new_uuid(), peer_addr, "", sender));
 
-        let permit = match self.semaphore.clone().acquire_owned().await {
+        let permit = match self.base.acquire_connection_permit().await {
             Ok(permit) => permit,
             Err(e) => {
-                warn!("Too many connections, rejecting {}, {}", peer_addr, e);
+                warn!("Too many connections, rejecting {}: {}", peer_addr, e);
                 return;
             }
         };
 
         // 为每个连接启动处理任务
         tokio::spawn({
-            let server_clone = self.clone();
+            let server = self.clone();
             async move {
                 let _permit = permit;
 
-                server_clone
+                server
                     .handle_connection_inner(peer.clone(), connection)
                     .await;
 
                 let client_id = peer.id();
-                server_clone.system.remove_client(client_id).await;
+                server.base.system.remove_client(client_id).await;
 
-                info!("Connection {} closed and cleaned up", peer_addr);
+                info!("QUIC connection {} closed and cleaned up", peer_addr);
             }
         });
     }
@@ -171,7 +150,7 @@ impl QuicServer {
                     });
                 }
                 Err(e) => {
-                    info!("Connection {} closed: {}", peer_addr, e);
+                    info!("QUIC connection {} closed: {}", peer_addr, e);
                     break;
                 }
             }
@@ -186,8 +165,7 @@ impl QuicServer {
         mut recv_stream: RecvStream,
     ) -> Result<()> {
         let peer_addr = peer.local_addr();
-
-        let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
+        let mut buffer = BytesMut::with_capacity(self.base.config.max_buffer_size);
 
         loop {
             // 从 QUIC 流中读取数据
@@ -198,45 +176,8 @@ impl QuicServer {
                     break;
                 }
                 Ok(_) => {
-                    // 尝试解析完整的数据包
-                    loop {
-                        match RexData::try_deserialize(&mut buffer) {
-                            Ok(Some(mut data)) => {
-                                debug!(
-                                    "Received data from {}: command={:?}",
-                                    peer_addr,
-                                    data.header().command(),
-                                );
-
-                                if let Err(e) = handle(&self.system, &peer, &mut data).await {
-                                    warn!("Error handling data from {}: {}", peer_addr, e);
-                                }
-
-                                peer.update_last_recv();
-                            }
-                            Ok(None) => {
-                                break;
-                            }
-                            Err(e) => {
-                                warn!(
-                                    "Error parsing data from {}: {}, clearing buffer",
-                                    peer_addr, e
-                                );
-                                buffer.clear();
-                                break;
-                            }
-                        }
-                    }
-
-                    // 检查缓冲区大小，防止内存泄漏
-                    if buffer.len() > self.config.max_buffer_size {
-                        warn!(
-                            "buffer len: [{}], max_buffer_size: [{}]",
-                            buffer.len(),
-                            self.config.max_buffer_size
-                        );
-                        warn!("Buffer too large for connection {}, clearing", peer_addr);
-                        buffer.clear();
+                    if let Err(e) = self.base.parse_and_handle_buffer(&peer, &mut buffer).await {
+                        warn!("Error processing buffer for {}: {}", peer_addr, e);
                     }
                 }
                 Err(e) => {
@@ -247,7 +188,6 @@ impl QuicServer {
         }
 
         info!("Finished processing stream from {}", peer_addr);
-
         Ok(())
     }
 }

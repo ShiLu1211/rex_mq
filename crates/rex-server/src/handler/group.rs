@@ -12,11 +12,11 @@ use crate::RexSystem;
 pub async fn handle(
     system: &Arc<RexSystem>,
     source_client: &Arc<RexClientInner>,
-    data: &mut RexData,
+    rex_data: &mut RexData,
 ) -> Result<()> {
-    let title = data.title().unwrap_or_default();
+    let title = rex_data.title();
     debug!("Received group message: {}", title);
-    let client_id = data.header().source();
+    let client_id: u128 = rex_data.source();
 
     let matching_clients = system.find_all_by_title(title, Some(client_id));
 
@@ -24,10 +24,10 @@ pub async fn handle(
         warn!("No clients found for group title: {}", title);
         if let Err(e) = source_client
             .send_buf(
-                &data
+                rex_data
                     .set_command(RexCommand::GroupReturn)
-                    .set_retcode(RetCode::NoTargetAvailable)
-                    .serialize(),
+                    .set_retcode(RetCode::NoTarget)
+                    .pack_ref(),
             )
             .await
         {
@@ -42,16 +42,15 @@ pub async fn handle(
     let target_client = &matching_clients[index];
 
     let target_client_id = target_client.id();
-    data.set_target(target_client_id);
 
-    if let Err(e) = target_client.send_buf(&data.serialize()).await {
+    if let Err(e) = target_client.send_buf(rex_data.pack_ref()).await {
         warn!("client [{:032X}] error: {}", target_client_id, e);
         if let Err(e) = source_client
             .send_buf(
-                &data
-                    .set_command(RexCommand::TitleReturn)
-                    .set_retcode(RetCode::NoTargetAvailable)
-                    .serialize(),
+                rex_data
+                    .set_command(RexCommand::GroupReturn)
+                    .set_retcode(RetCode::NoTarget)
+                    .pack_ref(),
             )
             .await
         {

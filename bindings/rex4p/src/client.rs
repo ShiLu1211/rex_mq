@@ -1,15 +1,15 @@
+use arc_swap::ArcSwapOption;
 use pyo3::prelude::*;
 use rex_client::{ConnectionState, RexClientTrait, open_client};
 use rex_core::RexData;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 use crate::{PyConnectionState, PyRexData, PyRexError};
 
 /// Rex 客户端
 #[pyclass(name = "RexClient")]
 pub struct PyRexClient {
-    client: Arc<RwLock<Option<Arc<dyn RexClientTrait>>>>,
+    client: Arc<ArcSwapOption<Arc<dyn RexClientTrait>>>,
 
     #[cfg(feature = "sync")]
     runtime: Arc<tokio::runtime::Runtime>,
@@ -25,7 +25,7 @@ impl PyRexClient {
                 .map_err(|e| PyRexError::new_err(format!("Failed to create runtime: {}", e)))?;
 
             Ok(Self {
-                client: Arc::new(RwLock::new(None)),
+                client: Arc::new(ArcSwapOption::from(None)),
                 runtime: Arc::new(runtime),
             })
         }
@@ -33,7 +33,7 @@ impl PyRexClient {
         #[cfg(feature = "async")]
         {
             Ok(Self {
-                client: Arc::new(RwLock::new(None)),
+                client: Arc::new(ArcSwapOption::from(None)),
             })
         }
     }
@@ -48,15 +48,15 @@ impl PyRexClient {
         py: Python<'py>,
         config: PyRef<crate::types::PyClientConfig>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let client = self.client.clone();
         let rust_config = config.into_rust_config()?;
+        let client = Arc::clone(&self.client);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let rex_client = open_client(rust_config)
                 .await
                 .map_err(|e| PyRexError::new_err(format!("Connection failed: {}", e)))?;
 
-            *client.write().await = Some(rex_client);
+            client.store(Some(Arc::new(rex_client)));
 
             Ok(())
         })
@@ -68,9 +68,9 @@ impl PyRexClient {
     ///     config: ClientConfig 配置对象
     #[cfg(feature = "sync")]
     fn connect(&self, py: Python, config: PyRef<crate::types::PyClientConfig>) -> PyResult<()> {
-        let client = self.client.clone();
         let rust_config = config.into_rust_config()?;
         let runtime = self.runtime.clone();
+        let client = Arc::clone(&self.client);
 
         py.detach(|| {
             runtime.block_on(async {
@@ -78,7 +78,7 @@ impl PyRexClient {
                     .await
                     .map_err(|e| PyRexError::new_err(format!("Connection failed: {}", e)))?;
 
-                *client.write().await = Some(rex_client);
+                client.store(Some(Arc::new(rex_client)));
 
                 Ok(())
             })
@@ -91,15 +91,13 @@ impl PyRexClient {
     ///     data: RexData 消息对象
     #[cfg(feature = "async")]
     fn send<'py>(&'py self, py: Python<'py>, mut data: PyRexData) -> PyResult<Bound<'py, PyAny>> {
-        let client = self.client.clone();
+        let client = Arc::clone(&self.client);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let client_guard = client.read().await;
-            let client = client_guard
-                .as_ref()
-                .ok_or_else(|| PyRexError::new_err("Client not connected"))?;
-
             client
+                .load()
+                .as_ref()
+                .ok_or_else(|| PyRexError::new_err("Client not connected"))?
                 .send_data(data.inner_mut())
                 .await
                 .map_err(|e| PyRexError::new_err(format!("Send failed: {}", e)))?;
@@ -114,17 +112,15 @@ impl PyRexClient {
     ///     data: RexData 消息对象
     #[cfg(feature = "sync")]
     fn send(&self, py: Python, mut data: PyRexData) -> PyResult<()> {
-        let client = self.client.clone();
         let runtime = self.runtime.clone();
+        let client = Arc::clone(&self.client);
 
         py.detach(|| {
             runtime.block_on(async {
-                let client_guard = client.read().await;
-                let client = client_guard
-                    .as_ref()
-                    .ok_or_else(|| PyRexError::new_err("Client not connected"))?;
-
                 client
+                    .load()
+                    .as_ref()
+                    .ok_or_else(|| PyRexError::new_err("Client not connected"))?
                     .send_data(data.inner_mut())
                     .await
                     .map_err(|e| PyRexError::new_err(format!("Send failed: {}", e)))?;
@@ -147,25 +143,17 @@ impl PyRexClient {
         py: Python<'py>,
         command: crate::types::PyRexCommand,
         text: String,
-        title: Option<String>,
+        title: String,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let client = self.client.clone();
+        let client = Arc::clone(&self.client);
+
+        let mut data = RexData::new(command.into(), title, text.into());
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let client_guard = client.read().await;
-            let client = client_guard
-                .as_ref()
-                .ok_or_else(|| PyRexError::new_err("Client not connected"))?;
-
-            let mut builder = RexData::builder(command.into()).data_from_string(text);
-
-            if let Some(ttl) = title {
-                builder = builder.title(ttl);
-            }
-
-            let mut data = builder.build();
-
             client
+                .load()
+                .as_ref()
+                .ok_or_else(|| PyRexError::new_err("Client not connected"))?
                 .send_data(&mut data)
                 .await
                 .map_err(|e| PyRexError::new_err(format!("Send failed: {}", e)))?;
@@ -187,27 +175,18 @@ impl PyRexClient {
         py: Python,
         command: crate::types::PyRexCommand,
         text: String,
-        title: Option<String>,
+        title: String,
     ) -> PyResult<()> {
-        let client = self.client.clone();
         let runtime = self.runtime.clone();
+        let client = Arc::clone(&self.client);
+        let mut data = RexData::new(command.into(), &title, text.as_bytes());
 
         py.detach(|| {
             runtime.block_on(async {
-                let client_guard = client.read().await;
-                let client = client_guard
-                    .as_ref()
-                    .ok_or_else(|| PyRexError::new_err("Client not connected"))?;
-
-                let mut builder = RexData::builder(command.into()).data_from_string(text);
-
-                if let Some(ttl) = title {
-                    builder = builder.title(ttl);
-                }
-
-                let mut data = builder.build();
-
                 client
+                    .load()
+                    .as_ref()
+                    .ok_or_else(|| PyRexError::new_err("Client not connected"))?
                     .send_data(&mut data)
                     .await
                     .map_err(|e| PyRexError::new_err(format!("Send failed: {}", e)))?;
@@ -220,48 +199,43 @@ impl PyRexClient {
     /// 获取连接状态
     #[cfg(feature = "async")]
     fn get_state<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let client = self.client.clone();
+        let client = Arc::clone(&self.client);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let client_guard = client.read().await;
-            let client = client_guard
+            let state = client
+                .load()
                 .as_ref()
-                .ok_or_else(|| PyRexError::new_err("Client not initialized"))?;
+                .ok_or_else(|| PyRexError::new_err("Client not connected"))?
+                .get_connection_state();
 
-            let state = client.get_connection_state().await;
             Ok(PyConnectionState::from(state))
         })
     }
 
     /// 同步获取连接状态
     #[cfg(feature = "sync")]
-    fn get_state(&self, py: Python) -> PyResult<PyConnectionState> {
-        let client = self.client.clone();
-        let runtime = self.runtime.clone();
-
-        py.detach(|| {
-            runtime.block_on(async {
-                let client_guard = client.read().await;
-                let client = client_guard
-                    .as_ref()
-                    .ok_or_else(|| PyRexError::new_err("Client not initialized"))?;
-
-                let state = client.get_connection_state();
-                Ok(PyConnectionState::from(state))
-            })
-        })
+    fn get_state(&self, _py: Python) -> PyResult<PyConnectionState> {
+        let state = self
+            .client
+            .load()
+            .as_ref()
+            .ok_or_else(|| PyRexError::new_err("Client not initialized"))?
+            .get_connection_state();
+        Ok(PyConnectionState::from(state))
     }
 
     /// 关闭连接
     #[cfg(feature = "async")]
     fn close<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let client = self.client.clone();
+        let client = Arc::clone(&self.client);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let client_guard = client.read().await;
-            if let Some(client) = client_guard.as_ref() {
-                client.close().await;
-            }
+            client
+                .load()
+                .as_ref()
+                .ok_or_else(|| PyRexError::new_err("Client not connected"))?
+                .close()
+                .await;
             Ok(())
         })
     }
@@ -269,15 +243,16 @@ impl PyRexClient {
     /// 同步关闭连接
     #[cfg(feature = "sync")]
     fn close(&self, py: Python) -> PyResult<()> {
-        let client = self.client.clone();
         let runtime = self.runtime.clone();
 
         py.detach(|| {
             runtime.block_on(async {
-                let client_guard = client.read().await;
-                if let Some(client) = client_guard.as_ref() {
-                    client.close().await;
-                }
+                self.client
+                    .load()
+                    .as_ref()
+                    .ok_or_else(|| PyRexError::new_err("Client not initialized"))?
+                    .close()
+                    .await;
                 Ok(())
             })
         })
@@ -286,12 +261,12 @@ impl PyRexClient {
     /// 检查是否已连接
     #[cfg(feature = "async")]
     fn is_connected<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let client = self.client.clone();
+        let client = Arc::clone(&self.client);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let client_guard = client.read().await;
+            let client_guard = client.load();
             if let Some(client) = client_guard.as_ref() {
-                let state = client.get_connection_state().await;
+                let state = client.get_connection_state();
                 Ok(matches!(state, ConnectionState::Connected))
             } else {
                 Ok(false)
@@ -301,20 +276,12 @@ impl PyRexClient {
 
     /// 同步检查是否已连接
     #[cfg(feature = "sync")]
-    fn is_connected(&self, py: Python) -> PyResult<bool> {
-        let client = self.client.clone();
-        let runtime = self.runtime.clone();
-
-        py.detach(|| {
-            runtime.block_on(async {
-                let client_guard = client.read().await;
-                if let Some(client) = client_guard.as_ref() {
-                    let state = client.get_connection_state();
-                    Ok(matches!(state, ConnectionState::Connected))
-                } else {
-                    Ok(false)
-                }
-            })
-        })
+    fn is_connected(&self, _py: Python) -> PyResult<bool> {
+        if let Some(client) = self.client.load().as_ref() {
+            let state = client.get_connection_state();
+            Ok(matches!(state, ConnectionState::Connected))
+        } else {
+            Ok(false)
+        }
     }
 }

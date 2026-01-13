@@ -1,14 +1,12 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use bytes::{Bytes, BytesMut};
 use jni::{
     JNIEnv,
     objects::{GlobalRef, JObject, JValue},
 };
 use rex_client::RexClientHandlerTrait;
 use rex_core::{RexClientInner, RexCommand, RexData};
-use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::rex_cache::RexGlobalCache;
@@ -19,7 +17,7 @@ pub struct JavaHandler {
     handler_obj: GlobalRef,
     client_obj: GlobalRef,
 
-    tx: mpsc::Sender<Bytes>,
+    tx: kanal::Sender<RexData>,
 }
 
 impl JavaHandler {
@@ -28,7 +26,7 @@ impl JavaHandler {
         let handler_obj = env.new_global_ref(handler)?;
         let client_obj = env.new_global_ref(client)?;
 
-        let (tx, mut rx) = mpsc::channel::<Bytes>(10000);
+        let (tx, rx) = kanal::bounded::<RexData>(10000);
 
         let jvm_thread = Arc::new(jvm);
         let jvm = jvm_thread.clone();
@@ -51,11 +49,8 @@ impl JavaHandler {
                         }
                     };
 
-                    while let Some(buf) = rx.blocking_recv() {
+                    while let Ok(data) = rx.recv() {
                         if let Err(e) = (|| -> Result<()> {
-                            let mut buf_mut = BytesMut::from(buf);
-                            let data = RexData::deserialize(&mut buf_mut)?;
-
                             // 创建 Java RexData 对象
                             let data_obj = env.alloc_object(&cache.data.cls)?;
                             handler.init_java_data(&mut env, &data, &data_obj)?;
@@ -100,7 +95,7 @@ impl JavaHandler {
             RexGlobalCache::get().ok_or_else(|| anyhow::anyhow!("Cache not initialized"))?;
 
         // 设置 command 字段
-        let command_int = data.header().command() as i32;
+        let command_int = data.command() as i32;
         let command_enum_obj = unsafe {
             env.call_static_method_unchecked(
                 &cache.command.cls,
@@ -118,7 +113,7 @@ impl JavaHandler {
         let _ = env.delete_local_ref(command_enum_obj);
 
         // 设置 title 字段
-        let title_str = env.new_string(data.title().unwrap_or_default())?;
+        let title_str = env.new_string(data.title())?;
         env.set_field_unchecked(data_obj, cache.data.title, JValue::Object(&title_str))?;
         let _ = env.delete_local_ref(title_str);
 
@@ -176,13 +171,10 @@ impl RexClientHandlerTrait for JavaHandler {
     }
 
     async fn handle(&self, _client: Arc<RexClientInner>, data: RexData) -> Result<()> {
-        if matches!(
-            data.header().command(),
-            RexCommand::Check | RexCommand::CheckReturn
-        ) {
+        if matches!(data.command(), RexCommand::Check | RexCommand::CheckReturn) {
             return Ok(());
         }
-        if let Err(e) = self.tx.send(data.serialize().freeze()).await {
+        if let Err(e) = self.tx.send(data) {
             warn!("Failed to enqueue message for Java handler: {}", e);
         }
         Ok(())

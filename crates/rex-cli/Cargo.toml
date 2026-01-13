@@ -16,7 +16,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 async-trait.workspace = true
 strum.workspace = true
-crc32fast.workspace = true
 bytes.workspace = true
 clap.workspace = true
 rand.workspace = true

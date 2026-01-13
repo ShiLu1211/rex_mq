@@ -28,67 +28,62 @@ panic = "deny"
 # （按功能分组，便于维护）
 # =====================
 [workspace.dependencies]
-rex-core = { path = "crates/rex-core", features = ["skip_crc"] }
+rex-core = { path = "crates/rex-core" }
 rex-sender = { path = "crates/rex-sender" }
 rex-client = { path = "crates/rex-client" }
 rex-server = { path = "crates/rex-server" }
 
 # --- Async Runtime & Concurrency ---
-tokio = { version = "1.48", features = [
-  "rt-multi-thread",
-  "macros",
-  "net",
-  "time",
-] }
-futures-util = "0.3"
-async-trait = "0.1"
-kanal = "0.1"
-parking_lot = "0.12"
+tokio = { version = "1.49.0", features = ["full"] }
+futures-util = "0.3.31"
+async-trait = "0.1.89"
+kanal = "0.1.1"
+parking_lot = "0.12.5"
+arc-swap = "1.8.0"
 
 # --- Networking & Transport ---
-quinn = "0.11"
-rustls = { version = "0.23", default-features = false }
-rcgen = "0.14"
-tokio-tungstenite = "0.28"
+quinn = "0.11.9"
+rustls = { version = "0.23.36", default-features = false }
+rcgen = "0.14.6"
+tokio-tungstenite = "0.28.0"
 
 # --- Data Structures & Performance ---
-bytes = "1.11"
-dashmap = "6.1"
-ahash = "0.8"
-hdrhistogram = "7.5"
-crc32fast = "1.5"
+bytes = "1.11.0"
+dashmap = "6.1.0"
+ahash = "0.8.12"
+hdrhistogram = "7.5.4"
 
 # --- IDs, Randomness ---
-uuid = { version = "1.19", features = ["v4"] }
-rand = "0.9"
+uuid = { version = "1.19.0", features = ["v4"] }
+rand = "0.9.2"
 
 # --- Error Handling & Utilities ---
-anyhow = "1.0"
-thiserror = "2.0"
-itertools = "0.14"
+anyhow = "1.0.100"
+thiserror = "2.0.17"
+itertools = "0.14.0"
 
 # --- Logging & Observability ---
-tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing = "0.1.44"
+tracing-subscriber = "0.3.22"
 
 # --- CLI & Config ---
-clap = { version = "4.5", features = ["derive"] }
-serde = { version = "1.0", features = ["derive"] }
-toml = "0.9"
+clap = { version = "4.5.54", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "0.9.11"
 
 # --- Enum Utilities ---
-strum = "0.27"
-strum_macros = "0.27"
+strum = "0.27.2"
+strum_macros = "0.27.2"
 
 # --- Benchmarking & Testing ---
-criterion = { version = "0.8", features = ["async_tokio", "html_reports"] }
+criterion = { version = "0.8.1", features = ["async_tokio", "html_reports"] }
 
 # --- Language Bindings ---
 # Java
-jni = "0.21"
+jni = "0.21.1"
 # Python
-pyo3 = { version = "0.27", features = ["extension-module", "abi3-py39"] }
-pyo3-async-runtimes = { version = "0.27", features = ["tokio-runtime"] }
+pyo3 = { version = "0.27.2", features = ["extension-module", "abi3-py39"] }
+pyo3-async-runtimes = { version = "0.27.0", features = ["tokio-runtime"] }
 
 # =====================
 # Build Profiles

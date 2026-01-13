@@ -21,34 +21,40 @@ impl PyClientHandler {
 
         std::thread::spawn(move || {
             while let Ok(msg) = rx.recv() {
-                Python::attach(|py| {
-                    let result = match msg {
-                        HandlerMessage::Login(data) => {
-                            let py_data = PyRexData::from_rex_data(data);
-                            if let Ok(method) = callback.getattr(py, "on_login") {
-                                method.call1(py, (py_data,))
-                            } else {
-                                Ok(py.None())
-                            }
-                        }
-                        HandlerMessage::Message(data) => {
-                            let py_data = PyRexData::from_rex_data(data);
-                            if let Ok(method) = callback.getattr(py, "on_message") {
-                                method.call1(py, (py_data,))
-                            } else {
-                                Ok(py.None())
-                            }
-                        }
-                    };
-
-                    if let Err(e) = result {
-                        eprintln!("Python callback error: {:?}", e);
+                match msg {
+                    HandlerMessage::Login(data) => {
+                        let py_data = PyRexData::from_rex_data(data);
+                        Python::attach(|py| {
+                            Self::handle_login(py, &callback, py_data);
+                        });
                     }
-                });
+                    HandlerMessage::Message(data) => {
+                        let py_data = PyRexData::from_rex_data(data);
+                        Python::attach(|py| {
+                            Self::handle(py, &callback, py_data);
+                        });
+                    }
+                };
             }
         });
 
         Self { tx }
+    }
+
+    fn handle_login(py: Python, callback: &Py<PyAny>, py_data: PyRexData) {
+        if let Ok(method) = callback.getattr(py, "on_login")
+            && let Err(e) = method.call1(py, (py_data,))
+        {
+            eprintln!("Login callback error: {:?}", e);
+        }
+    }
+
+    fn handle(py: Python, callback: &Py<PyAny>, py_data: PyRexData) {
+        if let Ok(method) = callback.getattr(py, "on_message")
+            && let Err(e) = method.call1(py, (py_data,))
+        {
+            eprintln!("handler callback error: {:?}", e);
+        }
     }
 }
 

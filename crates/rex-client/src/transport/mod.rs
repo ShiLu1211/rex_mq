@@ -1,6 +1,7 @@
-pub mod quic;
-pub mod tcp;
-pub mod websocket;
+mod base;
+mod quic;
+mod tcp;
+mod websocket;
 
 pub use quic::QuicClient;
 pub use tcp::TcpClient;

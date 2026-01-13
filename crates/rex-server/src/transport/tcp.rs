@@ -2,33 +2,27 @@ use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use bytes::BytesMut;
-use rex_core::{RexClientInner, RexData, utils::new_uuid};
+use rex_core::{RexClientInner, utils::new_uuid};
 use rex_sender::TcpSender;
 use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, TcpStream, tcp::OwnedReadHalf},
-    sync::{Semaphore, broadcast},
 };
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
-use crate::{RexServerConfig, RexServerTrait, RexSystem, handler::handle};
+use super::base::ServerBase;
+use crate::{RexServerConfig, RexServerTrait, RexSystem};
 
 pub struct TcpServer {
-    system: Arc<RexSystem>,
-    config: RexServerConfig,
+    base: ServerBase,
     listener: Arc<TcpListener>,
-    semaphore: Arc<Semaphore>,
-    shutdown_tx: Arc<broadcast::Sender<()>>,
 }
+
 #[async_trait::async_trait]
 impl RexServerTrait for TcpServer {
     async fn close(&self) {
-        // Send shutdown signal to all tasks
-        if let Err(e) = self.shutdown_tx.send(()) {
-            warn!("Error sending shutdown signal: {}", e);
-        }
-
-        info!("Shutdown complete");
+        self.base.send_shutdown_signal();
+        info!("TcpServer shutdown complete");
     }
 }
 
@@ -39,34 +33,31 @@ impl TcpServer {
     ) -> Result<Arc<dyn RexServerTrait>> {
         let addr = config.bind_addr;
         let listener = TcpListener::bind(addr).await?;
-        let semaphore = Arc::new(Semaphore::new(config.max_concurrent_handlers));
 
-        let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1 + config.max_concurrent_handlers);
+        let (base, mut shutdown_rx) = ServerBase::new(system, config);
+
         let server = Arc::new(TcpServer {
-            system,
-            config,
+            base,
             listener: Arc::new(listener),
-            semaphore,
-            shutdown_tx: Arc::new(shutdown_tx),
         });
 
         // 服务器连接处理任务
         tokio::spawn({
-            let server_ = server.clone();
+            let server = server.clone();
             async move {
-                info!("Accepting connections on {}", addr);
+                info!("Accepting TCP connections on {}", addr);
                 loop {
                     tokio::select! {
-                        Ok((stream, peer_addr)) =  server_.listener.accept() => {
-                            server_.clone().handle_connection(stream, peer_addr).await
+                        Ok((stream, peer_addr)) = server.listener.accept() => {
+                            server.clone().handle_connection(stream, peer_addr).await;
                         }
                         _ = shutdown_rx.recv() => {
-                            info!("Server received shutdown signal, stopping.");
+                            info!("TCP server received shutdown signal, stopping.");
                             break;
                         }
                     }
                 }
-                info!("Stopped accepting connections");
+                info!("Stopped accepting TCP connections");
             }
         });
 
@@ -74,7 +65,7 @@ impl TcpServer {
     }
 
     async fn handle_connection(self: Arc<Self>, stream: TcpStream, peer_addr: SocketAddr) {
-        info!("New connection from {}", peer_addr);
+        info!("New TCP connection from {}", peer_addr);
 
         if let Err(e) = stream.set_nodelay(true) {
             warn!("Error setting TCP_NODELAY for {}: {}", peer_addr, e);
@@ -84,27 +75,26 @@ impl TcpServer {
         let sender = Arc::new(TcpSender::new(writer));
         let peer = Arc::new(RexClientInner::new(new_uuid(), peer_addr, "", sender));
 
-        let permit = match self.semaphore.clone().acquire_owned().await {
+        let permit = match self.base.acquire_connection_permit().await {
             Ok(permit) => permit,
             Err(e) => {
-                warn!("Too many connections, rejecting {}, {}", peer_addr, e);
+                warn!("Too many connections, rejecting {}: {}", peer_addr, e);
                 return;
             }
         };
+
         // 为每个连接启动处理任务
         tokio::spawn({
-            let server_clone = self.clone();
+            let server = self.clone();
             async move {
                 let _permit = permit;
 
-                server_clone
-                    .handle_connection_inner(peer.clone(), reader)
-                    .await;
+                server.handle_connection_inner(peer.clone(), reader).await;
 
                 let client_id = peer.id();
-                server_clone.system.remove_client(client_id).await;
+                server.base.system.remove_client(client_id).await;
 
-                info!("Connection {} closed and cleaned up", peer_addr);
+                info!("TCP connection {} closed and cleaned up", peer_addr);
             }
         });
     }
@@ -115,11 +105,10 @@ impl TcpServer {
         mut reader: OwnedReadHalf,
     ) {
         let peer_addr = peer.local_addr();
-        info!("Handling new connection: {}", peer_addr);
+        info!("Handling TCP connection: {}", peer_addr);
 
-        let mut buffer = BytesMut::with_capacity(self.config.max_buffer_size);
-
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let mut buffer = BytesMut::with_capacity(self.base.config.max_buffer_size);
+        let mut shutdown_rx = self.base.shutdown_tx.subscribe();
 
         loop {
             tokio::select! {
@@ -127,57 +116,28 @@ impl TcpServer {
                 result = reader.read_buf(&mut buffer) => {
                     match result {
                         Ok(0) => {
-                            info!("Connection {} closed by client", peer_addr);
+                            info!("TCP connection {} closed by client", peer_addr);
                             break;
                         }
                         Ok(_) => {
-                            loop {
-                                match RexData::try_deserialize(&mut buffer) {
-                                    Ok(Some(mut data)) => {
-                                        debug!(
-                                            "Received data from {}: command={:?}",
-                                            peer_addr,
-                                            data.header().command(),
-                                        );
-
-                                        if let Err(e) = handle(&self.system, &peer, &mut data).await {
-                                            warn!("Error handling data from {}: {}", peer_addr, e);
-                                        }
-
-                                        peer.update_last_recv();
-                                    }
-                                    Ok(None) => {
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            "Error parsing data from {}: {}, clearing buffer",
-                                            peer_addr, e
-                                        );
-                                        buffer.clear();
-                                        break;
-                                    }
-                                }
-                            }
-
-                            // 检查缓冲区大小，防止内存泄漏
-                            if buffer.len() > self.config.max_buffer_size {
-                                warn!("Buffer too large for connection {}, clearing", peer_addr);
-                                buffer.clear();
+                            if let Err(e) = self.base.parse_and_handle_buffer(&peer, &mut buffer).await {
+                                warn!("Error processing buffer for {}: {}", peer_addr, e);
                             }
                         }
                         Err(e) => {
-                            info!("Connection {} read error: {}", peer_addr, e);
+                            info!("TCP connection {} read error: {}", peer_addr, e);
                             break;
                         }
                     }
                 }
                 // 监听关闭信号
                 _ = shutdown_rx.recv() => {
-                    info!("Connection {} shutting down due to server shutdown", peer_addr);
+                    info!("TCP connection {} shutting down due to server shutdown", peer_addr);
                     break;
                 }
             }
         }
+
+        info!("Finished handling TCP connection: {}", peer_addr);
     }
 }

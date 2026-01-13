@@ -41,6 +41,10 @@ python3 ./rex_engine.py -H 127.0.0.1 -p 8881 -t one -y snd -s 1024 -i 50 -T 60
 ```
 
 ## docs
-```
-tcp len 1024 tps 5w latency 50-60us(wsl) 35us(ubuntu)
-```
+
+| Protocol | Client | Length | TPS | Latency |
+|:----:|:----:|:----:|:----:|:----:|
+| TCP | Rust | 1024 | 50000 | 30-us |
+| | Java | | | 40us |
+| | Python | | | 100-500us |
+| | Python | | 20000 | 80us |
