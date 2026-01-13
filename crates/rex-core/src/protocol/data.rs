@@ -1,177 +1,150 @@
-use anyhow::Result;
-use bytes::{Buf, Bytes, BytesMut};
-use rkyv::deserialize;
-use rkyv::util::AlignedVec;
-use rkyv::{Archive, Deserialize, Serialize, rancor::Error};
-use rkyv::{api::high::to_bytes_with_alloc, ser::allocator::Arena};
-use rkyv::{munge::munge, seal::Seal};
-use tracing::debug;
+use bytes::{Bytes, BytesMut};
 
 use crate::{RetCode, RexCommand};
 
-#[derive(Archive, Serialize, Deserialize, Debug, PartialEq, Clone)]
-#[rkyv(compare(PartialEq), derive(Debug))]
-pub struct RexHeader {
+#[repr(C, packed)]
+pub struct RexHead {
+    pub total_len: u32,
     pub command: u32,
-    pub source: u128,
     pub retcode: u32,
+    pub pad: [u8; 4],
+    pub source: u128,
 }
 
-impl RexHeader {
-    pub fn new(command: RexCommand) -> Self {
-        Self {
-            command: command.as_u32(),
-            source: 0,
-            retcode: RetCode::Success.as_u32(),
-        }
-    }
-
-    pub fn with_retcode(command: RexCommand, retcode: RetCode) -> Self {
-        Self {
-            command: command.as_u32(),
-            source: 0,
-            retcode: retcode.as_u32(),
-        }
-    }
-}
-
-#[derive(Archive, Serialize, Deserialize, Debug, PartialEq, Clone)]
-#[rkyv(compare(PartialEq), derive(Debug))]
+/*
+ * RexData
+ *
+*/
 pub struct RexData {
-    pub header: RexHeader,
-    pub title: String,
-    pub data: Vec<u8>,
+    pub content: BytesMut,
 }
+
+pub const REX_LEN_SIZE: usize = 4;
+pub const REX_HEAD_LEN: usize = std::mem::size_of::<RexHead>();
+
+pub const TITLE_LEN_SIZE: usize = 1;
+pub const TITLE_LEN_OFFSET: usize = REX_HEAD_LEN;
+pub const TITLE_OFFSET: usize = REX_HEAD_LEN + TITLE_LEN_SIZE;
 
 impl RexData {
-    pub fn new(command: RexCommand, title: String, data: Vec<u8>) -> Self {
-        Self {
-            header: RexHeader::new(command),
-            title,
-            data,
-        }
+    // ===== Header access =====
+
+    #[inline(always)]
+    fn head(&self) -> &RexHead {
+        debug_assert!(self.content.len() >= REX_HEAD_LEN);
+        unsafe { &*(self.content.as_ptr() as *const RexHead) }
     }
 
-    /// 序列化为带长度前缀的字节流（用于网络传输）
-    /// 格式: [rkyv数据]
-    pub fn serialize(&self) -> AlignedVec {
-        self.encode().unwrap_or_default()
+    #[inline(always)]
+    fn head_mut(&mut self) -> &mut RexHead {
+        debug_assert!(self.content.len() >= REX_HEAD_LEN);
+        unsafe { &mut *(self.content.as_mut_ptr() as *mut RexHead) }
     }
 
-    pub fn try_deserialize(buffer: &mut BytesMut) -> Result<Option<Vec<u8>>> {
-        // 检查是否有足够的数据读取长度前缀
-        if buffer.len() < 4 {
+    // ===== Pack / Unpack =====
+
+    #[inline]
+    pub fn pack_ref(&self) -> &BytesMut {
+        &self.content
+    }
+
+    #[inline]
+    pub fn pack(self) -> Bytes {
+        self.content.freeze()
+    }
+
+    #[inline]
+    pub fn unpack(buf: BytesMut) -> Self {
+        debug_assert!(buf.len() >= REX_HEAD_LEN);
+        RexData { content: buf }
+    }
+
+    pub fn try_deserialize(buf: &mut BytesMut) -> anyhow::Result<Option<Self>> {
+        if buf.len() < REX_LEN_SIZE {
             return Ok(None);
         }
 
-        // 读取长度（不消耗 buffer）
-        let mut len_bytes = [0u8; 4];
-        len_bytes.copy_from_slice(&buffer[..4]);
-        let payload_len = u32::from_be_bytes(len_bytes) as usize;
+        let total_len = ((buf[0] as u32)
+            | ((buf[1] as u32) << 8)
+            | ((buf[2] as u32) << 16)
+            | ((buf[3] as u32) << 24)) as usize;
 
-        debug!("deserialize payload size: {}", payload_len);
+        debug_assert!(
+            total_len >= REX_HEAD_LEN + TITLE_LEN_SIZE,
+            "invalid total_len={}",
+            total_len
+        );
 
-        // 检查长度是否合理（防止恶意数据）
-        const MAX_PAYLOAD_SIZE: usize = 10 * 1024 * 1024; // 10MB
-        if payload_len > MAX_PAYLOAD_SIZE {
-            anyhow::bail!(
-                "Payload size too large: {} bytes (max: {} bytes)",
-                payload_len,
-                MAX_PAYLOAD_SIZE
-            );
-        }
-
-        // 检查是否有完整的消息
-        if buffer.len() < 4 + payload_len {
+        if buf.len() < total_len {
             return Ok(None);
         }
 
-        // 消耗长度前缀
-        buffer.advance(4);
-
-        // 提取并消耗 payload
-        let payload = buffer.split_to(payload_len);
-
-        Ok(Some(payload.to_vec()))
+        let pack = buf.split_to(total_len);
+        Ok(Some(RexData::unpack(pack)))
     }
 
-    pub fn encode(&self) -> Result<AlignedVec> {
-        let mut arena = Arena::new();
-        let bytes = to_bytes_with_alloc::<_, Error>(self, arena.acquire())?;
-        Ok(bytes)
-    }
+    // ===== Constructor =====
 
-    pub fn as_archive(bytes: &[u8]) -> &ArchivedRexData {
-        unsafe { rkyv::access_unchecked::<ArchivedRexData>(bytes) }
-    }
+    pub fn new(command: RexCommand, title: &str, data: &[u8]) -> Self {
+        let title_len = title.len();
+        let data_len = data.len();
 
-    fn as_archive_mut(bytes: &mut [u8]) -> Seal<'_, ArchivedRexData> {
-        unsafe { rkyv::access_unchecked_mut::<ArchivedRexData>(bytes) }
-    }
+        let total_len = REX_HEAD_LEN + TITLE_LEN_SIZE + title_len + data_len;
 
-    pub fn update_header(
-        data_bytes: &mut [u8],
-        command: Option<RexCommand>,
-        source: Option<u128>,
-        retcode: Option<RetCode>,
-    ) {
-        let archived = Self::as_archive_mut(data_bytes);
-        munge!(let ArchivedRexData {
-            header,
-            ..
-        } = archived);
-
-        munge!(let ArchivedRexHeader{
-            command: mut cmd,
-            source: mut src,
-            retcode: mut rc
-        } = header);
-
-        if let Some(v) = command {
-            *cmd = v.as_u32().into();
+        let mut content = BytesMut::with_capacity(total_len);
+        unsafe {
+            content.set_len(total_len);
         }
-        if let Some(v) = source {
-            *src = v.into();
+
+        let mut rex_data = RexData { content };
+
+        unsafe {
+            let ptr = rex_data.content.as_mut_ptr();
+            let mut pos = REX_HEAD_LEN;
+
+            // title length
+            *ptr.add(pos) = title_len as u8;
+            pos += TITLE_LEN_SIZE;
+
+            // title
+            if title_len > 0 {
+                std::ptr::copy_nonoverlapping(title.as_bytes().as_ptr(), ptr.add(pos), title_len);
+                pos += title_len;
+            }
+
+            // data
+            if data_len > 0 {
+                std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.add(pos), data_len);
+            }
         }
-        if let Some(v) = retcode {
-            *rc = v.as_u32().into();
-        }
+
+        let head = rex_data.head_mut();
+        *head = RexHead {
+            total_len: total_len as u32,
+            command: command.as_u32(),
+            retcode: RetCode::Success.as_u32(),
+            pad: [0; 4],
+            source: 0,
+        };
+
+        rex_data
     }
 
-    pub fn from_archive(archived: &ArchivedRexData) -> Result<Self> {
-        Ok(deserialize::<Self, Error>(archived)?)
-    }
-
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let archived = Self::as_archive(bytes);
-        Self::from_archive(archived)
-    }
-
-    // === 访问器方法 ===
+    // ===== Accessors =====
 
     #[inline(always)]
     pub fn command(&self) -> RexCommand {
-        RexCommand::from_u32(self.header.command)
+        RexCommand::from_u32(self.head().command)
     }
 
     #[inline(always)]
     pub fn source(&self) -> u128 {
-        self.header.source
-    }
-
-    #[inline(always)]
-    pub fn data(&self) -> &[u8] {
-        &self.data
-    }
-
-    #[inline(always)]
-    pub fn title(&self) -> &str {
-        self.title.as_ref()
+        self.head().source
     }
 
     #[inline(always)]
     pub fn retcode(&self) -> RetCode {
-        RetCode::from_u32(self.header.retcode)
+        RetCode::from_u32(self.head().retcode)
     }
 
     #[inline(always)]
@@ -179,41 +152,111 @@ impl RexData {
         self.retcode() == RetCode::Success
     }
 
-    #[inline]
-    pub fn data_bytes(&self) -> Bytes {
-        Bytes::from(self.data.clone())
+    #[inline(always)]
+    pub fn title_len(&self) -> usize {
+        debug_assert!(self.content.len() > TITLE_LEN_OFFSET);
+        self.content[TITLE_LEN_OFFSET] as usize
     }
 
-    // === 修改器方法 - 链式调用优化 ===
+    #[inline]
+    pub fn title(&self) -> &str {
+        let len = self.title_len();
+        let start = TITLE_OFFSET;
+        let end = start + len;
+
+        debug_assert!(
+            end <= self.content.len(),
+            "title out of bounds: start={}, len={}, content_len={}",
+            start,
+            len,
+            self.content.len()
+        );
+
+        unsafe { std::str::from_utf8_unchecked(&self.content[start..end]) }
+    }
+
+    #[inline(always)]
+    fn data_offset(&self) -> usize {
+        TITLE_OFFSET + self.title_len()
+    }
+
+    #[inline]
+    pub fn data(&self) -> &[u8] {
+        let offset = self.data_offset();
+
+        debug_assert!(
+            offset <= self.content.len(),
+            "data offset out of bounds: offset={}, content_len={}",
+            offset,
+            self.content.len()
+        );
+
+        &self.content[offset..]
+    }
+
+    #[inline]
+    pub fn data_mut(&mut self) -> &mut [u8] {
+        let offset = self.data_offset();
+
+        debug_assert!(
+            offset <= self.content.len(),
+            "data_mut offset out of bounds: offset={}, content_len={}",
+            offset,
+            self.content.len()
+        );
+
+        &mut self.content[offset..]
+    }
+
+    // ===== Mutators =====
 
     #[inline(always)]
     pub fn set_command(&mut self, command: RexCommand) -> &mut Self {
-        self.header.command = command.as_u32();
+        self.head_mut().command = command.as_u32();
         self
     }
 
     #[inline(always)]
     pub fn set_source(&mut self, source: u128) -> &mut Self {
-        self.header.source = source;
+        self.head_mut().source = source;
         self
     }
 
     #[inline(always)]
     pub fn set_retcode(&mut self, retcode: RetCode) -> &mut Self {
-        self.header.retcode = retcode.as_u32();
+        self.head_mut().retcode = retcode.as_u32();
         self
     }
 
-    #[inline(always)]
-    pub fn set_title(&mut self, title: String) -> &mut Self {
-        self.title = title;
+    pub fn set_data(&mut self, data: &[u8]) -> &mut Self {
+        let offset = self.data_offset();
+        let data_len = data.len();
+        let len = offset + data_len;
+
+        if len > self.content.len() {
+            self.content.resize(len, 0);
+        } else {
+            unsafe {
+                self.content.set_len(len);
+            }
+        }
+
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                self.content[offset..].as_mut_ptr(),
+                data_len,
+            );
+        }
+
+        self.head_mut().total_len = len as u32;
         self
     }
 
-    // === 数据处理方法 ===
+    // ===== Helpers =====
 
     #[inline]
     pub fn data_as_string_lossy(&self) -> String {
-        String::from_utf8_lossy(&self.data).into_owned()
+        String::from_utf8_lossy(self.data()).into_owned()
     }
 }

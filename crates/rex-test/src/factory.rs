@@ -30,7 +30,7 @@ impl TestClient {
     }
 
     pub async fn send(&self, cmd: RexCommand, title: &str, data: &[u8]) -> Result<()> {
-        let mut d = RexData::new(cmd, title.to_string(), data.into());
+        let mut d = RexData::new(cmd, title, data);
         self.client.send_data(&mut d).await
     }
 

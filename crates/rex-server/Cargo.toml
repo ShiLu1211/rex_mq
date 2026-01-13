@@ -24,4 +24,3 @@ futures-util.workspace = true
 tokio-tungstenite.workspace = true
 rcgen.workspace = true
 ahash.workspace = true
-rkyv.workspace = true

@@ -147,16 +147,16 @@ pub async fn start_bench(args: BenchArgs) -> Result<()> {
     let title = args.title;
 
     let buf: Vec<u8> = rng().sample_iter(&Alphanumeric).take(args.len).collect();
-    let mut data = RexData::new(command, title, buf);
+    let mut data = RexData::new(command, &title, &buf);
     let mut cnt = 0;
 
     loop {
         let now = Instant::now();
         cnt += 1;
         if args.bench {
-            data.data[0..TS_LEN].copy_from_slice(&now_micros().to_be_bytes());
+            data.data_mut()[0..TS_LEN].copy_from_slice(&now_micros().to_be_bytes());
         } else {
-            data.data = cnt.to_string().as_bytes().into();
+            data.set_data(cnt.to_string().as_bytes());
         };
 
         if let Err(e) = client.send_data(&mut data).await {

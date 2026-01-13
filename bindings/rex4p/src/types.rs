@@ -158,22 +158,31 @@ impl From<RetCode> for PyRetCode {
 
 /// 消息数据
 #[pyclass(name = "RexData")]
-#[derive(Clone)]
 pub struct PyRexData {
     inner: RexData,
+}
+
+impl Clone for PyRexData {
+    fn clone(&self) -> Self {
+        Self {
+            inner: RexData {
+                content: self.inner.content.clone(),
+            },
+        }
+    }
 }
 
 #[pymethods]
 impl PyRexData {
     #[new]
     fn new(command: PyRexCommand, title: String, data: Vec<u8>) -> Self {
-        let inner = RexData::new(command.into(), title, data);
+        let inner = RexData::new(command.into(), &title, &data);
         Self { inner }
     }
 
     #[staticmethod]
     fn from_string(command: PyRexCommand, title: String, text: &str) -> Self {
-        let inner = RexData::new(command.into(), title, text.into());
+        let inner = RexData::new(command.into(), &title, text.as_bytes());
         Self { inner }
     }
 

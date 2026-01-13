@@ -14,6 +14,5 @@ strum_macros.workspace = true
 uuid.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
-rkyv.workspace = true
 tracing.workspace = true
 parking_lot.workspace = true

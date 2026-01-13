@@ -179,7 +179,7 @@ impl PyRexClient {
     ) -> PyResult<()> {
         let runtime = self.runtime.clone();
         let client = Arc::clone(&self.client);
-        let mut data = RexData::new(command.into(), title, text.into());
+        let mut data = RexData::new(command.into(), &title, text.as_bytes());
 
         py.detach(|| {
             runtime.block_on(async {

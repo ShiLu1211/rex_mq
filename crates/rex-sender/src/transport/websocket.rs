@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bytes::Bytes;
 use futures_util::SinkExt;
 use futures_util::stream::SplitSink;
 use rex_core::RexSenderTrait;
@@ -51,15 +52,11 @@ impl RexSenderTrait for WebSocketSender {
     async fn send_buf(&self, buf: &[u8]) -> Result<()> {
         let mut sink = self.sink.lock().await;
 
-        let len = buf.len() as u32;
-        let mut packet = Vec::with_capacity(4 + buf.len());
-
-        packet.extend_from_slice(&len.to_be_bytes());
-        packet.extend_from_slice(buf);
+        let package = Bytes::copy_from_slice(buf);
 
         match &mut *sink {
-            WsSink::Server(s) => s.send(Message::Binary(packet.into())).await?,
-            WsSink::Client(s) => s.send(Message::Binary(packet.into())).await?,
+            WsSink::Server(s) => s.send(Message::Binary(package)).await?,
+            WsSink::Client(s) => s.send(Message::Binary(package)).await?,
         }
 
         Ok(())

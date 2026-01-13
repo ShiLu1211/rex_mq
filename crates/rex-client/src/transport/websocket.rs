@@ -208,14 +208,9 @@ impl WebSocketClient {
                     // 尝试解析完整的数据包
                     loop {
                         match RexData::try_deserialize(&mut buffer) {
-                            Ok(Some(mut data_bytes)) => {
-                                debug!(
-                                    "Parsed message: command={:?}",
-                                    RexData::as_archive(&data_bytes).header.command
-                                );
-                                if let Err(e) =
-                                    self.base.handle_received_data(&mut data_bytes).await
-                                {
+                            Ok(Some(rex_data)) => {
+                                debug!("Parsed message: command={:?}", rex_data.command());
+                                if let Err(e) = self.base.handle_received_data(rex_data).await {
                                     warn!("Data handling error: {}", e);
                                 }
                             }

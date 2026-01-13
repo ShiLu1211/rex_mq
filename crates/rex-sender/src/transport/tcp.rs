@@ -21,13 +21,7 @@ impl RexSenderTrait for TcpSender {
     async fn send_buf(&self, buf: &[u8]) -> Result<()> {
         let mut writer = self.writer.lock().await;
 
-        let len = buf.len() as u32;
-        let mut packet = Vec::with_capacity(4 + buf.len());
-
-        packet.extend_from_slice(&len.to_be_bytes());
-        packet.extend_from_slice(buf);
-
-        writer.write_all(&packet).await?;
+        writer.write_all(buf).await?;
         Ok(())
     }
 

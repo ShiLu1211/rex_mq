@@ -18,5 +18,4 @@ tracing.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
 jni.workspace = true
-rkyv.workspace = true
 kanal.workspace = true

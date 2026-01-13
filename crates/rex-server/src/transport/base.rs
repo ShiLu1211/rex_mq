@@ -41,14 +41,14 @@ impl ServerBase {
 
         loop {
             match RexData::try_deserialize(buffer) {
-                Ok(Some(mut data_bytes)) => {
+                Ok(Some(mut rex_data)) => {
                     debug!(
                         "Received data from {}: command={:?}",
                         peer_addr,
-                        RexData::as_archive(&data_bytes).header.command,
+                        rex_data.command(),
                     );
 
-                    if let Err(e) = handle(&self.system, peer, &mut data_bytes).await {
+                    if let Err(e) = handle(&self.system, peer, &mut rex_data).await {
                         warn!("Error handling data from {}: {}", peer_addr, e);
                     }
 

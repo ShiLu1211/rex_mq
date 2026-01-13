@@ -59,7 +59,7 @@ impl ClientBase {
     ) -> Result<()> {
         let client_id = client.id();
         data.set_source(client_id);
-        client.send_buf(&data.serialize()).await?;
+        client.send_buf(data.pack_ref()).await?;
         debug!("Data sent successfully: command={:?}", data.command());
         Ok(())
     }
@@ -67,7 +67,7 @@ impl ClientBase {
     /// 通用的登录逻辑
     pub async fn login(&self) -> Result<()> {
         if let Some(client) = self.get_client() {
-            let mut data = RexData::new(RexCommand::Login, self.config.title().to_string(), vec![]);
+            let mut data = RexData::new(RexCommand::Login, self.config.title(), &[]);
             self.send_data_with_client(client, &mut data).await?;
             info!("Login request sent");
         }
@@ -75,14 +75,13 @@ impl ClientBase {
     }
 
     /// 通用的接收数据处理逻辑
-    pub async fn handle_received_data(&self, data_bytes: &mut [u8]) -> Result<()> {
+    pub async fn handle_received_data(&self, rex_data: RexData) -> Result<()> {
         let Some(client) = self.get_client() else {
             warn!("No client found, cannot handle received data");
             return Ok(());
         };
 
-        let data = RexData::as_archive(data_bytes);
-        let command = RexCommand::from_u32(data.header.command.into());
+        let command = rex_data.command();
         debug!("Handling received data: command={:?}", command);
 
         let handler = self.config.client_handler.clone();
@@ -90,19 +89,18 @@ impl ClientBase {
         match command {
             RexCommand::LoginReturn => {
                 info!("Login successful");
-                let data = RexData::from_archive(data)?;
-                if let Err(e) = handler.login_ok(client.clone(), data).await {
+                if let Err(e) = handler.login_ok(client.clone(), rex_data).await {
                     warn!("Error in login_ok handler: {}", e);
                 }
             }
             RexCommand::RegTitleReturn => {
-                let title = data.title.as_str();
+                let title = rex_data.title();
                 client.insert_title(title);
                 self.config.set_title(&client.title_str());
                 info!("Title registered: {}", title);
             }
             RexCommand::DelTitleReturn => {
-                let title = data.title.as_str();
+                let title = rex_data.title();
                 client.remove_title(title);
                 self.config.set_title(&client.title_str());
                 info!("Title removed: {}", title);
@@ -113,8 +111,7 @@ impl ClientBase {
             | RexCommand::GroupReturn
             | RexCommand::Cast
             | RexCommand::CastReturn => {
-                let data = RexData::from_archive(data)?;
-                if let Err(e) = handler.handle(client.clone(), data).await {
+                if let Err(e) = handler.handle(client.clone(), rex_data).await {
                     warn!("Error in message handler: {}", e);
                 }
             }
@@ -155,9 +152,9 @@ impl ClientBase {
 
             debug!("Sending heartbeat (idle: {}s)", idle_time);
 
-            let ping_bytes = RexData::new(RexCommand::Check, "".to_string(), vec![]).serialize();
+            let ping = RexData::new(RexCommand::Check, "", &[]);
 
-            if let Err(e) = client.send_buf(&ping_bytes).await {
+            if let Err(e) = client.send_buf(ping.pack_ref()).await {
                 warn!("Heartbeat send failed: {}", e);
                 self.set_connection_state(ConnectionState::Disconnected);
                 continue;
@@ -181,8 +178,8 @@ impl ClientBase {
     pub async fn parse_buffer(&self, buffer: &mut BytesMut) -> Result<()> {
         loop {
             match RexData::try_deserialize(buffer) {
-                Ok(Some(mut data_bytes)) => {
-                    if let Err(e) = self.handle_received_data(&mut data_bytes).await {
+                Ok(Some(rex_data)) => {
+                    if let Err(e) = self.handle_received_data(rex_data).await {
                         warn!("Data handling error: {}", e);
                     }
                 }

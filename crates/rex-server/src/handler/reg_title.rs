@@ -9,30 +9,30 @@ use crate::RexSystem;
 pub async fn handle(
     system: &Arc<RexSystem>,
     source_client: &Arc<RexClientInner>,
-    data_bytes: &mut [u8],
+    rex_data: &mut RexData,
 ) -> Result<()> {
-    let data = RexData::as_archive(data_bytes);
-    let client_id: u128 = data.header.source.into();
-    let title = data.title.as_str();
+    let client_id: u128 = rex_data.source();
+    let title = rex_data.title();
     debug!("[{:032X}] Received reg title [{}]", client_id, title);
 
     if let Some(client) = system.find_some_by_id(client_id) {
         system.register_title(client_id, title);
-        RexData::update_header(data_bytes, Some(RexCommand::RegTitleReturn), None, None);
-        if let Err(e) = client.send_buf(data_bytes).await {
+        if let Err(e) = client
+            .send_buf(rex_data.set_command(RexCommand::RegTitleReturn).pack_ref())
+            .await
+        {
             warn!("[{:032X}] Send reg title return error: {}", client_id, e);
         }
-    } else {
-        RexData::update_header(
-            data_bytes,
-            Some(RexCommand::RegTitleReturn),
-            None,
-            Some(RetCode::NoTarget),
-        );
-
-        if let Err(e) = source_client.send_buf(data_bytes).await {
-            warn!("[{:032X}] Send reg title return error: {}", client_id, e);
-        }
+    } else if let Err(e) = source_client
+        .send_buf(
+            rex_data
+                .set_command(RexCommand::RegTitleReturn)
+                .set_retcode(RetCode::NoTarget)
+                .pack_ref(),
+        )
+        .await
+    {
+        warn!("[{:032X}] Send reg title return error: {}", client_id, e);
     }
     Ok(())
 }
