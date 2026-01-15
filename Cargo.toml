@@ -35,6 +35,7 @@ rex-server = { path = "crates/rex-server" }
 
 # --- Async Runtime & Concurrency ---
 tokio = { version = "1.49.0", features = ["full"] }
+futures = "0.3.31"
 futures-util = "0.3.31"
 async-trait = "0.1.89"
 kanal = "0.1.1"

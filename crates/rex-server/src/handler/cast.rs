@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use futures::{StreamExt, stream::FuturesUnordered};
 use rex_core::{RetCode, RexClientInner, RexCommand, RexData};
 use tracing::{debug, warn};
 
@@ -33,20 +34,31 @@ pub async fn handle(
         return Ok(());
     }
 
-    let mut success_count = 0;
+    // 并行发送
+    let buf = rex_data.pack_ref(); // 打包一次
+    let tasks: FuturesUnordered<_> = matching_clients
+        .into_iter()
+        .map(|client| async move {
+            let client_id = client.id();
+            match client.send_buf(buf).await {
+                Ok(()) => (client_id, true),
+                Err(e) => {
+                    warn!("Failed to send to client [{:032X}]: {}", client_id, e);
+                    (client_id, false)
+                }
+            }
+        })
+        .collect();
+
     let mut failed_clients = Vec::new();
+    let mut success_count = 0;
 
-    for client in matching_clients {
-        let client_id = client.id();
-
-        if let Err(e) = client.send_buf(rex_data.pack_ref()).await {
-            warn!(
-                "Failed to send cast message to client [{:032X}]: {}",
-                client_id, e
-            );
-            failed_clients.push(client_id);
-        } else {
+    // 并发收集结果
+    for (client_id, success) in tasks.collect::<Vec<_>>().await {
+        if success {
             success_count += 1;
+        } else {
+            failed_clients.push(client_id);
         }
     }
 
