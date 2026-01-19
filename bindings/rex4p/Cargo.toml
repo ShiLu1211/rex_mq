@@ -10,18 +10,10 @@ crate-type = ["cdylib"]
 [lints]
 workspace = true
 
-
-[features]
-default = ["sync"]
-sync = []
-async = ["dep:pyo3-async-runtimes"]
-
-
 [dependencies]
 rex-core.workspace = true
 rex-client.workspace = true
 pyo3.workspace = true
-pyo3-async-runtimes = { workspace = true, optional = true }
 tokio.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true

@@ -24,6 +24,7 @@ public class RexConfig {
   private String host;
   private int port;
   private String title;
+  private String address; // 缓存 address 计算结果
 
   // 对应 Rust 配置项
   private long idleTimeout = 10; // 空闲超时（秒）
@@ -52,6 +53,7 @@ public class RexConfig {
     this.host = host;
     this.port = port;
     this.title = title;
+    this.address = host + ":" + port;
   }
 
   /** 构建器模式 */
@@ -114,7 +116,7 @@ public class RexConfig {
   }
 
   public String getAddress() {
-    return host + ":" + port;
+    return address;
   }
 
   public long getIdleTimeout() {

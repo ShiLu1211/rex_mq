@@ -60,7 +60,7 @@ rand = "0.9.2"
 
 # --- Error Handling & Utilities ---
 anyhow = "1.0.100"
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 itertools = "0.14.0"
 
 # --- Logging & Observability ---

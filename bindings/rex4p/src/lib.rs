@@ -9,12 +9,6 @@ pub use client::PyRexClient;
 pub use handler::PyClientHandler;
 pub use types::*;
 
-#[cfg(all(feature = "sync", feature = "async"))]
-compile_error!("Features `sync` and `async` are mutually exclusive");
-
-#[cfg(not(any(feature = "sync", feature = "async")))]
-compile_error!("One of features `sync` or `async` must be enabled");
-
 /// Rex Python 客户端模块
 #[pymodule]
 fn rex4p(m: &Bound<'_, PyModule>) -> PyResult<()> {

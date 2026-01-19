@@ -1,6 +1,9 @@
 package com.rex4j;
 
 import java.util.Arrays;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /** Rex 命令枚举 */
 public enum RexCommand {
@@ -24,6 +27,9 @@ public enum RexCommand {
 
   private final int value;
 
+  private static final Map<Integer, RexCommand> VALUE_TO_COMMAND =
+      Arrays.stream(values()).collect(Collectors.toMap(RexCommand::getValue, Function.identity()));
+
   RexCommand(int value) {
     this.value = value;
   }
@@ -34,6 +40,6 @@ public enum RexCommand {
 
   /** 通过 int 值查找枚举，找不到返回 Unknown */
   public static RexCommand fromValue(int value) {
-    return Arrays.stream(values()).filter(c -> c.value == value).findFirst().orElse(Unknown);
+    return VALUE_TO_COMMAND.getOrDefault(value, Unknown);
   }
 }
