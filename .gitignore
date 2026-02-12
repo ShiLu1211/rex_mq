@@ -1,6 +1,7 @@
 target
 .idea
 .venv
+.rex_sled
 
 Cargo.lock
 dependency-reduced-pom.xml

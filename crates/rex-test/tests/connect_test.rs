@@ -20,7 +20,7 @@ mod tests {
      * 重连测试 server重启
      */
     async fn connect_test_inner(protocol: Protocol) -> Result<()> {
-        let mut ss = TestEnv::default();
+        let mut ss = TestEnv::new().await;
 
         let server = ss.start_server(protocol).await?;
 

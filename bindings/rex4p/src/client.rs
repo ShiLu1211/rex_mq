@@ -141,7 +141,7 @@ impl PyRexClient {
         }
 
         py.detach(|| {
-            let _ = runtime.block_on(async {
+            runtime.block_on(async {
                 if let Some(client) = self.client.load().as_ref() {
                     client.close().await;
                 }

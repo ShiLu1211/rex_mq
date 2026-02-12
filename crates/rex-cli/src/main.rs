@@ -11,7 +11,7 @@ use std::{
 use anyhow::{Result, anyhow};
 use clap::Parser;
 use hdrhistogram::Histogram;
-use rand::{Rng, distr::Alphanumeric, rng};
+use rand::{RngExt, distr::Alphanumeric, rng};
 use rex_client::{RexClientConfig, RexClientHandlerTrait, open_client};
 use rex_core::{Protocol, RexClientInner, RexCommand, RexData, utils::now_micros};
 use rex_server::{RexServerConfig, RexSystem, RexSystemConfig, open_server};
@@ -99,7 +99,7 @@ pub async fn start_server(args: ServerArgs) -> Result<()> {
         .ok_or_else(|| anyhow!("invalid protocol: {}", args.protocol))?;
 
     let config = RexServerConfig::new(protocol, address);
-    let system = RexSystem::new(RexSystemConfig::from_id(&args.server_id));
+    let system = RexSystem::new(RexSystemConfig::from_id(&args.server_id)).await;
     let _server = open_server(system, config).await?;
 
     loop {

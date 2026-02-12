@@ -7,7 +7,7 @@ use rex_core::{Protocol, RetCode, RexCommand, RexData};
 use crate::PyClientHandler;
 
 /// 协议类型
-#[pyclass(name = "Protocol")]
+#[pyclass(name = "Protocol", from_py_object)]
 #[derive(Clone)]
 pub struct PyProtocol {
     inner: Protocol,
@@ -55,7 +55,7 @@ impl PyProtocol {
 }
 
 /// 连接状态
-#[pyclass(name = "ConnectionState")]
+#[pyclass(name = "ConnectionState", from_py_object)]
 #[derive(Clone, Copy)]
 pub enum PyConnectionState {
     Disconnected,
@@ -76,7 +76,7 @@ impl From<rex_client::ConnectionState> for PyConnectionState {
 }
 
 /// 命令类型
-#[pyclass(name = "RexCommand")]
+#[pyclass(name = "RexCommand", from_py_object)]
 #[derive(Debug, Clone, Copy)]
 pub enum PyRexCommand {
     Title,
@@ -138,7 +138,7 @@ impl From<RexCommand> for PyRexCommand {
 }
 
 /// 返回码
-#[pyclass(name = "RetCode")]
+#[pyclass(name = "RetCode", skip_from_py_object)]
 #[derive(Clone, Copy)]
 pub enum PyRetCode {
     Success,
@@ -157,7 +157,7 @@ impl From<RetCode> for PyRetCode {
 }
 
 /// 消息数据
-#[pyclass(name = "RexData")]
+#[pyclass(name = "RexData", from_py_object)]
 pub struct PyRexData {
     inner: RexData,
 }

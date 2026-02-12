@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 rex-core.workspace = true
 rex-sender.workspace = true
+rex-persistence.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 serde.workspace = true

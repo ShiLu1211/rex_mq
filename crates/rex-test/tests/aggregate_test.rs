@@ -6,7 +6,7 @@ mod tests {
 
     #[tokio::test]
     async fn aggregate_test() -> Result<()> {
-        let mut env = TestEnv::default();
+        let mut env = TestEnv::new().await;
 
         // 启动三种协议
         env.start_aggregate_server(&[Protocol::Tcp, Protocol::Quic, Protocol::WebSocket])
