@@ -125,6 +125,10 @@ public class RexEngine implements Runnable {
                 long timestamp = ByteBuffer.wrap(dataBytes).getLong();
 
                 if (timestamp == -10086) {
+                  try {
+                    Thread.sleep(500);
+                  } catch (InterruptedException e) {
+                  }
                   System.out.printf("receive total: [%d]%n", rcv_count.get());
                   System.exit(0);
                   return;

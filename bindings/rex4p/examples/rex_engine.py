@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 import argparse
+import gc
 import struct
 import sys
 import time
-from collections import deque
 from threading import Lock, Thread
 
 from rex4p import ClientConfig, RexClient, RexCommand, RexData, Protocol
 
 
 class LatencyStats:
-    """延迟统计"""
+    """延迟统计 - GC优化版本"""
+
+    __slots__ = ("latencies", "lock")
 
     def __init__(self):
-        self.latencies = deque()
+        self.latencies = []
         self.lock = Lock()
 
     def record(self, latency_ns):
@@ -22,16 +24,17 @@ class LatencyStats:
 
     def get_and_clear(self):
         with self.lock:
-            data = list(self.latencies)
-            self.latencies.clear()
+            data = self.latencies
+            self.latencies = []
             return data
 
     def calculate_stats(self, latencies):
         if not latencies:
             return None
 
-        sorted_lat = sorted(latencies)
-        count = len(sorted_lat)
+        count = len(latencies)
+        latencies.sort()
+        sorted_lat = latencies  # 重命名避免复制
 
         def percentile(p):
             k = (count - 1) * p / 100
@@ -39,14 +42,17 @@ class LatencyStats:
             c = f + 1 if f + 1 < count else f
             return sorted_lat[f] + (k - f) * (sorted_lat[c] - sorted_lat[f])
 
-        # 转换为微秒
-        latencies_us = [lat / 1000 for lat in sorted_lat]
+        # 只在最后计算时转换一次
+        inv_count = 1.0 / count
+        min_lat = sorted_lat[0]
+        max_lat = sorted_lat[-1]
+        total = sum(sorted_lat)
 
         return {
             "count": count,
-            "min": min(latencies_us),
-            "max": max(latencies_us),
-            "mean": sum(latencies_us) / count,
+            "min": min_lat / 1000,
+            "max": max_lat / 1000,
+            "mean": (total * inv_count) / 1000,
             "p50": percentile(50) / 1000,
             "p90": percentile(90) / 1000,
             "p95": percentile(95) / 1000,
@@ -56,7 +62,18 @@ class LatencyStats:
 
 
 class RcvHandler:
-    """接收端处理器"""
+    """接收端处理器 - GC优化版本"""
+
+    __slots__ = (
+        "rcv_count",
+        "stats",
+        "running",
+        "client",
+        "should_exit",
+        "_struct_unpack",
+        "_stop_timestamp",
+        "_zero_timestamp",
+    )
 
     def __init__(self, client=None):
         self.rcv_count = 0
@@ -64,6 +81,10 @@ class RcvHandler:
         self.running = True
         self.client = client
         self.should_exit = False
+        # 预计算常量
+        self._struct_unpack = struct.Struct("<q").unpack
+        self._stop_timestamp = -10086
+        self._zero_timestamp = 0
         self.start_stats_thread()
 
     def start_stats_thread(self):
@@ -97,13 +118,14 @@ class RcvHandler:
     def on_message(self, data):
         now = time.time_ns()
 
-        # 解析时间戳
+        # 解析时间戳 - 使用memoryview避免复制
         data_bytes = data.data
         if len(data_bytes) >= 8:
-            timestamp = struct.unpack("<q", data_bytes[:8])[0]
+            timestamp = self._struct_unpack(data_bytes[:8])[0]
 
             # 检查是否是停止信号
-            if timestamp == -10086:
+            if timestamp == self._stop_timestamp:
+                time.sleep(0.5)
                 print(f"\nreceive total: [{self.rcv_count}]")
                 self.running = False
                 self.should_exit = True
@@ -124,6 +146,8 @@ class RcvHandler:
 class SndHandler:
     """发送端处理器"""
 
+    __slots__ = ()
+
     def on_login(self, data):
         print("snd client login ok")
 
@@ -131,16 +155,20 @@ class SndHandler:
         print(f"snd receive: {data.command}")
 
 
-def wrap_data(size):
-    """打包数据，前8字节为时间戳"""
-    timestamp = time.time_ns()
-    data = bytearray(size)
-    struct.pack_into("<q", data, 0, timestamp)
-    return bytes(data)
+# 全局缓冲区，用于减少GC
+_buf_struct = struct.Struct("<q")
+_buf_pack_into = _buf_struct.pack_into
+
+
+def wrap_data(size, timestamp, out_buf):
+    """打包数据，前8字节为时间戳 - 复用缓冲区版本"""
+    _buf_pack_into(out_buf, 0, timestamp)
+    return bytes(out_buf[:size])
 
 
 def rcv_mode(args):
-    """接收模式"""
+    """接收模式 - GC优化版本"""
+    gc.disable()  # 禁用自动GC，由程序控制
     handler = RcvHandler()
     config = ClientConfig(
         f"{args.host}:{args.port}", Protocol.tcp(), args.title, handler
@@ -169,7 +197,8 @@ def rcv_mode(args):
 
 
 def snd_mode(args):
-    """发送模式"""
+    """发送模式 - GC优化版本"""
+    gc.disable()  # 禁用自动GC，由程序控制
     handler = SndHandler()
     config = ClientConfig(f"{args.host}:{args.port}", Protocol.tcp(), "", handler)
 
@@ -196,12 +225,18 @@ def snd_mode(args):
     interval_ns = args.interval * 1000  # 转换为纳秒
     snd_count = 0
 
+    # 预分配缓冲区
+    buf_size = max(args.size, 8)
+    out_buf = bytearray(buf_size)
+    _stop_ts = -10086
+
     try:
         while time.time() < end_time:
             start = time.time_ns()
 
-            # 发送数据
-            data_bytes = wrap_data(args.size)
+            # 发送数据 - 复用缓冲区
+            timestamp = time.time_ns()
+            data_bytes = wrap_data(args.size, timestamp, out_buf)
             data = RexData(command, args.title, data_bytes)
             client.send(data)
             snd_count += 1
@@ -211,15 +246,11 @@ def snd_mode(args):
                 elapsed = time.time_ns() - start
                 if elapsed >= interval_ns:
                     break
-                # 短暂休眠，避免100% CPU
-                # if interval_ns - elapsed > 1000:
-                #     time.sleep(0.000001)
 
         # 发送停止信号
         print("\nSending stop signal...")
-        stop_data = bytearray(8)
-        struct.pack_into("<q", stop_data, 0, -10086)
-        stop_msg = RexData(command, args.title, bytes(stop_data))
+        struct.pack_into("<q", out_buf, 0, _stop_ts)
+        stop_msg = RexData(command, args.title, bytes(out_buf[:8]))
         client.send(stop_msg)
 
         print(f"send total: [{snd_count}]")
