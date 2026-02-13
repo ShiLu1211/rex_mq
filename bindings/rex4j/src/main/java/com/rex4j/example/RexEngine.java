@@ -104,6 +104,7 @@ public class RexEngine implements Runnable {
         1,
         1,
         TimeUnit.SECONDS);
+
     RexConfig config = RexConfig.builder(host, port, title).build();
     @SuppressWarnings({"resource", "unused"})
     RexClient client =
@@ -118,7 +119,10 @@ public class RexEngine implements Runnable {
               @Override
               public void onMessage(RexClient client, RexData data) {
                 long now = System.nanoTime();
-                long timestamp = timestamp(data.getData());
+                byte[] dataBytes = data.getData();
+
+                // 直接从字节数组读取小端 long
+                long timestamp = ByteBuffer.wrap(dataBytes).getLong();
 
                 if (timestamp == -10086) {
                   System.out.printf("receive total: [%d]%n", rcv_count.get());
@@ -163,45 +167,35 @@ public class RexEngine implements Runnable {
 
     long end = System.currentTimeMillis() + time * 1000L;
     long intervalNanos = interval * 1_000L;
-    long start = 0;
+    long start;
     long snd_count = 0;
 
     do {
       start = System.nanoTime();
 
-      RexData data = RexData.builder(command).title(title).data(wrapData(size)).build();
+      // 构造数据：timestamp + payload
+      ByteBuffer buffer = ByteBuffer.allocate(TIMESTAMP_LENGTH + size);
+      buffer.putLong(start);
+
+      RexData data = RexData.builder(command).title(title).data(buffer.array()).build();
 
       client.send(data);
       snd_count += 1;
 
-      while (true) {
-        long elapsed = System.nanoTime() - start;
-        if (elapsed > intervalNanos) {
-          break;
-        }
+      while (System.nanoTime() - start < intervalNanos) {
+        // busy wait
       }
 
     } while (System.currentTimeMillis() < end);
 
-    ByteBuffer buffer = ByteBuffer.wrap(new byte[TIMESTAMP_LENGTH]);
-    buffer.putLong(-10086);
-    RexData stopData = RexData.builder(command).title(title).data(buffer.array()).build();
+    // 发送停止消息
+    ByteBuffer stopBuf = ByteBuffer.allocate(TIMESTAMP_LENGTH);
+    stopBuf.putLong(-10086);
+    RexData stopData = RexData.builder(command).title(title).data(stopBuf.array()).build();
     client.send(stopData);
 
     System.out.printf("send total: [%d]%n", snd_count);
 
     client.close();
-  }
-
-  byte[] wrapData(int size) {
-    ByteBuffer buffer = ByteBuffer.wrap(new byte[size]);
-    long timestamp = System.nanoTime();
-    buffer.putLong(timestamp);
-    return buffer.array();
-  }
-
-  long timestamp(byte[] data) {
-    ByteBuffer buffer = ByteBuffer.wrap(data, 0, TIMESTAMP_LENGTH);
-    return buffer.getLong();
   }
 }

@@ -8,7 +8,7 @@ workspace = true
 
 [dependencies]
 rex-core = { path = "../rex-core" }
-bytes.workspace = true
+bytes = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 tracing.workspace = true

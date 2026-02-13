@@ -34,13 +34,13 @@ pub async fn handle(
         return Ok(());
     }
 
-    // 并行发送
-    let buf = rex_data.pack_ref(); // 打包一次
+    // 并行发送 - 复用 buf 避免重复打包
+    let buf = rex_data.pack_ref();
     let tasks: FuturesUnordered<_> = matching_clients
         .into_iter()
         .map(|client| async move {
             let client_id = client.id();
-            match client.send_buf(buf).await {
+            match client.send_buf(&buf).await {
                 Ok(()) => (client_id, true),
                 Err(e) => {
                     warn!("Failed to send to client [{:032X}]: {}", client_id, e);

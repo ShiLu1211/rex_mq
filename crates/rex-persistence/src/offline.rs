@@ -1,14 +1,15 @@
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 /// 离线消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OfflineMessage {
     pub id: u64,
-    pub client_id: u128,  // 目标客户端ID
-    pub title: String,    // 消息主题
-    pub payload: Vec<u8>, // 消息内容
-    pub timestamp: u64,   // 消息时间戳
-    pub retries: u32,     // 重试次数
+    pub client_id: u128, // 目标客户端ID
+    pub title: String,   // 消息主题
+    pub payload: Bytes,  // 消息内容 - 使用 Bytes 避免拷贝
+    pub timestamp: u64,  // 消息时间戳
+    pub retries: u32,    // 重试次数
 }
 
 impl OfflineMessage {
@@ -17,7 +18,7 @@ impl OfflineMessage {
             id: gen_message_id(),
             client_id,
             title,
-            payload: payload.to_vec(),
+            payload,
             timestamp: rex_core::utils::now_secs(),
             retries: 0,
         }

@@ -48,6 +48,8 @@ pub struct ServerArgs {
     /// 服务端id
     #[arg(short, long, default_value = "rexd")]
     server_id: String,
+    #[arg(long, default_value_t = false)]
+    persist: bool,
 }
 
 #[derive(clap::Args)]
@@ -99,7 +101,9 @@ pub async fn start_server(args: ServerArgs) -> Result<()> {
         .ok_or_else(|| anyhow!("invalid protocol: {}", args.protocol))?;
 
     let config = RexServerConfig::new(protocol, address);
-    let system = RexSystem::new(RexSystemConfig::from_id(&args.server_id)).await;
+    let mut system_config = RexSystemConfig::from_id(&args.server_id);
+    system_config.persistence_enabled = args.persist;
+    let system = RexSystem::new(system_config).await;
     let _server = open_server(system, config).await?;
 
     loop {
