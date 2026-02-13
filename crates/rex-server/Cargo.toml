@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 rex-core.workspace = true
 rex-sender.workspace = true
+rex-persistence.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 serde.workspace = true
@@ -24,3 +25,4 @@ futures-util.workspace = true
 tokio-tungstenite.workspace = true
 rcgen.workspace = true
 ahash.workspace = true
+futures.workspace = true

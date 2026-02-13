@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     net::SocketAddr,
     sync::{
         Arc,
@@ -100,21 +99,9 @@ impl RexClientInner {
     }
 
     #[inline]
-    pub fn title_str(&self) -> Cow<'_, str> {
+    pub fn title_str(&self) -> String {
         let titles = self.titles.read();
-
-        if titles.is_empty() {
-            return Cow::Borrowed("");
-        }
-
-        let mut s = String::new();
-        for (i, t) in titles.iter().enumerate() {
-            if i > 0 {
-                s.push(';');
-            }
-            s.push_str(t);
-        }
-        Cow::Owned(s)
+        titles.join(";")
     }
 
     /// 多个title用;分隔

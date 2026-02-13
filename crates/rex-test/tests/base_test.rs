@@ -18,7 +18,7 @@ mod tests {
     }
 
     async fn base_test_inner(protocol: Protocol) -> Result<()> {
-        let mut ss = TestEnv::default();
+        let mut ss = TestEnv::new().await;
 
         let server = ss.start_server(protocol).await?;
 

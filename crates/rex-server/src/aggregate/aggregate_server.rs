@@ -13,7 +13,7 @@ pub struct AggregateServer {
 
 impl AggregateServer {
     pub async fn from_config(config: AggregateConfig) -> Result<Self> {
-        let system = RexSystem::new(config.system);
+        let system = RexSystem::new(config.system).await;
         let mut server = Self {
             system,
             server_list: vec![],
@@ -50,8 +50,8 @@ impl AggregateServer {
         }
     }
 
-    pub fn new_with_config(system_config: RexSystemConfig) -> Self {
-        let system = RexSystem::new(system_config);
+    pub async fn new_with_config(system_config: RexSystemConfig) -> Self {
+        let system = RexSystem::new(system_config).await;
         Self::new(system)
     }
 

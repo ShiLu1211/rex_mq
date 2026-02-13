@@ -40,6 +40,10 @@ impl TestClient {
         }
     }
 
+    pub fn is_connected(&self) -> bool {
+        self.client.get_connection_state() == ConnectionState::Connected
+    }
+
     pub async fn close(&self) {
         self.client.close().await;
     }
@@ -85,18 +89,16 @@ pub struct TestEnv {
     base_port: u16,
 }
 
-impl Default for TestEnv {
-    fn default() -> Self {
+impl TestEnv {
+    pub async fn new() -> Self {
         let _ = tracing_subscriber::fmt::try_init();
         Self {
-            system: RexSystem::new(RexSystemConfig::from_id("test-system")),
+            system: RexSystem::new(RexSystemConfig::from_id("test-system")).await,
             servers: HashMap::new(),
             base_port: 8880,
         }
     }
-}
 
-impl TestEnv {
     fn next_addr(&self, proto: Protocol) -> SocketAddr {
         let offset = match proto {
             Protocol::Tcp => 1,

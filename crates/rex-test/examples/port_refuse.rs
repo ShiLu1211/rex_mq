@@ -16,7 +16,7 @@ async fn main() -> Result<()> {
 }
 
 async fn port_refuse(protocol: Protocol) -> Result<()> {
-    let mut ss = TestEnv::default();
+    let mut ss = TestEnv::new().await;
 
     let server = ss.start_server(protocol).await?;
 

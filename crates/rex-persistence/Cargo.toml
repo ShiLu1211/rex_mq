@@ -1,0 +1,17 @@
+[package]
+name = "rex-persistence"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rex-core = { path = "../rex-core" }
+bytes = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+sled.workspace = true
+bincode.workspace = true

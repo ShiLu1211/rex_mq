@@ -3,6 +3,7 @@ members = [
   "crates/rex-cli",
   "crates/rex-client",
   "crates/rex-core",
+  "crates/rex-persistence",
   "crates/rex-sender",
   "crates/rex-server",
   "crates/rex-test",
@@ -32,34 +33,41 @@ rex-core = { path = "crates/rex-core" }
 rex-sender = { path = "crates/rex-sender" }
 rex-client = { path = "crates/rex-client" }
 rex-server = { path = "crates/rex-server" }
+rex-persistence = { path = "crates/rex-persistence" }
 
 # --- Async Runtime & Concurrency ---
 tokio = { version = "1.49.0", features = ["full"] }
+futures = "0.3.31"
 futures-util = "0.3.31"
 async-trait = "0.1.89"
 kanal = "0.1.1"
 parking_lot = "0.12.5"
-arc-swap = "1.8.0"
+arc-swap = "1.8.1"
+once_cell = "1.21.3"
 
 # --- Networking & Transport ---
 quinn = "0.11.9"
 rustls = { version = "0.23.36", default-features = false }
-rcgen = "0.14.6"
+rcgen = "0.14.7"
 tokio-tungstenite = "0.28.0"
 
 # --- Data Structures & Performance ---
-bytes = "1.11.0"
+bytes = "1.11.1"
 dashmap = "6.1.0"
 ahash = "0.8.12"
 hdrhistogram = "7.5.4"
 
+# Persistence
+sled = "0.34.7"
+bincode = "1.3.3"
+
 # --- IDs, Randomness ---
-uuid = { version = "1.19.0", features = ["v4"] }
-rand = "0.9.2"
+uuid = { version = "1.20.0", features = ["v4"] }
+rand = "0.10.0"
 
 # --- Error Handling & Utilities ---
-anyhow = "1.0.100"
-thiserror = "2.0.17"
+anyhow = "1.0.101"
+thiserror = "2.0.18"
 itertools = "0.14.0"
 
 # --- Logging & Observability ---
@@ -67,23 +75,24 @@ tracing = "0.1.44"
 tracing-subscriber = "0.3.22"
 
 # --- CLI & Config ---
-clap = { version = "4.5.54", features = ["derive"] }
+clap = { version = "4.5.58", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }
-toml = "0.9.11"
+toml = "1.0.0"
 
 # --- Enum Utilities ---
 strum = "0.27.2"
 strum_macros = "0.27.2"
 
 # --- Benchmarking & Testing ---
-criterion = { version = "0.8.1", features = ["async_tokio", "html_reports"] }
+criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
+serial_test = "3.3.1"
 
 # --- Language Bindings ---
 # Java
 jni = "0.21.1"
 # Python
-pyo3 = { version = "0.27.2", features = ["extension-module", "abi3-py39"] }
-pyo3-async-runtimes = { version = "0.27.0", features = ["tokio-runtime"] }
+pyo3 = { version = "0.28.0", features = ["extension-module", "abi3-py39"] }
+pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }
 
 # =====================
 # Build Profiles

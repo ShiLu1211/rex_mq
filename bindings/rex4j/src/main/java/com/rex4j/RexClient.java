@@ -2,6 +2,7 @@ package com.rex4j;
 
 import com.rex4j.exception.RexException;
 import com.rex4j.jni.RexNative;
+import java.nio.ByteBuffer;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -92,15 +93,8 @@ public class RexClient implements AutoCloseable {
     if (idBytes == null || idBytes.length != 16) {
       throw new RexException("Invalid client ID");
     }
-    long mostSigBits = 0;
-    long leastSigBits = 0;
-    for (int i = 0; i < 8; i++) {
-      mostSigBits = (mostSigBits << 8) | (idBytes[i] & 0xff);
-    }
-    for (int i = 8; i < 16; i++) {
-      leastSigBits = (leastSigBits << 8) | (idBytes[i] & 0xff);
-    }
-    return new UUID(mostSigBits, leastSigBits);
+    ByteBuffer bb = ByteBuffer.wrap(idBytes);
+    return new UUID(bb.getLong(), bb.getLong());
   }
 
   /** 获取配置 */
