@@ -10,6 +10,14 @@ use tracing::{info, warn};
 
 use crate::RexSystemConfig;
 
+/// Information about a pending ACK
+pub struct PendingAckInfo {
+    pub source_client_id: u128,
+    pub title: String,
+    pub timestamp: u64,
+    pub is_group: bool,
+}
+
 pub struct RexSystem {
     pub config: RexSystemConfig,
     id2client: DashMap<u128, Arc<RexClientInner>, RandomState>,
@@ -17,6 +25,8 @@ pub struct RexSystem {
     shutdown_tx: Arc<broadcast::Sender<()>>,
     // Persistence
     persistence: Option<Arc<PersistenceStore>>,
+    // ACK tracking
+    pending_acks: DashMap<u64, PendingAckInfo, RandomState>,
 }
 
 impl RexSystem {
@@ -52,6 +62,7 @@ impl RexSystem {
             title2clients: DashMap::with_hasher(RandomState::new()),
             shutdown_tx: shutdown_tx_arc.clone(),
             persistence,
+            pending_acks: DashMap::with_hasher(RandomState::new()),
         });
 
         // Subscribe to shutdown signal for cleanup task
@@ -67,6 +78,7 @@ impl RexSystem {
                     tokio::select! {
                         _ = tokio::time::sleep(check_interval) => {
                             system_clone.cleanup_inactive_clients(client_timeout).await;
+                            system_clone.cleanup_expired_acks().await;
                         }
                         _ = shutdown_rx.recv() => {
                             info!("Cleanup task received shutdown signal, stopping.");
@@ -281,6 +293,82 @@ impl RexSystem {
             return count;
         }
         0
+    }
+
+    /* ---------------- ACK tracking ---------------- */
+
+    /// Check if ACK is enabled
+    pub fn is_ack_enabled(&self) -> bool {
+        self.config.ack_enabled
+    }
+
+    /// Register a pending ACK
+    pub fn register_pending_ack(
+        &self,
+        message_id: u64,
+        source_client_id: u128,
+        title: String,
+        is_group: bool,
+    ) {
+        if !self.config.ack_enabled {
+            return;
+        }
+        let info = PendingAckInfo {
+            source_client_id,
+            title,
+            timestamp: now_secs(),
+            is_group,
+        };
+        self.pending_acks.insert(message_id, info);
+    }
+
+    /// Get and remove pending ACK info
+    pub fn take_pending_ack(&self, message_id: u64) -> Option<PendingAckInfo> {
+        self.pending_acks.remove(&message_id).map(|(_, v)| v)
+    }
+
+    /// Get pending ACK info without removing
+    pub fn get_pending_ack(&self, message_id: u64) -> Option<PendingAckInfo> {
+        self.pending_acks.get(&message_id).map(|v| PendingAckInfo {
+            source_client_id: v.source_client_id,
+            title: v.title.clone(),
+            timestamp: v.timestamp,
+            is_group: v.is_group,
+        })
+    }
+
+    /// Clean up expired ACKs
+    pub async fn cleanup_expired_acks(&self) {
+        if !self.config.ack_enabled {
+            return;
+        }
+        let timeout = self.config.ack_timeout;
+        let now = now_secs();
+
+        let expired: Vec<u64> = self
+            .pending_acks
+            .iter()
+            .filter(|entry| now - entry.value().timestamp > timeout)
+            .map(|entry| *entry.key())
+            .collect();
+
+        for msg_id in expired {
+            if let Some((_, info)) = self.pending_acks.remove(&msg_id) {
+                // Send timeout error to sender
+                if let Some(sender) = self.id2client.get(&info.source_client_id) {
+                    let retcode = rex_core::RetCode::AckTimeout;
+                    let ack_data = rex_core::AckData::new(msg_id);
+                    let rex_data = ack_data
+                        .to_rex_data(info.source_client_id, rex_core::RexCommand::AckReturn);
+                    let mut rex_data = rex_data;
+                    rex_data.set_retcode(retcode);
+
+                    if let Err(e) = sender.send_buf(rex_data.pack_ref()).await {
+                        warn!("Failed to send ACK timeout to client: {}", e);
+                    }
+                }
+            }
+        }
     }
 
     /* ---------------- shutdown ---------------- */

@@ -16,6 +16,13 @@ pub struct RexSystemConfig {
     pub offline_enabled: bool,
     #[serde(default = "default_offline_ttl")]
     pub offline_ttl: u64,
+    // ACK config
+    #[serde(default = "default_ack_enabled")]
+    pub ack_enabled: bool,
+    #[serde(default = "default_ack_timeout")]
+    pub ack_timeout: u64,
+    #[serde(default = "default_ack_retries")]
+    pub ack_retries: u32,
 }
 
 fn default_check_interval() -> u64 {
@@ -36,6 +43,15 @@ fn default_offline_enabled() -> bool {
 fn default_offline_ttl() -> u64 {
     86400 * 7 // 7 days
 }
+fn default_ack_enabled() -> bool {
+    false
+}
+fn default_ack_timeout() -> u64 {
+    5000 // 5 seconds
+}
+fn default_ack_retries() -> u32 {
+    3
+}
 
 impl RexSystemConfig {
     pub fn new(
@@ -46,6 +62,9 @@ impl RexSystemConfig {
         persistence_path: String,
         offline_enabled: bool,
         offline_ttl: u64,
+        ack_enabled: bool,
+        ack_timeout: u64,
+        ack_retries: u32,
     ) -> Self {
         Self {
             server_id,
@@ -55,6 +74,9 @@ impl RexSystemConfig {
             persistence_path,
             offline_enabled,
             offline_ttl,
+            ack_enabled,
+            ack_timeout,
+            ack_retries,
         }
     }
 
@@ -67,6 +89,9 @@ impl RexSystemConfig {
             persistence_path: "./.rex_sled".to_string(),
             offline_enabled: true,
             offline_ttl: 86400 * 7,
+            ack_enabled: false,
+            ack_timeout: 5000,
+            ack_retries: 3,
         }
     }
 }

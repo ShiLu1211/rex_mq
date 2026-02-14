@@ -26,6 +26,26 @@ pub async fn handle(
             client_id, target_client_id, data_len
         );
 
+        // Generate message ID for ACK if enabled
+        if system.is_ack_enabled() {
+            let title_clone = title.to_string();
+            // Use the message_id from client if already set, otherwise generate a new one
+            let msg_id = if rex_data.message_id() != 0 {
+                rex_data.message_id()
+            } else {
+                fastrand::u64(..)
+            };
+            rex_data.set_message_id(msg_id);
+
+            // Register pending ACK
+            system.register_pending_ack(
+                msg_id,
+                client_id,
+                title_clone,
+                false, // Title is unicast, not group
+            );
+        }
+
         if let Err(e) = target_client.send_buf(rex_data.pack_ref()).await {
             warn!(
                 "client [{:032X}] send to [{:032X}] error: {}",
@@ -38,6 +58,10 @@ pub async fn handle(
         info!("no target available for title [{}]", title);
     }
 
+    // Send error back if no success
+    // Note: When ACK is enabled and message is sent successfully, we wait for ACK
+    // so we don't send TitleReturn immediately. But if there's no target, we should
+    // still return an error.
     if !success {
         if let Err(e) = source_client
             .send_buf(

@@ -87,6 +87,8 @@ pub struct TestEnv {
     system: Arc<RexSystem>,
     servers: HashMap<Protocol, Arc<dyn RexServerTrait>>,
     base_port: u16,
+    /// ACK enabled flag
+    pub ack_enabled: bool,
 }
 
 impl TestEnv {
@@ -96,6 +98,21 @@ impl TestEnv {
             system: RexSystem::new(RexSystemConfig::from_id("test-system")).await,
             servers: HashMap::new(),
             base_port: 8880,
+            ack_enabled: false,
+        }
+    }
+
+    /// Create a new TestEnv with ACK enabled
+    pub async fn new_with_ack() -> Self {
+        let _ = tracing_subscriber::fmt::try_init();
+        let mut config = RexSystemConfig::from_id("test-system");
+        config.ack_enabled = true;
+        config.ack_timeout = 5000;
+        Self {
+            system: RexSystem::new(config).await,
+            servers: HashMap::new(),
+            base_port: 8880,
+            ack_enabled: true,
         }
     }
 
@@ -123,6 +140,19 @@ impl TestEnv {
         let (tx, rx) = channel(100);
         let handler = Arc::new(TestClientHandler { tx });
         let cfg = RexClientConfig::new(proto, addr, title, handler);
+        let client = open_client(cfg).await?;
+        Ok(TestClient::new(client, rx))
+    }
+
+    /// 为指定协议创建支持 ACK 的 client
+    pub async fn create_client_with_ack(&self, proto: Protocol, title: &str) -> Result<TestClient> {
+        let addr = self.next_addr(proto);
+        let (tx, rx) = channel(100);
+        let handler = Arc::new(TestClientHandler { tx });
+        let cfg = RexClientConfig::new(proto, addr, title, handler);
+        let mut cfg = cfg;
+        cfg.ack_enabled = self.ack_enabled;
+        cfg.ack_timeout_ms = 5000;
         let client = open_client(cfg).await?;
         Ok(TestClient::new(client, rx))
     }

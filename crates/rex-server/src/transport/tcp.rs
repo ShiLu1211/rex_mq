@@ -8,7 +8,7 @@ use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, TcpStream, tcp::OwnedReadHalf},
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::base::ServerBase;
 use crate::{RexServerConfig, RexServerTrait, RexSystem};
@@ -120,6 +120,7 @@ impl TcpServer {
                             break;
                         }
                         Ok(_) => {
+                            debug!("TCP connection {} received {} bytes", peer_addr, buffer.len());
                             if let Err(e) = self.base.parse_and_handle_buffer(&peer, &mut buffer).await {
                                 warn!("Error processing buffer for {}: {}", peer_addr, e);
                             }

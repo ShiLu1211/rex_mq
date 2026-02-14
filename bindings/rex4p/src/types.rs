@@ -93,6 +93,8 @@ pub enum PyRexCommand {
     RegTitleReturn,
     DelTitle,
     DelTitleReturn,
+    Ack,
+    AckReturn,
 }
 
 impl From<PyRexCommand> for RexCommand {
@@ -112,6 +114,8 @@ impl From<PyRexCommand> for RexCommand {
             PyRexCommand::RegTitleReturn => RexCommand::RegTitleReturn,
             PyRexCommand::DelTitle => RexCommand::DelTitle,
             PyRexCommand::DelTitleReturn => RexCommand::DelTitleReturn,
+            PyRexCommand::Ack => RexCommand::Ack,
+            PyRexCommand::AckReturn => RexCommand::AckReturn,
         }
     }
 }
@@ -133,6 +137,8 @@ impl From<RexCommand> for PyRexCommand {
             RexCommand::RegTitleReturn => PyRexCommand::RegTitleReturn,
             RexCommand::DelTitle => PyRexCommand::DelTitle,
             RexCommand::DelTitleReturn => PyRexCommand::DelTitleReturn,
+            RexCommand::Ack => PyRexCommand::Ack,
+            RexCommand::AckReturn => PyRexCommand::AckReturn,
         }
     }
 }
@@ -144,6 +150,8 @@ pub enum PyRetCode {
     Success,
     Error,
     NoTarget,
+    AckTimeout,
+    AckFailed,
 }
 
 impl From<RetCode> for PyRetCode {
@@ -152,6 +160,8 @@ impl From<RetCode> for PyRetCode {
             RetCode::Success => PyRetCode::Success,
             RetCode::Error => PyRetCode::Error,
             RetCode::NoTarget => PyRetCode::NoTarget,
+            RetCode::AckTimeout => PyRetCode::AckTimeout,
+            RetCode::AckFailed => PyRetCode::AckFailed,
         }
     }
 }

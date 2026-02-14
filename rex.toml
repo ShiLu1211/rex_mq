@@ -3,6 +3,17 @@ server_id = "rex-server"
 check_interval = 15
 client_timeout = 45
 
+# Persistence configuration
+persistence_enabled = true       # Enable client state persistence
+persistence_path = "./.rex_sled"  # Persistence database path
+offline_enabled = true           # Enable offline message queue
+offline_ttl = 604800             # Offline message TTL in seconds (7 days)
+
+# ACK configuration
+ack_enabled = false               # Enable message acknowledgment
+ack_timeout = 5000                # ACK timeout in milliseconds
+ack_retries = 3                   # Number of retries (reserved for future use)
+
 [[endpoints]]
 protocol = "tcp"
 address = "0.0.0.0:8881"

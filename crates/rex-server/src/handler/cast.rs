@@ -34,13 +34,33 @@ pub async fn handle(
         return Ok(());
     }
 
+    // Generate message ID for ACK if enabled
+    if system.is_ack_enabled() {
+        let title_clone = title.to_string();
+        // Use the message_id from client if already set, otherwise generate a new one
+        let msg_id = if rex_data.message_id() != 0 {
+            rex_data.message_id()
+        } else {
+            fastrand::u64(..)
+        };
+        rex_data.set_message_id(msg_id);
+
+        // Register pending ACK
+        system.register_pending_ack(
+            msg_id,
+            client_id,
+            title_clone,
+            false, // Cast is not group
+        );
+    }
+
     // 并行发送 - 复用 buf 避免重复打包
     let buf = rex_data.pack_ref();
     let tasks: FuturesUnordered<_> = matching_clients
         .into_iter()
         .map(|client| async move {
             let client_id = client.id();
-            match client.send_buf(&buf).await {
+            match client.send_buf(buf).await {
                 Ok(()) => (client_id, true),
                 Err(e) => {
                     warn!("Failed to send to client [{:032X}]: {}", client_id, e);
@@ -73,6 +93,7 @@ pub async fn handle(
         system.remove_client(failed_client_id).await;
     }
 
+    // If no clients received the message successfully, send error back
     if success_count == 0
         && let Err(e) = source_client
             .send_buf(
@@ -85,6 +106,9 @@ pub async fn handle(
     {
         warn!("client [{:032X}] error back: {}", client_id, e);
     }
+
+    // If ACK is enabled and at least one client received the message,
+    // we wait for ACK from receivers. Don't send CastReturn yet.
 
     Ok(())
 }

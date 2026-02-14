@@ -26,3 +26,4 @@ tokio-tungstenite.workspace = true
 rcgen.workspace = true
 ahash.workspace = true
 futures.workspace = true
+fastrand = "2.0"
