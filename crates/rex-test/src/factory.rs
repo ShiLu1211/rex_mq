@@ -10,7 +10,9 @@ use rex_client::{
     ConnectionState, RexClientConfig, RexClientHandlerTrait, RexClientTrait, open_client,
 };
 use rex_core::{Protocol, RexClientInner, RexCommand, RexData};
-use rex_server::{RexServerConfig, RexServerTrait, RexSystem, RexSystemConfig, open_server};
+use rex_server::{
+    ClusterConfig, RexServerConfig, RexServerTrait, RexSystem, RexSystemConfig, open_server,
+};
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tracing::{info, warn};
 
@@ -89,16 +91,28 @@ pub struct TestEnv {
     base_port: u16,
     /// ACK enabled flag
     pub ack_enabled: bool,
+    /// Cluster port counter
+    pub cluster_port_counter: u16,
+    /// Server/Client port counter for unique ports
+    port_counter: u16,
+    /// Last created server's address (for clients to connect to)
+    last_server_addr: Option<SocketAddr>,
 }
 
 impl TestEnv {
     pub async fn new() -> Self {
         let _ = tracing_subscriber::fmt::try_init();
+        // Use random base port to avoid conflicts between parallel tests
+        let base_port = 28800 + (rand::random::<u16>() % 1000);
+        let cluster_port = 38800 + (rand::random::<u16>() % 1000);
         Self {
             system: RexSystem::new(RexSystemConfig::from_id("test-system")).await,
             servers: HashMap::new(),
-            base_port: 8880,
+            base_port,
             ack_enabled: false,
+            cluster_port_counter: cluster_port,
+            port_counter: 0,
+            last_server_addr: None,
         }
     }
 
@@ -108,21 +122,30 @@ impl TestEnv {
         let mut config = RexSystemConfig::from_id("test-system");
         config.ack_enabled = true;
         config.ack_timeout = 5000;
+        // Use random base port to avoid conflicts between parallel tests
+        let base_port = 28800 + (rand::random::<u16>() % 1000);
+        let cluster_port = 38800 + (rand::random::<u16>() % 1000);
         Self {
             system: RexSystem::new(config).await,
             servers: HashMap::new(),
-            base_port: 8880,
+            base_port,
             ack_enabled: true,
+            cluster_port_counter: cluster_port,
+            port_counter: 0,
+            last_server_addr: None,
         }
     }
 
-    fn next_addr(&self, proto: Protocol) -> SocketAddr {
-        let offset = match proto {
-            Protocol::Tcp => 1,
-            Protocol::Quic => 2,
-            Protocol::WebSocket => 3,
+    fn next_addr(&mut self, proto: Protocol) -> SocketAddr {
+        let offset = self.port_counter;
+        self.port_counter += 1;
+        // Use base_port + offset, with protocol offset as starting point
+        let proto_offset = match proto {
+            Protocol::Tcp => 0,
+            Protocol::Quic => 100,
+            Protocol::WebSocket => 200,
         };
-        SocketAddr::from((Ipv4Addr::LOCALHOST, self.base_port + offset))
+        SocketAddr::from((Ipv4Addr::LOCALHOST, self.base_port + proto_offset + offset))
     }
 
     /// 启动指定协议的 server，并加入系统
@@ -131,25 +154,99 @@ impl TestEnv {
         let cfg = RexServerConfig::new(proto, addr);
         let server = open_server(self.system.clone(), cfg).await?;
         self.servers.insert(proto, server.clone());
+        self.last_server_addr = Some(addr);
+        Ok(server)
+    }
+
+    /// 启动指定协议的 server，使用指定端口
+    pub async fn start_server_with_addr(
+        &mut self,
+        proto: Protocol,
+        addr: SocketAddr,
+    ) -> Result<Arc<dyn RexServerTrait>> {
+        let cfg = RexServerConfig::new(proto, addr);
+        let server = open_server(self.system.clone(), cfg).await?;
+        self.servers.insert(proto, server.clone());
+        self.last_server_addr = Some(addr);
+        Ok(server)
+    }
+
+    /// 启动指定协议的 cluster server
+    pub async fn start_cluster_server(
+        &mut self,
+        proto: Protocol,
+        node_id: &str,
+        seed_nodes: Vec<SocketAddr>,
+    ) -> Result<Arc<dyn RexServerTrait>> {
+        let addr = self.next_addr(proto);
+        let cluster_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, self.cluster_port_counter));
+        self.cluster_port_counter += 1;
+
+        tracing::info!(
+            "Starting cluster server {} at {} with cluster_addr {}",
+            node_id,
+            addr,
+            cluster_addr
+        );
+
+        let cfg = RexServerConfig {
+            protocol: proto,
+            bind_addr: addr,
+            enabled: true,
+            max_buffer_size: 8 * 1024 * 1024,
+            max_concurrent_handlers: 1000,
+            cluster: Some(ClusterConfig {
+                enabled: true,
+                cluster_addr,
+                seed_nodes,
+                node_id: Some(node_id.to_string()),
+            }),
+        };
+
+        let server = open_server(self.system.clone(), cfg).await?;
+        self.servers.insert(proto, server.clone());
         Ok(server)
     }
 
     /// 为指定协议创建 client
-    pub async fn create_client(&self, proto: Protocol, title: &str) -> Result<TestClient> {
-        let addr = self.next_addr(proto);
+    pub async fn create_client(&mut self, proto: Protocol, title: &str) -> Result<TestClient> {
+        // Use the last server's address for the client to connect to
+        let server_addr = self
+            .last_server_addr
+            .unwrap_or_else(|| self.next_addr(proto));
         let (tx, rx) = channel(100);
         let handler = Arc::new(TestClientHandler { tx });
-        let cfg = RexClientConfig::new(proto, addr, title, handler);
+        let cfg = RexClientConfig::new(proto, server_addr, title, handler);
+        let client = open_client(cfg).await?;
+        Ok(TestClient::new(client, rx))
+    }
+
+    /// 创建连接到指定服务器地址的 client
+    pub async fn create_client_to_addr(
+        &mut self,
+        server_addr: SocketAddr,
+        title: &str,
+    ) -> Result<TestClient> {
+        let (tx, rx) = channel(100);
+        let handler = Arc::new(TestClientHandler { tx });
+        let cfg = RexClientConfig::new(Protocol::Tcp, server_addr, title, handler);
         let client = open_client(cfg).await?;
         Ok(TestClient::new(client, rx))
     }
 
     /// 为指定协议创建支持 ACK 的 client
-    pub async fn create_client_with_ack(&self, proto: Protocol, title: &str) -> Result<TestClient> {
-        let addr = self.next_addr(proto);
+    pub async fn create_client_with_ack(
+        &mut self,
+        proto: Protocol,
+        title: &str,
+    ) -> Result<TestClient> {
+        // Use the last server's address for the client to connect to
+        let server_addr = self
+            .last_server_addr
+            .unwrap_or_else(|| self.next_addr(proto));
         let (tx, rx) = channel(100);
         let handler = Arc::new(TestClientHandler { tx });
-        let cfg = RexClientConfig::new(proto, addr, title, handler);
+        let cfg = RexClientConfig::new(proto, server_addr, title, handler);
         let mut cfg = cfg;
         cfg.ack_enabled = self.ack_enabled;
         cfg.ack_timeout_ms = 5000;

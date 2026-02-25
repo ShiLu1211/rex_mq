@@ -95,7 +95,6 @@ serial_test = "3.4.0"
 jni = "0.21.1"
 # Python
 pyo3 = { version = "0.28.2", features = ["extension-module", "abi3-py39"] }
-pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }
 
 # =====================
 # Build Profiles

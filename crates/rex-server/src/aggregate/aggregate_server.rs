@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::info;
 
@@ -81,5 +82,13 @@ impl RexServerTrait for AggregateServer {
             server.close().await;
         }
         self.system.close().await;
+    }
+
+    fn addr(&self) -> SocketAddr {
+        // Return the first server's address, or a placeholder if none
+        self.server_list
+            .first()
+            .map(|s| s.addr())
+            .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 0)))
     }
 }

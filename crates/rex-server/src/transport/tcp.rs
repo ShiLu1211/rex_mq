@@ -24,6 +24,10 @@ impl RexServerTrait for TcpServer {
         self.base.send_shutdown_signal();
         info!("TcpServer shutdown complete");
     }
+
+    fn addr(&self) -> SocketAddr {
+        self.base.config.bind_addr
+    }
 }
 
 impl TcpServer {

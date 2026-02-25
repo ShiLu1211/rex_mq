@@ -7,13 +7,8 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-# Workspace dependencies
-rex-core.workspace = true
-
 # Async & Concurrency
 tokio.workspace = true
-futures.workspace = true
-async-trait.workspace = true
 parking_lot.workspace = true
 dashmap.workspace = true
 ahash.workspace = true
@@ -22,7 +17,6 @@ rand.workspace = true
 
 # Error handling
 anyhow.workspace = true
-thiserror.workspace = true
 
 # Logging
 tracing.workspace = true
