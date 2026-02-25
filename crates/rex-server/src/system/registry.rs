@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 use tracing::{info, warn};
 
 use crate::RexSystemConfig;
+use crate::cluster::server_cluster::ServerClusterManager;
 
 /// Information about a pending ACK
 pub struct PendingAckInfo {
@@ -27,6 +28,8 @@ pub struct RexSystem {
     persistence: Option<Arc<PersistenceStore>>,
     // ACK tracking
     pending_acks: DashMap<u64, PendingAckInfo, RandomState>,
+    // Cluster manager
+    cluster_manager: parking_lot::RwLock<Option<Arc<ServerClusterManager>>>,
 }
 
 impl RexSystem {
@@ -63,6 +66,7 @@ impl RexSystem {
             shutdown_tx: shutdown_tx_arc.clone(),
             persistence,
             pending_acks: DashMap::with_hasher(RandomState::new()),
+            cluster_manager: parking_lot::RwLock::new(None),
         });
 
         // Subscribe to shutdown signal for cleanup task
@@ -92,11 +96,52 @@ impl RexSystem {
         system
     }
 
+    /// Set cluster manager
+    pub async fn set_cluster_manager(&self, manager: Arc<ServerClusterManager>) {
+        *self.cluster_manager.write() = Some(manager);
+    }
+
+    /// Get cluster manager
+    pub fn cluster_manager(&self) -> Option<Arc<ServerClusterManager>> {
+        self.cluster_manager.read().clone()
+    }
+
+    /// Check if cluster is enabled
+    pub fn is_cluster_enabled(&self) -> bool {
+        self.cluster_manager
+            .read()
+            .as_ref()
+            .map(|c| c.is_enabled())
+            .unwrap_or(false)
+    }
+
+    /// Find node for a title (via consistent hash)
+    pub fn find_node_for_title(&self, title: &str) -> Option<String> {
+        if let Some(ref cluster) = self.cluster_manager() {
+            // Get node for title from route table
+            cluster.get_node_for_title(title)
+        } else {
+            None
+        }
+    }
+
+    /// Get local node ID
+    pub fn get_local_node_id(&self) -> Option<String> {
+        self.cluster_manager()
+            .as_ref()
+            .map(|cluster| cluster.local_node_id().to_string())
+    }
+
     /* ---------------- client lifecycle ---------------- */
 
     pub async fn add_client(&self, client: Arc<RexClientInner>) {
         let id = client.id();
         self.id2client.insert(id, client.clone());
+
+        // Register client in cluster route table
+        if let Some(ref cluster) = self.cluster_manager() {
+            cluster.register_client(id);
+        }
 
         for title in client.title_iter() {
             let mut clients = self.title2clients.entry(title).or_default();
@@ -115,6 +160,11 @@ impl RexSystem {
             Some((_id, client)) => client,
             None => return,
         };
+
+        // Unregister client from cluster route table
+        if let Some(ref cluster) = self.cluster_manager() {
+            cluster.unregister_client(&client_id);
+        }
 
         for title in client.title_iter() {
             if let Some(mut clients) = self.title2clients.get_mut(&title) {
