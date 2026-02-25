@@ -4,7 +4,6 @@
 //! architecture with Gossip protocol for node discovery.
 
 pub mod failover;
-pub mod forward;
 pub mod gossip;
 pub mod hash_ring;
 pub mod manager;

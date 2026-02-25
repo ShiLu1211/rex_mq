@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use rex_cluster::types::{ClusterMessage, TitleUnregisterMessage};
 use rex_core::{RetCode, RexClientInner, RexCommand, RexData};
 use tracing::{debug, warn};
 
@@ -12,11 +13,27 @@ pub async fn handle(
     rex_data: &mut RexData,
 ) -> Result<()> {
     let client_id: u128 = rex_data.source();
-    let title = rex_data.title();
+    let title = rex_data.title().to_string();
     debug!("[{:032X}] Received del title [{}]", client_id, title);
 
     if let Some(client) = system.find_some_by_id(client_id) {
-        system.unregister_title(client_id, title);
+        system.unregister_title(client_id, &title);
+
+        // Broadcast title unregistration to cluster
+        if let Some(cluster) = system.cluster_manager() {
+            let local_node_id = cluster.local_node_id().to_string();
+            let unregister_msg = TitleUnregisterMessage {
+                node_id: local_node_id,
+                title: title.clone(),
+            };
+            let cluster_msg = ClusterMessage::TitleUnregister(unregister_msg);
+            cluster.broadcast(cluster_msg).await;
+            debug!(
+                "Broadcasted title unregistration for [{}] to cluster",
+                title
+            );
+        }
+
         if let Err(e) = client
             .send_buf(rex_data.set_command(RexCommand::DelTitleReturn).pack_ref())
             .await

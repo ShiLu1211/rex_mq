@@ -13,7 +13,7 @@ use tokio::time::interval;
 use tracing::{debug, warn};
 
 use crate::transport::ClusterTransport;
-use crate::types::{ClusterMessage, NodeId, NodeInfo, NodeState};
+use crate::types::{ClusterMessage, NodeId, NodeInfo, NodeState, PingMessage, PongMessage};
 
 /// Gossip protocol configuration
 #[derive(Debug, Clone)]
@@ -141,8 +141,18 @@ impl GossipProtocol {
                 let selected: Vec<String> = nodes.into_iter().take(gossip_count).collect();
 
                 for node_id in selected {
-                    // Send ping
-                    if let Err(e) = transport.send_to(&node_id, &ClusterMessage::Ping).await {
+                    // Send ping with local node info
+                    let ping = PingMessage {
+                        node_id: local_id.to_string(),
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0),
+                    };
+                    if let Err(e) = transport
+                        .send_to(&node_id, &ClusterMessage::Ping(ping))
+                        .await
+                    {
                         debug!("Failed to send ping to {}: {}", node_id, e);
                     }
                 }
@@ -165,7 +175,7 @@ impl GossipProtocol {
     }
 
     /// Handle a ping message
-    pub async fn handle_ping(&self, from_node_id: &NodeId) -> Result<()> {
+    pub async fn handle_ping(&self, from_node_id: &NodeId, _ping: PingMessage) -> Result<()> {
         // Update member state
         if let Some(mut state) = self.members.get_mut(from_node_id.as_str()) {
             state.node_info.last_heartbeat = std::time::SystemTime::now()
@@ -176,14 +186,21 @@ impl GossipProtocol {
         }
 
         // Send pong response
-        let msg = ClusterMessage::Pong;
+        let pong = PongMessage {
+            node_id: self.local_node_id.to_string(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+        };
+        let msg = ClusterMessage::Pong(pong);
         self.transport.send_to(from_node_id.as_str(), &msg).await?;
 
         Ok(())
     }
 
     /// Handle a pong message
-    pub fn handle_pong(&self, from_node_id: &NodeId) {
+    pub fn handle_pong(&self, from_node_id: &NodeId, _pong: PongMessage) {
         if let Some(mut state) = self.members.get_mut(from_node_id.as_str()) {
             state.node_info.last_heartbeat = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

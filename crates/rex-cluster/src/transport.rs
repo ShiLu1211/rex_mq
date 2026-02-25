@@ -439,6 +439,17 @@ impl ClusterTransport {
         self.connections.contains_key(node_id)
     }
 
+    /// Remove a connection to a node
+    pub fn remove_connection(&self, node_id: &str) {
+        if self.connections.remove(node_id).is_some() {
+            debug!("Removed connection to node {}", node_id);
+        }
+        // Also remove the write handle if exists
+        if let Some((_, handle)) = self.write_handles.remove(node_id) {
+            handle.abort();
+        }
+    }
+
     /// Get all connected node IDs
     pub fn connected_nodes(&self) -> Vec<String> {
         self.connections.iter().map(|e| e.key().clone()).collect()

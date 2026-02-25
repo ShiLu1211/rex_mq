@@ -15,6 +15,7 @@ use crate::transport::ClusterTransport;
 use crate::types::{ClusterConfig, ClusterMessage, ClusterRole, NodeId, NodeInfo};
 
 /// Integrated cluster manager
+#[allow(dead_code)]
 pub struct ClusterManager {
     /// Local node ID
     node_id: NodeId,

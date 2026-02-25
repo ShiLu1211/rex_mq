@@ -173,14 +173,20 @@ pub enum ClusterMessage {
     AppendEntriesResponse(AppendEntriesResponse),
     /// Forward message to another node
     Forward(ForwardMessage),
+    /// Forward acknowledgment
+    ForwardAck(ForwardAckMessage),
     /// State sync request
     StateSyncRequest(StateSyncRequest),
     /// State sync response
     StateSyncResponse(StateSyncResponse),
     /// Ping for health check
-    Ping,
+    Ping(PingMessage),
     /// Pong response
-    Pong,
+    Pong(PongMessage),
+    /// Title registration propagated to other nodes
+    TitleRegister(TitleRegisterMessage),
+    /// Title unregistration propagated to other nodes
+    TitleUnregister(TitleUnregisterMessage),
 }
 
 /// Heartbeat message for leader to maintain authority
@@ -189,6 +195,24 @@ pub struct HeartbeatMessage {
     pub term: u64,
     pub leader_id: NodeId,
     pub leader_commit: u64,
+}
+
+/// Ping message for health check
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PingMessage {
+    /// Node ID sending the ping
+    pub node_id: String,
+    /// Timestamp for RTT calculation
+    pub timestamp: u64,
+}
+
+/// Pong message for health check response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PongMessage {
+    /// Node ID sending the pong
+    pub node_id: String,
+    /// Original timestamp from ping
+    pub timestamp: u64,
 }
 
 /// Request vote message for election
@@ -264,6 +288,41 @@ pub struct ForwardMessage {
     pub is_group: bool,
     pub is_broadcast: bool,
     pub require_ack: bool,
+}
+
+/// Forward acknowledgment message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForwardAckMessage {
+    /// Original forward ID
+    pub forward_id: u64,
+    /// Source node that received the message
+    pub from_node_id: String,
+    /// Original source client ID
+    pub original_source: u128,
+    /// Whether delivery was successful
+    pub success: bool,
+    /// Error message if failed
+    pub error: Option<String>,
+}
+
+/// Title registration message for cluster propagation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TitleRegisterMessage {
+    /// Node that registered the title
+    pub node_id: String,
+    /// Registered title
+    pub title: String,
+    /// Client ID that registered (optional, 0 if broadcast)
+    pub client_id: u128,
+}
+
+/// Title unregistration message for cluster propagation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TitleUnregisterMessage {
+    /// Node that unregistered the title
+    pub node_id: String,
+    /// Unregistered title
+    pub title: String,
 }
 
 /// Request for state synchronization

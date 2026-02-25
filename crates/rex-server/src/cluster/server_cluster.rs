@@ -184,6 +184,33 @@ impl ServerClusterManager {
                     // Deliver the message locally
                     self.deliver_forward_message(forward).await;
                 }
+                ClusterMessage::TitleRegister(msg) => {
+                    tracing::info!(
+                        "Received title registration: {} -> {} from cluster",
+                        msg.title,
+                        msg.node_id
+                    );
+                    // Update route table to know this node handles this title
+                    // The hash ring will handle the routing, but we log for visibility
+                }
+                ClusterMessage::TitleUnregister(msg) => {
+                    tracing::info!(
+                        "Received title unregistration: {} from {} from cluster",
+                        msg.title,
+                        msg.node_id
+                    );
+                    // Could remove from local tracking if we had explicit title->node mapping
+                }
+                ClusterMessage::ForwardAck(ack) => {
+                    tracing::debug!(
+                        "Received ForwardAck: forward_id={}, success={}, from_node={}",
+                        ack.forward_id,
+                        ack.success,
+                        ack.from_node_id
+                    );
+                    // TODO: Forward this ACK to the original client if needed
+                    // This would require tracking pending forwards and routing back to the client
+                }
                 _ => {}
             }
         }
@@ -327,15 +354,97 @@ impl ServerClusterManager {
             }
             Err(e) => {
                 tracing::warn!("Failed to forward message to {}: {}", target_node, e);
+                // Try to reconnect and retry once
+                if let Ok(addr) = target_addr.parse::<SocketAddr>()
+                    && self
+                        .try_reconnect_and_send(target_node, addr, &cluster_msg)
+                        .await
+                {
+                    tracing::info!(
+                        "Successfully reconnected and sent message to {}",
+                        target_node
+                    );
+                    return true;
+                }
                 false
+            }
+        }
+    }
+
+    /// Try to reconnect to a node and send message
+    async fn try_reconnect_and_send(
+        &self,
+        node_id: &str,
+        addr: SocketAddr,
+        msg: &ClusterMessage,
+    ) -> bool {
+        let transport = {
+            let node_manager = self.node_manager.read();
+            match node_manager.as_ref() {
+                Some(nm) => nm.get_transport().clone(),
+                None => return false,
+            }
+        };
+
+        tracing::info!("Attempting to reconnect to node {} at {}", node_id, addr);
+
+        // Remove old connection if exists
+        transport.remove_connection(node_id);
+
+        // Try to connect
+        match transport.connect(node_id.to_string().into(), addr).await {
+            Ok(()) => {
+                // Connection established, try to send
+                match transport.send_to(node_id, msg).await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tracing::warn!("Failed to send after reconnect to {}: {}", node_id, e);
+                        false
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to reconnect to {}: {}", node_id, e);
+                false
+            }
+        }
+    }
+
+    /// Broadcast a message to all connected cluster nodes
+    pub async fn broadcast(&self, message: ClusterMessage) {
+        let transport = {
+            let node_manager_guard = self.node_manager.read();
+            match node_manager_guard.as_ref() {
+                Some(nm) => nm.get_transport().clone(),
+                None => {
+                    tracing::warn!("No node manager available for broadcast");
+                    return;
+                }
+            }
+        };
+
+        let connected_nodes = transport.connected_nodes();
+        let local_id = self.local_node_id.to_string();
+
+        for node_id in connected_nodes {
+            if node_id != local_id
+                && let Err(e) = transport.send_to(&node_id, &message).await
+            {
+                tracing::warn!("Failed to broadcast to node {}: {}", node_id, e);
             }
         }
     }
 
     /// Deliver a forwarded message to local subscribers
     async fn deliver_forward_message(&self, forward: rex_cluster::types::ForwardMessage) {
+        // Save fields needed for ACK before moving
+        let forward_id = forward.forward_id;
+        let original_source = forward.original_source;
+        let require_ack = forward.require_ack;
         let title = forward.title.clone();
         let payload = forward.payload;
+        let is_broadcast = forward.is_broadcast;
+        let is_group = forward.is_group;
 
         // Get system reference
         let system = {
@@ -353,7 +462,32 @@ impl ServerClusterManager {
         // The payload is already the raw RexData bytes, unpack it
         let rex_data = RexData::unpack(bytes::BytesMut::from(payload.as_slice()));
 
-        // Find target client
+        // Handle broadcast or group messages
+        if is_broadcast || is_group {
+            // Find all subscribers for this title
+            let clients = system.find_all_by_title(&title, None);
+            if clients.is_empty() {
+                tracing::warn!(
+                    "No local subscribers found for broadcast/group title: {}",
+                    title
+                );
+            } else {
+                tracing::info!(
+                    "Delivering {} message to {} local subscribers",
+                    if is_broadcast { "broadcast" } else { "group" },
+                    clients.len()
+                );
+                for client in clients {
+                    let client_id = client.id();
+                    if let Err(e) = client.send_buf(rex_data.pack_ref()).await {
+                        tracing::warn!("Failed to send to client {:032x}: {}", client_id, e);
+                    }
+                }
+            }
+            return;
+        }
+
+        // Handle unicast message
         let target_client = if forward.target_client_id != 0 {
             // Specific target client
             system.find_some_by_id(forward.target_client_id)
@@ -373,28 +507,65 @@ impl ServerClusterManager {
                 // Send the message
                 if let Err(e) = client.send_buf(rex_data.pack_ref()).await {
                     tracing::warn!("Failed to send to client {:032x}: {}", client_id, e);
+                    // Send failure ACK if requested
+                    if require_ack {
+                        self.send_forward_ack(
+                            forward_id,
+                            original_source,
+                            false,
+                            Some(e.to_string()),
+                        )
+                        .await;
+                    }
                 } else {
                     tracing::debug!(
                         "Successfully delivered forwarded message to {:032x}",
                         client_id
                     );
+                    // Send success ACK if requested
+                    if require_ack {
+                        self.send_forward_ack(forward_id, original_source, true, None)
+                            .await;
+                    }
                 }
             }
             None => {
                 tracing::warn!("No local subscriber found for title: {}", title);
-                // Send NoTarget back to original source via cluster
-                self.send_no_target_back(forward.original_source, &title)
+                // Send failure ACK if requested
+                if require_ack {
+                    self.send_forward_ack(
+                        forward_id,
+                        original_source,
+                        false,
+                        Some("No local subscriber".to_string()),
+                    )
                     .await;
+                }
             }
         }
     }
 
-    /// Send NoTarget error back to the source node
-    async fn send_no_target_back(&self, source_client_id: u128, _title: &str) {
-        tracing::debug!(
-            "Would send NoTarget back to client {:032x} via cluster",
-            source_client_id
-        );
-        // TODO: Implement sending error back to source node via cluster
+    /// Send forward acknowledgment back to source node
+    async fn send_forward_ack(
+        &self,
+        forward_id: u64,
+        original_source: u128,
+        success: bool,
+        error: Option<String>,
+    ) {
+        let local_node_id = self.local_node_id.to_string();
+        let ack = rex_cluster::types::ForwardAckMessage {
+            forward_id,
+            from_node_id: local_node_id,
+            original_source,
+            success,
+            error,
+        };
+        let msg = ClusterMessage::ForwardAck(ack);
+
+        // Get transport to find the source node
+        // For now, we just broadcast - the original node will recognize the forward_id
+        // A more optimized approach would be to track pending forwards
+        self.broadcast(msg).await;
     }
 }
