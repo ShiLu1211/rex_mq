@@ -13,6 +13,7 @@ import picocli.CommandLine.Option;
 
 public class RexEngine implements Runnable {
   private static final int TIMESTAMP_LENGTH = 8;
+  private static volatile boolean shutdown = false;
 
   @Option(
       names = {"-h", "--host"},
@@ -106,7 +107,7 @@ public class RexEngine implements Runnable {
         TimeUnit.SECONDS);
 
     RexConfig config = RexConfig.builder(host, port, title).build();
-    @SuppressWarnings({"resource", "unused"})
+    @SuppressWarnings("resource")
     RexClient client =
         new RexClient(
             config,
@@ -130,7 +131,7 @@ public class RexEngine implements Runnable {
                   } catch (InterruptedException e) {
                   }
                   System.out.printf("receive total: [%d]%n", rcv_count.get());
-                  System.exit(0);
+                  shutdown = true;
                   return;
                 }
                 rcv_count.incrementAndGet();
@@ -143,13 +144,14 @@ public class RexEngine implements Runnable {
               }
             });
 
-    while (true) {
+    while (!shutdown) {
       try {
         Thread.sleep(1000);
       } catch (InterruptedException e) {
         throw new RuntimeException(e);
       }
     }
+    client.close();
   }
 
   void snd() {

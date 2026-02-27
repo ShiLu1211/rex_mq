@@ -7,7 +7,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Rex 客户端主类 对应 Rust 的 RexClientTrait 实现 */
-public class RexClient implements AutoCloseable {
+public final class RexClient implements AutoCloseable {
   // 指向 Rust Arc<dyn RexClientTrait> 的指针
   private volatile long client;
   private final RexConfig config;
@@ -24,7 +24,7 @@ public class RexClient implements AutoCloseable {
    * @param handler 消息处理器
    */
   public RexClient(RexConfig config, RexHandler handler) {
-    this.config = config;
+    this.config = new RexConfig(config);
     this.handler = handler;
 
     // 调用 JNI 初始化，Rust 端会创建 RexClientConfig 并调用 open_client
@@ -97,9 +97,13 @@ public class RexClient implements AutoCloseable {
     return new UUID(bb.getLong(), bb.getLong());
   }
 
-  /** 获取配置 */
+  /**
+   * 获取配置
+   *
+   * @return 配置副本
+   */
   public RexConfig getConfig() {
-    return config;
+    return new RexConfig(config);
   }
 
   /** 检查客户端是否已关闭 */

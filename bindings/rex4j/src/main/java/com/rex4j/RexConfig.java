@@ -1,7 +1,7 @@
 package com.rex4j;
 
 /** Rex 客户端配置 对应 Rust 的 RexClientConfig */
-public class RexConfig {
+public final class RexConfig {
 
   /** 协议类型枚举 */
   public enum Protocol {
@@ -56,6 +56,23 @@ public class RexConfig {
     this.address = host + ":" + port;
   }
 
+  /**
+   * 拷贝构造函数
+   *
+   * @param other 要拷贝的配置
+   */
+  public RexConfig(RexConfig other) {
+    this.protocol = other.protocol;
+    this.host = other.host;
+    this.port = other.port;
+    this.title = other.title;
+    this.address = other.address;
+    this.idleTimeout = other.idleTimeout;
+    this.pongWait = other.pongWait;
+    this.maxReconnectAttempts = other.maxReconnectAttempts;
+    this.maxBufferSize = other.maxBufferSize;
+  }
+
   /** 构建器模式 */
   public static Builder builder(String host, int port, String title) {
     return new Builder(host, port, title);
@@ -94,7 +111,7 @@ public class RexConfig {
     }
 
     public RexConfig build() {
-      return config;
+      return new RexConfig(config);
     }
   }
 

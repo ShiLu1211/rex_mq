@@ -1,5 +1,6 @@
 package com.rex4j.jni;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -8,7 +9,10 @@ import java.nio.file.StandardCopyOption;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class NativeLibrary {
+@SuppressFBWarnings(
+    value = "PATH_TRAVERSAL_IN",
+    justification = "TMP_DIR and JAR location are system properties, not user input")
+public final class NativeLibrary {
   private static final Logger log = LoggerFactory.getLogger(NativeLibrary.class);
 
   private static final String TMP_DIR = System.getProperty("java.io.tmpdir");
@@ -44,9 +48,9 @@ public class NativeLibrary {
 
       // === JAR 同目录 ===
       try {
-        String jarDir = getJarDirectory();
-        if (!jarDir.isEmpty()) {
-          Path localLib = Paths.get(jarDir, LIB_RESOURCE);
+        Path jarDir = getJarDirectory();
+        if (jarDir != null) {
+          Path localLib = jarDir.resolve(LIB_RESOURCE);
           if (Files.exists(localLib)) {
             log.info("从 JAR 同目录加载 {}", localLib);
             System.load(localLib.toAbsolutePath().toString());
@@ -72,16 +76,24 @@ public class NativeLibrary {
     }
   }
 
-  private static String getJarDirectory() {
+  private static Path getJarDirectory() {
     try {
       Path jarPath =
           Paths.get(
               NativeLibrary.class.getProtectionDomain().getCodeSource().getLocation().toURI());
       Path parent = jarPath.getParent();
-      return parent == null ? "" : parent.toAbsolutePath().toString();
+      if (parent == null) {
+        return null;
+      }
+      // 验证父目录存在且可访问
+      if (!Files.exists(parent) || !Files.isDirectory(parent)) {
+        log.warn("JAR 父目录不存在: {}", parent);
+        return null;
+      }
+      return parent.toRealPath().toAbsolutePath();
     } catch (Exception e) {
       log.warn("获取 JAR 所在目录失败", e);
-      return "";
+      return null;
     }
   }
 
@@ -93,7 +105,12 @@ public class NativeLibrary {
         return "";
       }
 
-      Path tmpDir = Paths.get(TMP_DIR);
+      Path tmpDir = Paths.get(TMP_DIR).toAbsolutePath();
+      // 验证临时目录存在且可写
+      if (!Files.exists(tmpDir) || !Files.isDirectory(tmpDir)) {
+        log.warn("临时目录不存在: {}", tmpDir);
+        return "";
+      }
       Path tmpLib = Files.createTempFile(tmpDir, LIB_PREFIX, EXT);
       tmpLib.toFile().deleteOnExit();
 

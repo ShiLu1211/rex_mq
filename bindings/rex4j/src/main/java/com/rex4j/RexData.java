@@ -1,9 +1,10 @@
 package com.rex4j;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 /** Rex 数据包对象 对应 Rust 的 RexData 结构 */
-public class RexData {
+public final class RexData {
   private RexCommand command;
   private String title;
   private byte[] data;
@@ -42,7 +43,11 @@ public class RexData {
     }
 
     public RexData build() {
-      return rexData;
+      RexData copy = new RexData();
+      copy.setCommand(rexData.command);
+      copy.setTitle(rexData.title);
+      copy.setData(Arrays.copyOf(rexData.data, rexData.data.length));
+      return copy;
     }
   }
 
@@ -56,7 +61,7 @@ public class RexData {
   }
 
   public byte[] getData() {
-    return data;
+    return Arrays.copyOf(data, data.length);
   }
 
   public String getDataStr() {
@@ -64,6 +69,10 @@ public class RexData {
   }
 
   // Setters
+  public void setCommand(RexCommand command) {
+    this.command = command;
+  }
+
   public void setTitle(String title) {
     this.title = title != null ? title : "";
   }
