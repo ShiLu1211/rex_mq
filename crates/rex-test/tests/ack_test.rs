@@ -5,12 +5,10 @@ mod tests {
     use anyhow::Result;
     use rex_core::{Protocol, RetCode, RexCommand};
     use rex_test::factory::TestEnv;
-    use serial_test::serial;
     use tokio::time::sleep;
 
     /// Test ACK functionality with Title (unicast) message - TCP only
     #[tokio::test]
-    #[serial]
     async fn test_ack_title_tcp() -> Result<()> {
         test_ack_title_inner(Protocol::Tcp).await
     }
@@ -56,7 +54,6 @@ mod tests {
 
     /// Test ACK functionality with Group (multicast) message - TCP only
     #[tokio::test]
-    #[serial]
     async fn test_ack_group_tcp() -> Result<()> {
         test_ack_group_inner(Protocol::Tcp).await
     }
@@ -105,7 +102,6 @@ mod tests {
 
     /// Test ACK functionality with Cast (broadcast) message - TCP only
     #[tokio::test]
-    #[serial]
     async fn test_ack_cast_tcp() -> Result<()> {
         test_ack_cast_inner(Protocol::Tcp).await
     }
@@ -157,7 +153,6 @@ mod tests {
 
     /// Test that without ACK enabled, no ACK is returned - TCP only
     #[tokio::test]
-    #[serial]
     async fn test_no_ack_when_disabled_tcp() -> Result<()> {
         test_no_ack_when_disabled_inner(Protocol::Tcp).await
     }
@@ -196,7 +191,6 @@ mod tests {
 
     /// Test ACK timeout when receiver doesn't send ACK - TCP only
     #[tokio::test]
-    #[serial]
     async fn test_ack_timeout_tcp() -> Result<()> {
         test_ack_timeout_inner(Protocol::Tcp).await
     }
@@ -234,7 +228,6 @@ mod tests {
 
     /// Test message has message_id when ACK is enabled - TCP only
     #[tokio::test]
-    #[serial]
     async fn test_message_id_present_tcp() -> Result<()> {
         test_message_id_present_inner(Protocol::Tcp).await
     }

@@ -35,11 +35,17 @@ mod tests {
         client2.send(RexCommand::Title, "one", &a).await.unwrap();
         assert_eq!(a, client1.recv().await.unwrap().data());
 
-        ss.close_server(protocol).await;
+        // 关闭服务器并获取地址，用于重启同一端口
+        let server_addr = ss.close_server(protocol).await;
         drop(server);
         sleep(Duration::from_secs(1)).await;
 
-        let _server = ss.start_server(protocol).await?;
+        // 重启服务器在同一端口
+        if let Some(addr) = server_addr {
+            ss.start_server_with_addr(protocol, addr).await?;
+        } else {
+            ss.start_server(protocol).await?;
+        }
 
         client1.wait_connected().await;
         client2.wait_connected().await;

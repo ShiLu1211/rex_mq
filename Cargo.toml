@@ -88,11 +88,10 @@ strum_macros = "0.28.0"
 
 # --- Benchmarking & Testing ---
 criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
-serial_test = "3.4.0"
 
 # --- Language Bindings ---
 # Java
-jni = "0.21.1"
+jni = "0.22.1"
 # Python
 pyo3 = { version = "0.28.2", features = ["extension-module", "abi3-py39"] }
 

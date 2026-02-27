@@ -95,8 +95,8 @@ pub struct TestEnv {
     pub cluster_port_counter: u16,
     /// Server/Client port counter for unique ports
     port_counter: u16,
-    /// Last created server's address (for clients to connect to)
-    last_server_addr: Option<SocketAddr>,
+    /// Server addresses by protocol (for clients to connect to)
+    server_addrs: HashMap<Protocol, SocketAddr>,
 }
 
 impl TestEnv {
@@ -112,7 +112,7 @@ impl TestEnv {
             ack_enabled: false,
             cluster_port_counter: cluster_port,
             port_counter: 0,
-            last_server_addr: None,
+            server_addrs: HashMap::new(),
         }
     }
 
@@ -132,7 +132,7 @@ impl TestEnv {
             ack_enabled: true,
             cluster_port_counter: cluster_port,
             port_counter: 0,
-            last_server_addr: None,
+            server_addrs: HashMap::new(),
         }
     }
 
@@ -154,7 +154,7 @@ impl TestEnv {
         let cfg = RexServerConfig::new(proto, addr);
         let server = open_server(self.system.clone(), cfg).await?;
         self.servers.insert(proto, server.clone());
-        self.last_server_addr = Some(addr);
+        self.server_addrs.insert(proto, addr);
         Ok(server)
     }
 
@@ -167,7 +167,7 @@ impl TestEnv {
         let cfg = RexServerConfig::new(proto, addr);
         let server = open_server(self.system.clone(), cfg).await?;
         self.servers.insert(proto, server.clone());
-        self.last_server_addr = Some(addr);
+        self.server_addrs.insert(proto, addr);
         Ok(server)
     }
 
@@ -210,9 +210,11 @@ impl TestEnv {
 
     /// 为指定协议创建 client
     pub async fn create_client(&mut self, proto: Protocol, title: &str) -> Result<TestClient> {
-        // Use the last server's address for the client to connect to
+        // Use the server address for the specific protocol
         let server_addr = self
-            .last_server_addr
+            .server_addrs
+            .get(&proto)
+            .copied()
             .unwrap_or_else(|| self.next_addr(proto));
         let (tx, rx) = channel(100);
         let handler = Arc::new(TestClientHandler { tx });
@@ -240,9 +242,11 @@ impl TestEnv {
         proto: Protocol,
         title: &str,
     ) -> Result<TestClient> {
-        // Use the last server's address for the client to connect to
+        // Use the server address for the specific protocol
         let server_addr = self
-            .last_server_addr
+            .server_addrs
+            .get(&proto)
+            .copied()
             .unwrap_or_else(|| self.next_addr(proto));
         let (tx, rx) = channel(100);
         let handler = Arc::new(TestClientHandler { tx });
@@ -262,12 +266,15 @@ impl TestEnv {
         Ok(())
     }
 
-    pub async fn close_server(&mut self, proto: Protocol) {
+    /// Close server and return its address (so it can be restarted on the same port)
+    pub async fn close_server(&mut self, proto: Protocol) -> Option<SocketAddr> {
+        let addr = self.server_addrs.remove(&proto);
         if let Some(s) = self.servers.remove(&proto) {
             s.close().await;
             drop(s);
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
+        addr
     }
 
     pub async fn shutdown(&mut self) {

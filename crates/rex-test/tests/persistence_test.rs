@@ -4,7 +4,6 @@ mod tests {
     use std::time::Duration;
 
     use anyhow::Result;
-    use serial_test::serial;
     use tokio::time::sleep;
 
     use rex_core::Protocol;
@@ -17,7 +16,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn persistence_store_open_close() -> Result<()> {
         let test_path = "/tmp/rex_test_persistence_0".to_string();
         cleanup_test_dir(&test_path);
@@ -46,7 +44,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn persistence_client_state() -> Result<()> {
         let test_path = "/tmp/rex_test_persistence_1".to_string();
         cleanup_test_dir(&test_path);
@@ -100,7 +97,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn persistence_offline_message() -> Result<()> {
         let test_path = "/tmp/rex_test_persistence_2".to_string();
         cleanup_test_dir(&test_path);
@@ -151,7 +147,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn persistence_offline_queue_full() -> Result<()> {
         let test_path = "/tmp/rex_test_persistence_3".to_string();
         cleanup_test_dir(&test_path);
@@ -186,7 +181,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn persistence_expired_message() -> Result<()> {
         let test_path = "/tmp/rex_test_persistence_4".to_string();
         cleanup_test_dir(&test_path);
@@ -214,7 +208,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn integration_with_tcp_server() -> Result<()> {
         let test_path = "/tmp/rex_test_persistence_5".to_string();
         cleanup_test_dir(&test_path);
