@@ -1,0 +1,27 @@
+[package]
+name = "rex-cluster"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Async & Concurrency
+tokio.workspace = true
+parking_lot.workspace = true
+dashmap.workspace = true
+ahash.workspace = true
+once_cell.workspace = true
+rand.workspace = true
+
+# Error handling
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Serialization
+serde.workspace = true
+bincode.workspace = true
+bytes.workspace = true

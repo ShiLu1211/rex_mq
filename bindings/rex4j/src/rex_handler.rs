@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use jni::{
-    JNIEnv,
-    objects::{GlobalRef, JObject, JValue},
+    Env,
+    objects::{Global, JObject, JValue},
 };
 use rex_client::RexClientHandlerTrait;
 use rex_core::{RexClientInner, RexCommand, RexData};
@@ -14,14 +14,14 @@ use crate::rex_cache::RexGlobalCache;
 /// Java Handler 的 Rust 包装器
 pub struct JavaHandler {
     jvm: Arc<jni::JavaVM>,
-    handler_obj: GlobalRef,
-    client_obj: GlobalRef,
+    handler_obj: Global<JObject<'static>>,
+    client_obj: Global<JObject<'static>>,
 
     tx: kanal::Sender<RexData>,
 }
 
 impl JavaHandler {
-    pub fn new(env: &mut JNIEnv, handler: &JObject, client: &JObject) -> Result<Arc<Self>> {
+    pub fn new(env: &mut Env, handler: &JObject, client: &JObject) -> Result<Arc<Self>> {
         let jvm = env.get_java_vm()?;
         let handler_obj = env.new_global_ref(handler)?;
         let client_obj = env.new_global_ref(client)?;
@@ -39,13 +39,13 @@ impl JavaHandler {
         });
         let handler_clone = handler.clone();
         std::thread::spawn(move || {
-            match jvm_thread.attach_current_thread_as_daemon() {
-                Ok(mut env) => {
+            let result: std::result::Result<(), anyhow::Error> =
+                jvm_thread.attach_current_thread(|env| {
                     let cache = match RexGlobalCache::get() {
                         Some(c) => c,
                         None => {
                             warn!("RexGlobalCache not initialized in handler thread");
-                            return;
+                            return Ok(());
                         }
                     };
 
@@ -53,7 +53,7 @@ impl JavaHandler {
                         if let Err(e) = (|| -> Result<()> {
                             // 创建 Java RexData 对象
                             let data_obj = env.alloc_object(&cache.data.cls)?;
-                            handler.init_java_data(&mut env, &data, &data_obj)?;
+                            handler.init_java_data(env, &data, &data_obj)?;
 
                             let args = [
                                 JValue::Object(&handler.client_obj).as_jni(),
@@ -72,17 +72,17 @@ impl JavaHandler {
                                 )?;
                             }
 
-                            let _ = env.delete_local_ref(data_obj);
+                            env.delete_local_ref(data_obj);
 
                             Ok(())
                         })() {
                             warn!("Java handler invocation failed: {}", e);
                         }
                     }
-                }
-                Err(e) => {
-                    warn!("Failed to attach handler thread to JVM: {}", e);
-                }
+                    Ok(())
+                });
+            if let Err(e) = result {
+                warn!("Failed to attach handler thread to JVM: {}", e);
             }
         });
 
@@ -90,68 +90,73 @@ impl JavaHandler {
     }
 
     /// 创建 Java RexData 对象
-    fn init_java_data(&self, env: &mut JNIEnv, data: &RexData, data_obj: &JObject) -> Result<()> {
+    fn init_java_data(&self, env: &mut Env, data: &RexData, data_obj: &JObject) -> Result<()> {
         let cache =
             RexGlobalCache::get().ok_or_else(|| anyhow::anyhow!("Cache not initialized"))?;
 
-        // 设置 command 字段
-        let command_int = data.command() as i32;
-        let command_enum_obj = unsafe {
-            env.call_static_method_unchecked(
-                &cache.command.cls,
-                cache.command.from_value,
-                jni::signature::ReturnType::Object,
-                &[JValue::Int(command_int).as_jni()],
-            )?
+        unsafe {
+            // 设置 command 字段
+            let command_int = data.command() as i32;
+            let command_enum_obj = env
+                .call_static_method_unchecked(
+                    &cache.command.cls,
+                    cache.command.from_value,
+                    jni::signature::ReturnType::Object,
+                    &[JValue::Int(command_int).as_jni()],
+                )?
+                .l()?;
+            env.set_field_unchecked(
+                data_obj,
+                cache.data.command,
+                JValue::Object(&command_enum_obj),
+            )?;
+            env.delete_local_ref(command_enum_obj);
+
+            // 设置 title 字段
+            let title_str = env.new_string(data.title())?;
+            env.set_field_unchecked(data_obj, cache.data.title, JValue::Object(&title_str))?;
+            env.delete_local_ref(title_str);
+
+            // 设置 data 字段
+            let jbytes = env.byte_array_from_slice(data.data())?;
+            env.set_field_unchecked(data_obj, cache.data.data, JValue::Object(&jbytes))?;
+            env.delete_local_ref(jbytes);
         }
-        .l()?;
-        env.set_field_unchecked(
-            data_obj,
-            cache.data.command,
-            JValue::Object(&command_enum_obj),
-        )?;
-        let _ = env.delete_local_ref(command_enum_obj);
-
-        // 设置 title 字段
-        let title_str = env.new_string(data.title())?;
-        env.set_field_unchecked(data_obj, cache.data.title, JValue::Object(&title_str))?;
-        let _ = env.delete_local_ref(title_str);
-
-        // 设置 data 字段
-        let data_bytes = data.data();
-        let jbytes = env.byte_array_from_slice(data_bytes)?;
-        env.set_field_unchecked(data_obj, cache.data.data, JValue::Object(&jbytes))?;
-        let _ = env.delete_local_ref(jbytes);
 
         Ok(())
     }
 
     fn call_on_login(&self, data: &RexData) -> Result<()> {
-        let mut env = self.jvm.attach_current_thread()?;
+        let handler = self;
+        self.jvm
+            .attach_current_thread::<_, (), anyhow::Error>(move |env| {
+                let cache = RexGlobalCache::get()
+                    .ok_or_else(|| anyhow::anyhow!("Cache not initialized"))?;
 
-        let cache =
-            RexGlobalCache::get().ok_or_else(|| anyhow::anyhow!("Cache not initialized"))?;
+                // 创建 Java RexData 对象
+                let data_obj = env.alloc_object(&cache.data.cls)?;
+                handler.init_java_data(env, data, &data_obj)?;
 
-        // 创建 Java RexData 对象
-        let data_obj = env.alloc_object(&cache.data.cls)?;
-        self.init_java_data(&mut env, data, &data_obj)?;
+                let args = [
+                    JValue::Object(&handler.client_obj).as_jni(),
+                    JValue::Object(&data_obj).as_jni(),
+                ];
 
-        let args = [
-            JValue::Object(&self.client_obj).as_jni(),
-            JValue::Object(&data_obj).as_jni(),
-        ];
+                // 调用 Java: void onLogin(RexClient client, RexData data)
+                unsafe {
+                    env.call_method_unchecked(
+                        &handler.handler_obj,
+                        cache.handler.on_login,
+                        jni::signature::ReturnType::Primitive(jni::signature::Primitive::Void),
+                        &args[..],
+                    )?
+                };
 
-        // 调用 Java: void onLogin(RexClient client, RexData data)
-        unsafe {
-            env.call_method_unchecked(
-                &self.handler_obj,
-                cache.handler.on_login,
-                jni::signature::ReturnType::Primitive(jni::signature::Primitive::Void),
-                &args[..],
-            )
-        }?;
+                env.delete_local_ref(data_obj);
 
-        let _ = env.delete_local_ref(data_obj);
+                Ok(())
+            })
+            .map_err(|e| anyhow::anyhow!("JNI error: {}", e))?;
 
         Ok(())
     }

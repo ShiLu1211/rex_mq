@@ -7,7 +7,7 @@ pub struct RexHead {
     pub total_len: u32,
     pub command: u32,
     pub retcode: u32,
-    pub pad: [u8; 4],
+    pub message_id: u64,
     pub source: u128,
 }
 
@@ -20,7 +20,7 @@ pub struct RexData {
 }
 
 pub const REX_LEN_SIZE: usize = 4;
-pub const REX_HEAD_LEN: usize = std::mem::size_of::<RexHead>();
+pub const REX_HEAD_LEN: usize = 36; // 4 + 4 + 4 + 8 + 16 = 36 bytes
 
 pub const TITLE_LEN_SIZE: usize = 1;
 pub const TITLE_LEN_OFFSET: usize = REX_HEAD_LEN;
@@ -123,7 +123,7 @@ impl RexData {
             total_len: total_len as u32,
             command: command.as_u32(),
             retcode: RetCode::Success.as_u32(),
-            pad: [0; 4],
+            message_id: 0,
             source: 0,
         };
 
@@ -150,6 +150,17 @@ impl RexData {
     #[inline(always)]
     pub fn is_success(&self) -> bool {
         self.retcode() == RetCode::Success
+    }
+
+    #[inline(always)]
+    pub fn message_id(&self) -> u64 {
+        self.head().message_id
+    }
+
+    #[inline(always)]
+    pub fn set_message_id(&mut self, message_id: u64) -> &mut Self {
+        self.head_mut().message_id = message_id;
+        self
     }
 
     #[inline(always)]
@@ -258,5 +269,99 @@ impl RexData {
     #[inline]
     pub fn data_as_string_lossy(&self) -> String {
         String::from_utf8_lossy(self.data()).into_owned()
+    }
+}
+
+/*
+ * AckData - ACK packet structure
+ *
+ * ACK packets are simple: they only need to identify the message being acknowledged
+ * Format: [4-byte total_len][32-byte RexHead][8-byte message_id]
+ * Total: 44 bytes
+ */
+pub struct AckData {
+    pub message_id: u64,
+}
+
+impl AckData {
+    /// Create a new ACK for the given message ID
+    pub fn new(message_id: u64) -> Self {
+        Self { message_id }
+    }
+
+    /// Serialize ACK into a RexData packet
+    pub fn to_rex_data(&self, source: u128, command: RexCommand) -> RexData {
+        // For ACK packets: head + title_len(1 byte) + message_id(8 bytes)
+        // title_len is 0 since there's no title
+        let total_len = REX_HEAD_LEN + TITLE_LEN_SIZE + 8;
+
+        let mut content = BytesMut::with_capacity(total_len);
+        unsafe {
+            content.set_len(total_len);
+        }
+
+        let mut ack_data = AckDataWrapper { content };
+
+        // Write title_len (0) at offset REX_HEAD_LEN
+        ack_data.content[REX_HEAD_LEN] = 0;
+
+        unsafe {
+            let ptr = ack_data.content.as_mut_ptr();
+
+            // Write message_id (8 bytes) at offset REX_HEAD_LEN + TITLE_LEN_SIZE
+            ptr.add(REX_HEAD_LEN + TITLE_LEN_SIZE)
+                .cast::<u64>()
+                .write_unaligned(self.message_id.to_le());
+        }
+
+        let head = ack_data.head_mut();
+        *head = RexHead {
+            total_len: total_len as u32,
+            command: command.as_u32(),
+            retcode: RetCode::Success.as_u32(),
+            message_id: 0,
+            source,
+        };
+
+        RexData {
+            content: ack_data.content,
+        }
+    }
+
+    /// Deserialize ACK from RexData
+    pub fn from_rex_data(rex_data: &RexData) -> Self {
+        // For ACK packets: head + title_len(1 byte) + message_id(8 bytes)
+        // message_id is at offset REX_HEAD_LEN + TITLE_LEN_SIZE
+        let content = &rex_data.content;
+        let expected_len = REX_HEAD_LEN + TITLE_LEN_SIZE + 8;
+        debug_assert!(
+            content.len() >= expected_len,
+            "ACK data too short: {} vs {}",
+            content.len(),
+            expected_len
+        );
+        let message_id = u64::from_le_bytes([
+            content[REX_HEAD_LEN + TITLE_LEN_SIZE],
+            content[REX_HEAD_LEN + TITLE_LEN_SIZE + 1],
+            content[REX_HEAD_LEN + TITLE_LEN_SIZE + 2],
+            content[REX_HEAD_LEN + TITLE_LEN_SIZE + 3],
+            content[REX_HEAD_LEN + TITLE_LEN_SIZE + 4],
+            content[REX_HEAD_LEN + TITLE_LEN_SIZE + 5],
+            content[REX_HEAD_LEN + TITLE_LEN_SIZE + 6],
+            content[REX_HEAD_LEN + TITLE_LEN_SIZE + 7],
+        ]);
+        Self { message_id }
+    }
+}
+
+/// Helper struct to reuse RexData methods for ACK packing
+struct AckDataWrapper {
+    content: BytesMut,
+}
+
+impl AckDataWrapper {
+    #[inline(always)]
+    fn head_mut(&mut self) -> &mut RexHead {
+        unsafe { &mut *(self.content.as_mut_ptr() as *mut RexHead) }
     }
 }

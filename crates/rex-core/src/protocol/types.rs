@@ -18,6 +18,8 @@ pub enum RexCommand {
     RegTitleReturn = 9912,
     DelTitle = 9913,
     DelTitleReturn = 9914,
+    Ack = 9915,       // ACK from receiver to server
+    AckReturn = 9916, // ACK result from server to sender
 }
 
 impl RexCommand {
@@ -38,6 +40,8 @@ impl RexCommand {
             9912 => Self::RegTitleReturn,
             9913 => Self::DelTitle,
             9914 => Self::DelTitleReturn,
+            9915 => Self::Ack,
+            9916 => Self::AckReturn,
             _ => {
                 warn!("Invalid command: {}", value);
                 Self::Login
@@ -49,6 +53,12 @@ impl RexCommand {
     pub fn as_u32(self) -> u32 {
         self as u32
     }
+
+    /// Check if this is an ACK related command
+    #[inline]
+    pub fn is_ack_command(self) -> bool {
+        matches!(self, Self::Ack | Self::AckReturn)
+    }
 }
 
 /// 返回码枚举
@@ -58,6 +68,8 @@ pub enum RetCode {
     Success = 0,
     Error = 1,
     NoTarget = 8802,
+    AckTimeout = 8803, // ACK 超时
+    AckFailed = 8804,  // ACK 失败（接收方拒绝）
 }
 
 impl RetCode {
@@ -67,6 +79,8 @@ impl RetCode {
             0 => Self::Success,
             1 => Self::Error,
             8802 => Self::NoTarget,
+            8803 => Self::AckTimeout,
+            8804 => Self::AckFailed,
             _ => {
                 warn!("Unknown RetCode: {}", value);
                 Self::Error
@@ -89,6 +103,8 @@ impl RetCode {
             Self::Success => "Success",
             Self::Error => "Error",
             Self::NoTarget => "No target available",
+            Self::AckTimeout => "ACK timeout",
+            Self::AckFailed => "ACK failed",
         }
     }
 }

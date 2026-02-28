@@ -50,6 +50,15 @@ pub struct ServerArgs {
     server_id: String,
     #[arg(long, default_value_t = false)]
     persist: bool,
+    /// Enable cluster mode
+    #[arg(long, default_value_t = false)]
+    cluster: bool,
+    /// Cluster listen address (for node-to-node communication)
+    #[arg(long)]
+    cluster_addr: Option<String>,
+    /// Seed nodes for cluster discovery (comma separated ip:port)
+    #[arg(long)]
+    seeds: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -100,7 +109,40 @@ pub async fn start_server(args: ServerArgs) -> Result<()> {
     let protocol = Protocol::from(args.protocol.as_str())
         .ok_or_else(|| anyhow!("invalid protocol: {}", args.protocol))?;
 
-    let config = RexServerConfig::new(protocol, address);
+    let mut config = RexServerConfig::new(protocol, address);
+
+    // Enable cluster mode if requested
+    if args.cluster {
+        let cluster_addr = if let Some(addr) = args.cluster_addr {
+            addr.parse::<SocketAddr>()?
+        } else {
+            // Default: use address port + 10000
+            let port = address.port() + 10000;
+            SocketAddr::new(address.ip(), port)
+        };
+
+        config = config
+            .enable_cluster(cluster_addr)
+            .set_node_id(args.server_id.clone());
+
+        // Add seed nodes
+        let seeds_info = args.seeds.clone();
+        if let Some(ref seeds_str) = args.seeds {
+            for seed in seeds_str.split(',') {
+                let seed_addr = seed
+                    .trim()
+                    .parse::<SocketAddr>()
+                    .map_err(|e| anyhow!("invalid seed address '{}': {}", seed, e))?;
+                config = config.add_seed_node(seed_addr);
+            }
+        }
+
+        println!("Cluster mode enabled on {}", cluster_addr);
+        if let Some(ref seeds) = seeds_info {
+            println!("Seed nodes: {}", seeds);
+        }
+    }
+
     let mut system_config = RexSystemConfig::from_id(&args.server_id);
     system_config.persistence_enabled = args.persist;
     let system = RexSystem::new(system_config).await;

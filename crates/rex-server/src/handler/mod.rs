@@ -1,3 +1,4 @@
+mod ack;
 mod cast;
 mod check;
 mod del_title;
@@ -28,6 +29,7 @@ pub async fn handle(
         RexCommand::Check => check::handle(system, client, rex_data).await,
         RexCommand::RegTitle => reg_title::handle(system, client, rex_data).await,
         RexCommand::DelTitle => del_title::handle(system, client, rex_data).await,
+        RexCommand::Ack => ack::handle(system, client, rex_data).await,
         _ => {
             debug!("no handle command: {:?}", cmd);
             Ok(())

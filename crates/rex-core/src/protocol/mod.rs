@@ -1,7 +1,7 @@
 mod data;
 mod types;
 
-pub use data::{RexData, RexHead};
+pub use data::{AckData, RexData, RexHead};
 pub use types::{RetCode, RexCommand};
 
 use serde::{Deserialize, Serialize};

@@ -2,6 +2,7 @@
 members = [
   "crates/rex-cli",
   "crates/rex-client",
+  "crates/rex-cluster",
   "crates/rex-core",
   "crates/rex-persistence",
   "crates/rex-sender",
@@ -34,20 +35,21 @@ rex-sender = { path = "crates/rex-sender" }
 rex-client = { path = "crates/rex-client" }
 rex-server = { path = "crates/rex-server" }
 rex-persistence = { path = "crates/rex-persistence" }
+rex-cluster = { path = "crates/rex-cluster" }
 
 # --- Async Runtime & Concurrency ---
 tokio = { version = "1.49.0", features = ["full"] }
-futures = "0.3.31"
-futures-util = "0.3.31"
+futures = "0.3.32"
+futures-util = "0.3.32"
 async-trait = "0.1.89"
 kanal = "0.1.1"
 parking_lot = "0.12.5"
-arc-swap = "1.8.1"
+arc-swap = "1.8.2"
 once_cell = "1.21.3"
 
 # --- Networking & Transport ---
 quinn = "0.11.9"
-rustls = { version = "0.23.36", default-features = false }
+rustls = { version = "0.23.37", default-features = false }
 rcgen = "0.14.7"
 tokio-tungstenite = "0.28.0"
 
@@ -62,11 +64,12 @@ sled = "0.34.7"
 bincode = "1.3.3"
 
 # --- IDs, Randomness ---
-uuid = { version = "1.20.0", features = ["v4"] }
+uuid = { version = "1.21.0", features = ["v4"] }
 rand = "0.10.0"
+fastrand = "2.3"
 
 # --- Error Handling & Utilities ---
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 thiserror = "2.0.18"
 itertools = "0.14.0"
 
@@ -75,24 +78,22 @@ tracing = "0.1.44"
 tracing-subscriber = "0.3.22"
 
 # --- CLI & Config ---
-clap = { version = "4.5.58", features = ["derive"] }
+clap = { version = "4.5.60", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }
-toml = "1.0.0"
+toml = "1.0.3"
 
 # --- Enum Utilities ---
-strum = "0.27.2"
-strum_macros = "0.27.2"
+strum = "0.28.0"
+strum_macros = "0.28.0"
 
 # --- Benchmarking & Testing ---
 criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
-serial_test = "3.3.1"
 
 # --- Language Bindings ---
 # Java
-jni = "0.21.1"
+jni = "0.22.1"
 # Python
-pyo3 = { version = "0.28.0", features = ["extension-module", "abi3-py39"] }
-pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }
+pyo3 = { version = "0.28.2", features = ["extension-module", "abi3-py39"] }
 
 # =====================
 # Build Profiles

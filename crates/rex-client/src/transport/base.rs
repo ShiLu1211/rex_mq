@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use bytes::BytesMut;
-use rex_core::{RexClientInner, RexCommand, RexData, utils::now_secs};
+use dashmap::DashMap;
+use rex_core::{AckData, RexClientInner, RexCommand, RexData, utils::now_secs};
 use tokio::{sync::broadcast, time::sleep};
 use tracing::{debug, info, warn};
 
@@ -19,6 +20,14 @@ pub struct ClientBase {
     pub config: RexClientConfig,
     pub shutdown_tx: broadcast::Sender<()>,
     pub last_heartbeat: AtomicU64,
+    /// Pending ACKs for sent messages (message_id -> sender info)
+    pub pending_acks: DashMap<u64, PendingAckInfo>,
+}
+
+/// Information about a pending ACK
+pub struct PendingAckInfo {
+    pub timestamp: u64,
+    pub title: String,
 }
 
 impl ClientBase {
@@ -31,6 +40,7 @@ impl ClientBase {
             config,
             shutdown_tx,
             last_heartbeat: AtomicU64::new(now_secs()),
+            pending_acks: DashMap::new(),
         };
 
         (base, shutdown_rx)
@@ -59,6 +69,23 @@ impl ClientBase {
     ) -> Result<()> {
         let client_id = client.id();
         data.set_source(client_id);
+
+        // If ACK is enabled and this is a message that expects ACK, register pending ACK
+        if self.config.ack_enabled {
+            match data.command() {
+                RexCommand::Title | RexCommand::Group | RexCommand::Cast => {
+                    // Generate message ID for ACK tracking
+                    let message_id = fastrand::u64(..);
+                    data.set_message_id(message_id);
+
+                    // Register pending ACK
+                    self.register_pending_ack(message_id, data.title().to_string());
+                    debug!("Registered pending ACK for message {}", message_id);
+                }
+                _ => {}
+            }
+        }
+
         client.send_buf(data.pack_ref()).await?;
         debug!("Data sent successfully: command={:?}", data.command());
         Ok(())
@@ -105,12 +132,29 @@ impl ClientBase {
                 self.config.set_title(&client.title_str());
                 info!("Title removed: {}", title);
             }
-            RexCommand::Title
-            | RexCommand::TitleReturn
-            | RexCommand::Group
-            | RexCommand::GroupReturn
-            | RexCommand::Cast
-            | RexCommand::CastReturn => {
+            RexCommand::Title | RexCommand::Group | RexCommand::Cast => {
+                // Check if message needs ACK
+                let message_id = rex_data.message_id();
+                debug!("Received message with message_id: {}", message_id);
+                if message_id != 0 {
+                    // Send ACK back to server
+                    self.send_ack(message_id).await;
+                }
+
+                // Pass message to handler
+                if let Err(e) = handler.handle(client.clone(), rex_data).await {
+                    warn!("Error in message handler: {}", e);
+                }
+            }
+            RexCommand::AckReturn => {
+                // Handle ACK return for sent messages
+                self.handle_ack_return(&rex_data).await;
+                // Also pass to handler so application can receive it
+                if let Err(e) = handler.handle(client.clone(), rex_data).await {
+                    warn!("Error in ACK handler: {}", e);
+                }
+            }
+            RexCommand::TitleReturn | RexCommand::GroupReturn | RexCommand::CastReturn => {
                 if let Err(e) = handler.handle(client.clone(), rex_data).await {
                     warn!("Error in message handler: {}", e);
                 }
@@ -122,6 +166,50 @@ impl ClientBase {
 
         client.update_last_recv();
         Ok(())
+    }
+
+    /// Send ACK to server for a received message
+    async fn send_ack(&self, message_id: u64) {
+        let Some(client) = self.get_client() else {
+            warn!("No client found, cannot send ACK");
+            return;
+        };
+
+        let ack_data = AckData::new(message_id);
+        let rex_data = ack_data.to_rex_data(client.id(), RexCommand::Ack);
+
+        debug!("Sending ACK for message {} to server", message_id);
+        if let Err(e) = client.send_buf(rex_data.pack_ref()).await {
+            warn!("Failed to send ACK for message {}: {}", message_id, e);
+        } else {
+            debug!("ACK sent for message {}", message_id);
+        }
+    }
+
+    /// Handle ACK return from server
+    async fn handle_ack_return(&self, rex_data: &RexData) {
+        let ack_data = AckData::from_rex_data(rex_data);
+        let message_id = ack_data.message_id;
+        let retcode = rex_data.retcode();
+
+        // Remove from pending ACKs
+        if self.pending_acks.remove(&message_id).is_some() {
+            debug!("ACK received for message {}: {:?}", message_id, retcode);
+        } else {
+            debug!(
+                "ACK received for unknown message {}: {:?}",
+                message_id, retcode
+            );
+        }
+    }
+
+    /// Register a pending ACK for a sent message
+    pub fn register_pending_ack(&self, message_id: u64, title: String) {
+        let info = PendingAckInfo {
+            timestamp: now_secs(),
+            title,
+        };
+        self.pending_acks.insert(message_id, info);
     }
 
     /// 通用的心跳任务

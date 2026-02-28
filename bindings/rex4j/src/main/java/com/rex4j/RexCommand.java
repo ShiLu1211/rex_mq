@@ -21,6 +21,8 @@ public enum RexCommand {
   RegTitleReturn(9912),
   DelTitle(9913),
   DelTitleReturn(9914),
+  Ack(9915),
+  AckReturn(9916),
 
   // 用于处理未知命令防止报错
   Unknown(0);

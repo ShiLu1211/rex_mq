@@ -23,6 +23,10 @@ impl RexServerTrait for WebSocketServer {
         self.base.send_shutdown_signal();
         info!("WebSocketServer shutdown complete");
     }
+
+    fn addr(&self) -> SocketAddr {
+        self.base.config.bind_addr
+    }
 }
 
 impl WebSocketServer {

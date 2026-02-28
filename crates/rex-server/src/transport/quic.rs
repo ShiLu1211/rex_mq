@@ -31,6 +31,10 @@ impl RexServerTrait for QuicServer {
 
         info!("QuicServer shutdown complete");
     }
+
+    fn addr(&self) -> SocketAddr {
+        self.base.config.bind_addr
+    }
 }
 
 impl QuicServer {

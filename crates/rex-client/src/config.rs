@@ -17,6 +17,11 @@ pub struct RexClientConfig {
     pub max_reconnect_attempts: u32,
 
     pub max_buffer_size: usize,
+
+    /// Whether to request ACK for sent messages
+    pub ack_enabled: bool,
+    /// ACK timeout in milliseconds
+    pub ack_timeout_ms: u64,
 }
 
 impl RexClientConfig {
@@ -35,6 +40,8 @@ impl RexClientConfig {
             pong_wait: 5,
             max_reconnect_attempts: 5,
             max_buffer_size: 8 * 1024 * 1024,
+            ack_enabled: false,
+            ack_timeout_ms: 5000,
         }
     }
 

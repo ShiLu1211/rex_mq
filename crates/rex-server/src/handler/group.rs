@@ -36,6 +36,26 @@ pub async fn handle(
         return Ok(());
     }
 
+    // Generate message ID for ACK if enabled
+    if system.is_ack_enabled() {
+        let title_clone = title.to_string();
+        // Use the message_id from client if already set, otherwise generate a new one
+        let msg_id = if rex_data.message_id() != 0 {
+            rex_data.message_id()
+        } else {
+            fastrand::u64(..)
+        };
+        rex_data.set_message_id(msg_id);
+
+        // Register pending ACK
+        system.register_pending_ack(
+            msg_id,
+            client_id,
+            title_clone,
+            true, // Group is a group message
+        );
+    }
+
     // 安全的轮询选择
     static GROUP_ROUND_ROBIN_INDEX: AtomicUsize = AtomicUsize::new(0);
     let index = GROUP_ROUND_ROBIN_INDEX.fetch_add(1, Ordering::Relaxed) % matching_clients.len();
@@ -45,14 +65,15 @@ pub async fn handle(
 
     if let Err(e) = target_client.send_buf(rex_data.pack_ref()).await {
         warn!("client [{:032X}] error: {}", target_client_id, e);
-        if let Err(e) = source_client
-            .send_buf(
-                rex_data
-                    .set_command(RexCommand::GroupReturn)
-                    .set_retcode(RetCode::NoTarget)
-                    .pack_ref(),
-            )
-            .await
+        if !system.is_ack_enabled()
+            && let Err(e) = source_client
+                .send_buf(
+                    rex_data
+                        .set_command(RexCommand::GroupReturn)
+                        .set_retcode(RetCode::NoTarget)
+                        .pack_ref(),
+                )
+                .await
         {
             warn!("client [{:032X}] error back: {}", client_id, e);
         }
