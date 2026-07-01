@@ -5,10 +5,10 @@ use dashmap::DashMap;
 use rand::seq::IteratorRandom;
 use rex_core::{RexClientInner, utils::now_secs};
 use rex_persistence::{PersistenceStore, StoreConfig};
-use tokio::sync::broadcast;
 use tracing::{info, warn};
 
 use crate::RexSystemConfig;
+use crate::Shutdown;
 use crate::cluster::server_cluster::ServerClusterManager;
 
 /// Information about a pending ACK
@@ -23,7 +23,7 @@ pub struct RexSystem {
     pub config: RexSystemConfig,
     id2client: DashMap<u128, Arc<RexClientInner>, RandomState>,
     title2clients: DashMap<String, Vec<Arc<RexClientInner>>, RandomState>,
-    shutdown_tx: Arc<broadcast::Sender<()>>,
+    shutdown: Arc<Shutdown>,
     // Persistence
     persistence: Option<Arc<PersistenceStore>>,
     // ACK tracking
@@ -33,10 +33,7 @@ pub struct RexSystem {
 }
 
 impl RexSystem {
-    pub async fn new(config: RexSystemConfig) -> Arc<Self> {
-        let (shutdown_tx, _shutdown_rx) = broadcast::channel(1);
-        let shutdown_tx_arc = Arc::new(shutdown_tx);
-
+    pub async fn new(config: RexSystemConfig, shutdown: Arc<Shutdown>) -> Arc<Self> {
         // Initialize persistence store
         let persistence = if config.persistence_enabled {
             let store_config = StoreConfig {
@@ -63,14 +60,14 @@ impl RexSystem {
             config,
             id2client: DashMap::with_hasher(RandomState::new()),
             title2clients: DashMap::with_hasher(RandomState::new()),
-            shutdown_tx: shutdown_tx_arc.clone(),
+            shutdown: shutdown.clone(),
             persistence,
             pending_acks: DashMap::with_hasher(RandomState::new()),
             cluster_manager: parking_lot::RwLock::new(None),
         });
 
         // Subscribe to shutdown signal for cleanup task
-        let mut shutdown_rx = shutdown_tx_arc.subscribe();
+        let mut shutdown_rx = shutdown.subscribe();
 
         tokio::spawn({
             let system_clone = system.clone();
@@ -424,7 +421,7 @@ impl RexSystem {
     /* ---------------- shutdown ---------------- */
 
     pub async fn close(&self) {
-        let _ = self.shutdown_tx.send(());
+        self.shutdown.signal();
 
         for entry in self.id2client.iter() {
             if let Err(e) = entry.value().close().await {

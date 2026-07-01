@@ -12,7 +12,7 @@ pub use crate::config::{ClusterConfig, RexServerConfig};
 pub use crate::transport::{QuicServer, TcpServer, WebSocketServer};
 pub use aggregate::*;
 pub use server::RexServerTrait;
-pub use system::*;
+pub use system::{RexSystem, RexSystemConfig, Shutdown};
 
 use std::sync::Arc;
 
@@ -25,6 +25,7 @@ use rex_core::Protocol;
 pub async fn open_server(
     system: Arc<RexSystem>,
     server_config: RexServerConfig,
+    shutdown: Arc<Shutdown>,
 ) -> Result<Arc<dyn RexServerTrait>> {
     // Start cluster manager if enabled
     if let Some(cluster_config) = &server_config.cluster
@@ -34,9 +35,9 @@ pub async fn open_server(
     }
 
     match server_config.protocol {
-        Protocol::Tcp => TcpServer::open(system, server_config).await,
-        Protocol::Quic => QuicServer::open(system, server_config).await,
-        Protocol::WebSocket => WebSocketServer::open(system, server_config).await,
+        Protocol::Tcp => TcpServer::open(system, server_config, shutdown).await,
+        Protocol::Quic => QuicServer::open(system, server_config, shutdown).await,
+        Protocol::WebSocket => WebSocketServer::open(system, server_config, shutdown).await,
     }
 }
 

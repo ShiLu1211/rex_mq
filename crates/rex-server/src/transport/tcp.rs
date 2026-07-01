@@ -11,7 +11,7 @@ use tokio::{
 use tracing::{debug, info, warn};
 
 use super::base::ServerBase;
-use crate::{RexServerConfig, RexServerTrait, RexSystem};
+use crate::{RexServerConfig, RexServerTrait, RexSystem, Shutdown};
 
 pub struct TcpServer {
     base: ServerBase,
@@ -34,11 +34,12 @@ impl TcpServer {
     pub async fn open(
         system: Arc<RexSystem>,
         config: RexServerConfig,
+        shutdown: Arc<Shutdown>,
     ) -> Result<Arc<dyn RexServerTrait>> {
         let addr = config.bind_addr;
         let listener = TcpListener::bind(addr).await?;
 
-        let (base, mut shutdown_rx) = ServerBase::new(system, config);
+        let (base, mut shutdown_rx) = ServerBase::new(system, config, shutdown);
 
         let server = Arc::new(TcpServer {
             base,
@@ -112,7 +113,7 @@ impl TcpServer {
         info!("Handling TCP connection: {}", peer_addr);
 
         let mut buffer = BytesMut::with_capacity(self.base.config.max_buffer_size);
-        let mut shutdown_rx = self.base.shutdown_tx.subscribe();
+        let mut shutdown_rx = self.base.shutdown.subscribe();
 
         loop {
             tokio::select! {

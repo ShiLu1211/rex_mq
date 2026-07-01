@@ -6,26 +6,30 @@ use rex_core::{RexClientInner, RexData};
 use tokio::sync::{Semaphore, broadcast};
 use tracing::{debug, warn};
 
-use crate::{RexServerConfig, RexSystem, handler::handle};
+use crate::{RexServerConfig, RexSystem, Shutdown, handler::handle};
 
 /// 服务器基础结构,包含所有通用字段
 pub struct ServerBase {
     pub system: Arc<RexSystem>,
     pub config: RexServerConfig,
     pub semaphore: Arc<Semaphore>,
-    pub shutdown_tx: Arc<broadcast::Sender<()>>,
+    pub shutdown: Arc<Shutdown>,
 }
 
 impl ServerBase {
-    pub fn new(system: Arc<RexSystem>, config: RexServerConfig) -> (Self, broadcast::Receiver<()>) {
+    pub fn new(
+        system: Arc<RexSystem>,
+        config: RexServerConfig,
+        shutdown: Arc<Shutdown>,
+    ) -> (Self, broadcast::Receiver<()>) {
         let semaphore = Arc::new(Semaphore::new(config.max_concurrent_handlers));
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(2 + config.max_concurrent_handlers);
+        let shutdown_rx = shutdown.subscribe();
 
         let base = Self {
             system,
             config,
             semaphore,
-            shutdown_tx: Arc::new(shutdown_tx),
+            shutdown,
         };
 
         (base, shutdown_rx)
@@ -84,9 +88,7 @@ impl ServerBase {
 
     /// 通用的关闭逻辑
     pub fn send_shutdown_signal(&self) {
-        if let Err(e) = self.shutdown_tx.send(()) {
-            warn!("Error sending shutdown signal: {}", e);
-        }
+        self.shutdown.signal();
     }
 
     /// 获取一个连接许可

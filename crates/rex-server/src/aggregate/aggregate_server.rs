@@ -4,19 +4,23 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::{
-    AggregateConfig, RexServerConfig, RexServerTrait, RexSystem, RexSystemConfig, open_server,
+    AggregateConfig, RexServerConfig, RexServerTrait, RexSystem, RexSystemConfig, Shutdown,
+    open_server,
 };
 
 pub struct AggregateServer {
     system: Arc<RexSystem>,
+    shutdown: Arc<Shutdown>,
     server_list: Vec<Arc<dyn RexServerTrait>>,
 }
 
 impl AggregateServer {
     pub async fn from_config(config: AggregateConfig) -> Result<Self> {
-        let system = RexSystem::new(config.system).await;
+        let shutdown = Shutdown::new();
+        let system = RexSystem::new(config.system, shutdown.clone()).await;
         let mut server = Self {
             system,
+            shutdown,
             server_list: vec![],
         };
 
@@ -44,20 +48,22 @@ impl AggregateServer {
         Self::from_config(config).await
     }
 
-    pub fn new(system: Arc<RexSystem>) -> Self {
+    pub fn new(system: Arc<RexSystem>, shutdown: Arc<Shutdown>) -> Self {
         Self {
             system,
+            shutdown,
             server_list: vec![],
         }
     }
 
     pub async fn new_with_config(system_config: RexSystemConfig) -> Self {
-        let system = RexSystem::new(system_config).await;
-        Self::new(system)
+        let shutdown = Shutdown::new();
+        let system = RexSystem::new(system_config, shutdown.clone()).await;
+        Self::new(system, shutdown)
     }
 
     pub async fn add_server(&mut self, server_config: RexServerConfig) -> Result<()> {
-        let server = open_server(self.system.clone(), server_config).await?;
+        let server = open_server(self.system.clone(), server_config, self.shutdown.clone()).await?;
         self.server_list.push(server);
         Ok(())
     }

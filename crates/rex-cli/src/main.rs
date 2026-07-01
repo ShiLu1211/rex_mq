@@ -145,8 +145,9 @@ pub async fn start_server(args: ServerArgs) -> Result<()> {
 
     let mut system_config = RexSystemConfig::from_id(&args.server_id);
     system_config.persistence_enabled = args.persist;
-    let system = RexSystem::new(system_config).await;
-    let _server = open_server(system, config).await?;
+    let shutdown = rex_server::Shutdown::new();
+    let system = RexSystem::new(system_config, shutdown.clone()).await;
+    let _server = open_server(system, config, shutdown).await?;
 
     loop {
         tokio::time::sleep(Duration::from_millis(1000)).await;
