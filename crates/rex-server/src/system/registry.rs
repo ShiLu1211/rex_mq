@@ -10,14 +10,7 @@ use tracing::{info, warn};
 use crate::RexSystemConfig;
 use crate::Shutdown;
 use crate::cluster::server_cluster::ServerClusterManager;
-
-/// Information about a pending ACK
-pub struct PendingAckInfo {
-    pub source_client_id: u128,
-    pub title: String,
-    pub timestamp: u64,
-    pub is_group: bool,
-}
+use crate::system::ack::{AckTracker, AckTrackerImpl, PendingAckInfo};
 
 pub struct RexSystem {
     pub config: RexSystemConfig,
@@ -26,8 +19,8 @@ pub struct RexSystem {
     shutdown: Arc<Shutdown>,
     // Persistence
     persistence: Option<Arc<PersistenceStore>>,
-    // ACK tracking
-    pending_acks: DashMap<u64, PendingAckInfo, RandomState>,
+    // ACK tracking — port added in commit 3
+    acks: Arc<dyn AckTracker>,
     // Cluster manager
     cluster_manager: parking_lot::RwLock<Option<Arc<ServerClusterManager>>>,
 }
@@ -56,13 +49,15 @@ impl RexSystem {
             None
         };
 
+        let acks: Arc<dyn AckTracker> = AckTrackerImpl::new(config.ack_timeout);
+
         let system = Arc::new(Self {
             config,
             id2client: DashMap::with_hasher(RandomState::new()),
             title2clients: DashMap::with_hasher(RandomState::new()),
             shutdown: shutdown.clone(),
             persistence,
-            pending_acks: DashMap::with_hasher(RandomState::new()),
+            acks,
             cluster_manager: parking_lot::RwLock::new(None),
         });
 
@@ -360,28 +355,18 @@ impl RexSystem {
         if !self.config.ack_enabled {
             return;
         }
-        let info = PendingAckInfo {
-            source_client_id,
-            title,
-            timestamp: now_secs(),
-            is_group,
-        };
-        self.pending_acks.insert(message_id, info);
+        self.acks
+            .register(message_id, source_client_id, title, is_group);
     }
 
     /// Get and remove pending ACK info
     pub fn take_pending_ack(&self, message_id: u64) -> Option<PendingAckInfo> {
-        self.pending_acks.remove(&message_id).map(|(_, v)| v)
+        self.acks.take(message_id)
     }
 
     /// Get pending ACK info without removing
     pub fn get_pending_ack(&self, message_id: u64) -> Option<PendingAckInfo> {
-        self.pending_acks.get(&message_id).map(|v| PendingAckInfo {
-            source_client_id: v.source_client_id,
-            title: v.title.clone(),
-            timestamp: v.timestamp,
-            is_group: v.is_group,
-        })
+        self.acks.get(message_id)
     }
 
     /// Clean up expired ACKs
@@ -389,30 +374,20 @@ impl RexSystem {
         if !self.config.ack_enabled {
             return;
         }
-        let timeout = self.config.ack_timeout;
         let now = now_secs();
 
-        let expired: Vec<u64> = self
-            .pending_acks
-            .iter()
-            .filter(|entry| now - entry.value().timestamp > timeout)
-            .map(|entry| *entry.key())
-            .collect();
+        for (msg_id, source_client_id) in self.acks.take_expired(now) {
+            // Send timeout error to sender
+            if let Some(sender) = self.id2client.get(&source_client_id) {
+                let retcode = rex_core::RetCode::AckTimeout;
+                let ack_data = rex_core::AckData::new(msg_id);
+                let rex_data =
+                    ack_data.to_rex_data(source_client_id, rex_core::RexCommand::AckReturn);
+                let mut rex_data = rex_data;
+                rex_data.set_retcode(retcode);
 
-        for msg_id in expired {
-            if let Some((_, info)) = self.pending_acks.remove(&msg_id) {
-                // Send timeout error to sender
-                if let Some(sender) = self.id2client.get(&info.source_client_id) {
-                    let retcode = rex_core::RetCode::AckTimeout;
-                    let ack_data = rex_core::AckData::new(msg_id);
-                    let rex_data = ack_data
-                        .to_rex_data(info.source_client_id, rex_core::RexCommand::AckReturn);
-                    let mut rex_data = rex_data;
-                    rex_data.set_retcode(retcode);
-
-                    if let Err(e) = sender.send_buf(rex_data.pack_ref()).await {
-                        warn!("Failed to send ACK timeout to client: {}", e);
-                    }
+                if let Err(e) = sender.send_buf(rex_data.pack_ref()).await {
+                    warn!("Failed to send ACK timeout to client: {}", e);
                 }
             }
         }

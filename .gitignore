@@ -3,6 +3,8 @@ target
 .claude
 .venv
 .rex_sled
+.cargo
+docs/superpowers
 
 Cargo.lock
 dependency-reduced-pom.xml
