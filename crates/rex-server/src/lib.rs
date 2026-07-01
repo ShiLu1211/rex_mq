@@ -12,7 +12,7 @@ pub use crate::config::{ClusterConfig, RexServerConfig};
 pub use crate::transport::{QuicServer, TcpServer, WebSocketServer};
 pub use aggregate::*;
 pub use server::RexServerTrait;
-pub use system::{RexSystem, RexSystemConfig, Shutdown};
+pub use system::{ClientRegistry, ClientRegistryImpl, RexSystem, RexSystemConfig, Shutdown};
 
 use std::sync::Arc;
 
