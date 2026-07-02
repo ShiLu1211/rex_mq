@@ -40,6 +40,31 @@ pub async fn handle(
 
         system.add_client(source_client.clone()).await;
 
+        // Drain any messages queued for this client ID while it was offline.
+        // For each OfflineMessage, deliver it as a Title packet. After all
+        // sends complete, clear the queue so reconnecting twice doesn't
+        // re-deliver.
+        let queued = system.get_offline_messages(client_id).await;
+        if !queued.is_empty() {
+            info!(
+                "Client [{:032X}] reconnecting with {} queued offline message(s)",
+                client_id,
+                queued.len()
+            );
+            for msg in queued {
+                let mut title_data = RexData::new(RexCommand::Title, &msg.title, &msg.payload);
+                title_data.set_source(client_id);
+                title_data.set_message_id(msg.id);
+                if let Err(e) = source_client.send_buf(title_data.pack_ref()).await {
+                    warn!(
+                        "Failed to deliver queued offline message [{:032X}] to client: {}",
+                        msg.id, e
+                    );
+                }
+            }
+            system.clear_offline_messages(client_id).await;
+        }
+
         if let Err(e) = source_client
             .send_buf(rex_data.set_command(RexCommand::LoginReturn).pack_ref())
             .await

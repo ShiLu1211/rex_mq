@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use rex_core::{RexClientInner, utils::now_secs};
-use rex_persistence::{PersistenceStore, StoreConfig};
+use rex_core::RexClientInner;
 use tracing::{info, warn};
 
 use crate::RexSystemConfig;
@@ -9,6 +8,7 @@ use crate::Shutdown;
 use crate::cluster::server_cluster::ServerClusterManager;
 use crate::system::ack::{AckTracker, AckTrackerImpl, PendingAckInfo};
 use crate::system::client_registry::{ClientRegistry, ClientRegistryImpl};
+use crate::system::offline::{NoopOfflineBuffer, OfflineBuffer, SledOfflineBuffer};
 
 pub struct RexSystem {
     pub config: RexSystemConfig,
@@ -17,8 +17,9 @@ pub struct RexSystem {
     /// `title2clients` fields; existing methods now delegate here.
     registry: Arc<dyn ClientRegistry>,
     shutdown: Arc<Shutdown>,
-    // Persistence
-    persistence: Option<Arc<PersistenceStore>>,
+    // Offline buffer + client-state persistence (port added in commit 5).
+    // Noop when persistence is disabled; Sled-backed otherwise.
+    offline: Arc<dyn OfflineBuffer>,
     // ACK tracking — port added in commit 3
     acks: Arc<dyn AckTracker>,
     // Cluster manager
@@ -27,26 +28,22 @@ pub struct RexSystem {
 
 impl RexSystem {
     pub async fn new(config: RexSystemConfig, shutdown: Arc<Shutdown>) -> Arc<Self> {
-        // Initialize persistence store
-        let persistence = if config.persistence_enabled {
-            let store_config = StoreConfig {
-                path: config.persistence_path.clone(),
-                enable_offline_queue: config.offline_enabled,
-                enable_client_persistence: true,
-                sync_interval: 1000,
-            };
-            match PersistenceStore::open(store_config).await {
-                Ok(store) => Some(Arc::new(store)),
+        // Initialize offline buffer. Sled-backed when persistence is enabled,
+        // no-op otherwise. Errors fall back to no-op so the server starts
+        // even if the sled path is unwritable.
+        let offline: Arc<dyn OfflineBuffer> = if config.persistence_enabled {
+            match SledOfflineBuffer::open(config.persistence_path.clone()).await {
+                Ok(buf) => buf,
                 Err(e) => {
                     warn!(
                         "Failed to open persistence store: {}, continuing without persistence",
                         e
                     );
-                    None
+                    Arc::new(NoopOfflineBuffer)
                 }
             }
         } else {
-            None
+            Arc::new(NoopOfflineBuffer)
         };
 
         let registry: Arc<dyn ClientRegistry> = ClientRegistryImpl::new();
@@ -56,7 +53,7 @@ impl RexSystem {
             config,
             registry,
             shutdown: shutdown.clone(),
-            persistence,
+            offline,
             acks,
             cluster_manager: parking_lot::RwLock::new(None),
         })
@@ -72,6 +69,13 @@ impl RexSystem {
     /// call `take_expired` for cleanup.
     pub fn acks(&self) -> Arc<dyn AckTracker> {
         self.acks.clone()
+    }
+
+    /// Public accessor for the offline-buffer port. Login drains queued
+    /// messages through this; the cleanup loop (future) deletes expired
+    /// ones through it.
+    pub fn offline(&self) -> Arc<dyn OfflineBuffer> {
+        self.offline.clone()
     }
 
     /// Set cluster manager
@@ -121,8 +125,8 @@ impl RexSystem {
             cluster.register_client(id);
         }
 
-        // Save client state to persistence
-        self.save_client_state(&client).await;
+        // Save client state via the offline port (commit 5).
+        self.offline.save_client(&client).await;
     }
 
     pub async fn remove_client(&self, client_id: u128) {
@@ -142,8 +146,8 @@ impl RexSystem {
             info!("client [{:032X}] removed", client_id);
         }
 
-        // Remove client state from persistence
-        self.remove_client_state(client_id).await;
+        // Remove client state via the offline port (commit 5).
+        self.offline.remove_client(client_id).await;
     }
 
     pub fn register_title(&self, client_id: u128, title: &str) {
@@ -182,87 +186,42 @@ impl RexSystem {
 
     /* ---------------- persistence ---------------- */
 
-    /// Get persistence store reference
-    pub fn persistence(&self) -> Option<&Arc<PersistenceStore>> {
-        self.persistence.as_ref()
-    }
-
-    /// Check if persistence is enabled
+    /// Whether persistence is configured to be on. The offline port may still
+    /// fall back to NoopOfflineBuffer if sled failed to open at startup.
     pub fn is_persistence_enabled(&self) -> bool {
-        self.persistence.is_some()
-    }
-
-    /// Save client state to persistence
-    pub async fn save_client_state(&self, client: &Arc<RexClientInner>) {
-        if let Some(ref store) = self.persistence {
-            let state = rex_persistence::ClientState::new(
-                client.id(),
-                client.title_iter(),
-                client.local_addr().to_string(),
-            );
-            if let Err(e) = store.save_client(&state).await {
-                warn!("Failed to save client state: {}", e);
-            }
-        }
-    }
-
-    /// Remove client state from persistence
-    pub async fn remove_client_state(&self, client_id: u128) {
-        if let Some(ref store) = self.persistence
-            && let Err(e) = store.remove_client(client_id).await
-        {
-            warn!("Failed to remove client state: {}", e);
-        }
+        self.config.persistence_enabled
     }
 
     /* ---------------- offline messages ---------------- */
 
-    /// Queue message for offline client
+    /// Queue a message for an offline target. Forwarded to the offline port.
     pub async fn queue_offline_message(
         &self,
         target_client_id: u128,
         title: &str,
         payload: bytes::Bytes,
     ) {
-        if let Some(ref store) = self.persistence {
-            let msg =
-                rex_persistence::OfflineMessage::new(target_client_id, title.to_string(), payload);
-            if let Err(e) = store.add_offline_message(&msg).await {
-                warn!("Failed to queue offline message: {}", e);
-            }
-        }
+        self.offline
+            .queue_offline_message(target_client_id, title, payload)
+            .await;
     }
 
-    /// Get offline messages for a client (and clear them)
+    /// Get queued messages for a client. Forwarded to the offline port.
     pub async fn get_offline_messages(
         &self,
         client_id: u128,
     ) -> Vec<rex_persistence::OfflineMessage> {
-        if let Some(ref store) = self.persistence
-            && let Ok(messages) = store.get_offline_messages(client_id).await
-        {
-            return messages;
-        }
-        Vec::new()
+        self.offline.get_offline_messages(client_id).await
     }
 
-    /// Clear offline messages for a client
+    /// Clear queued messages for a client. Forwarded to the offline port.
     pub async fn clear_offline_messages(&self, client_id: u128) {
-        if let Some(ref store) = self.persistence
-            && let Err(e) = store.clear_offline_messages(client_id).await
-        {
-            warn!("Failed to clear offline messages: {}", e);
-        }
+        self.offline.clear_offline_messages(client_id).await;
     }
 
-    /// Get offline message count for a client
+    /// Get queued message count for a client. Forwarded to the offline port.
     pub async fn get_offline_count(&self, client_id: u128) -> usize {
-        if let Some(ref store) = self.persistence
-            && let Ok(count) = store.get_offline_count(client_id).await
-        {
-            return count;
-        }
-        0
+        self.offline.get_offline_count(client_id).await
     }
 
     /* ---------------- ACK tracking ---------------- */
@@ -308,11 +267,8 @@ impl RexSystem {
             }
         }
 
-        // Close persistence store
-        if let Some(ref store) = self.persistence
-            && let Err(e) = store.close().await
-        {
-            warn!("Error closing persistence store: {}", e);
-        }
+        // Flush + close the offline port (sled is reference-counted; its
+        // drop would flush too, but explicit close is clearer).
+        self.offline.close().await;
     }
 }
