@@ -9,4 +9,3 @@ pub use tcp::TcpServer;
 pub use websocket::WebSocketServer;
 
 pub(crate) use base::parse_and_handle_buffer;
-pub(crate) use driver::{ByteSource, ConnectionDriver, TcpByteSource, WebSocketByteSource};

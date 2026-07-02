@@ -1,15 +1,16 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use quinn::{Connection, Endpoint, RecvStream, ServerConfig};
 use rex_core::{RexClientInner, utils::new_uuid};
 use rex_sender::QuicSender;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::io::AsyncReadExt;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
-use super::base::{ServerBase, parse_and_handle_buffer};
+use super::base::ServerBase;
+use super::driver::{ByteSource, ConnectionDriver};
 use crate::{RexServerConfig, RexServerTrait, Services};
 
 pub struct QuicServer {
@@ -164,42 +165,37 @@ impl QuicServer {
     }
 
     async fn handle_stream(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         peer: Arc<RexClientInner>,
-        mut recv_stream: RecvStream,
+        recv_stream: RecvStream,
     ) -> Result<()> {
-        let peer_addr = peer.local_addr();
-        let mut buffer = BytesMut::with_capacity(self.base.config.max_buffer_size);
-
-        loop {
-            // 从 QUIC 流中读取数据
-            match recv_stream.read_buf(&mut buffer).await {
-                Ok(0) => {
-                    // Stream finished
-                    debug!("Stream from {} finished", peer_addr);
-                    break;
-                }
-                Ok(_) => {
-                    if let Err(e) = parse_and_handle_buffer(
-                        &self.base.services,
-                        &peer,
-                        &mut buffer,
-                        self.base.config.max_buffer_size,
-                    )
-                    .await
-                    {
-                        warn!("Error processing buffer for {}: {}", peer_addr, e);
-                    }
-                }
-                Err(e) => {
-                    info!("Stream from {} read error: {}", peer_addr, e);
-                    break;
-                }
-            }
-        }
-
-        info!("Finished processing stream from {}", peer_addr);
+        let driver = ConnectionDriver::new(
+            &self.base.services,
+            &peer,
+            "QUIC",
+            self.base.config.max_buffer_size,
+        );
+        let source = QuicByteSource { recv_stream };
+        driver.drive(source).await;
         Ok(())
+    }
+}
+
+/// `ByteSource` adapter for quinn's `RecvStream`: reads discrete byte chunks
+/// from a QUIC unidirectional stream. Each `poll_read` allocates a fresh
+/// buffer (matching `TcpByteSource` behaviour).
+pub struct QuicByteSource {
+    pub recv_stream: RecvStream,
+}
+
+impl ByteSource for QuicByteSource {
+    async fn poll_read(&mut self) -> Result<Option<Bytes>, String> {
+        let mut buf = BytesMut::with_capacity(8 * 1024);
+        match self.recv_stream.read_buf(&mut buf).await {
+            Ok(0) => Ok(None),
+            Ok(_n) => Ok(Some(buf.freeze())),
+            Err(e) => Err(e.to_string()),
+        }
     }
 }
 
