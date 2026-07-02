@@ -14,7 +14,7 @@ use hdrhistogram::Histogram;
 use rand::{RngExt, distr::Alphanumeric, rng};
 use rex_client::{RexClientConfig, RexClientHandlerTrait, open_client};
 use rex_core::{Protocol, RexClientInner, RexCommand, RexData, utils::now_micros};
-use rex_server::{RexServerConfig, RexSystem, RexSystemConfig, open_server};
+use rex_server::{RexServerConfig, RexSystemConfig, open_server};
 
 #[derive(clap::Parser)]
 #[command(
@@ -145,8 +145,9 @@ pub async fn start_server(args: ServerArgs) -> Result<()> {
 
     let mut system_config = RexSystemConfig::from_id(&args.server_id);
     system_config.persistence_enabled = args.persist;
-    let system = RexSystem::new(system_config, rex_server::Shutdown::new()).await;
-    let _server = open_server(system, config).await?;
+    let services =
+        rex_server::build_services(system_config, rex_server::Shutdown::new(), None).await;
+    let _server = open_server(services, config).await?;
 
     loop {
         tokio::time::sleep(Duration::from_millis(1000)).await;

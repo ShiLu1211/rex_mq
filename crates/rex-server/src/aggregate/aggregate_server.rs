@@ -4,23 +4,21 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::{
-    AggregateConfig, RexServerConfig, RexServerTrait, RexSystem, RexSystemConfig, Shutdown,
-    open_server,
+    AggregateConfig, RexServerConfig, RexServerTrait, RexSystemConfig, Services, Shutdown,
+    build_services, open_server,
 };
 
 pub struct AggregateServer {
-    system: Arc<RexSystem>,
-    shutdown: Arc<Shutdown>,
+    services: Arc<Services>,
     server_list: Vec<Arc<dyn RexServerTrait>>,
 }
 
 impl AggregateServer {
     pub async fn from_config(config: AggregateConfig) -> Result<Self> {
         let shutdown = Shutdown::new();
-        let system = RexSystem::new(config.system, shutdown.clone()).await;
+        let services = build_services(config.system, shutdown, None).await;
         let mut server = Self {
-            system,
-            shutdown,
+            services,
             server_list: vec![],
         };
 
@@ -48,28 +46,27 @@ impl AggregateServer {
         Self::from_config(config).await
     }
 
-    pub fn new(system: Arc<RexSystem>, shutdown: Arc<Shutdown>) -> Self {
+    pub fn new(services: Arc<Services>) -> Self {
         Self {
-            system,
-            shutdown,
+            services,
             server_list: vec![],
         }
     }
 
     pub async fn new_with_config(system_config: RexSystemConfig) -> Self {
         let shutdown = Shutdown::new();
-        let system = RexSystem::new(system_config, shutdown.clone()).await;
-        Self::new(system, shutdown)
+        let services = build_services(system_config, shutdown, None).await;
+        Self::new(services)
     }
 
     pub async fn add_server(&mut self, server_config: RexServerConfig) -> Result<()> {
-        let server = open_server(self.system.clone(), server_config).await?;
+        let server = open_server(self.services.clone(), server_config).await?;
         self.server_list.push(server);
         Ok(())
     }
 
-    pub fn system(&self) -> &Arc<RexSystem> {
-        &self.system
+    pub fn services(&self) -> &Arc<Services> {
+        &self.services
     }
 
     pub fn server_count(&self) -> usize {
@@ -87,11 +84,10 @@ impl RexServerTrait for AggregateServer {
         for server in self.server_list.iter() {
             server.close().await;
         }
-        self.system.close().await;
+        self.services.shutdown.signal();
     }
 
     fn addr(&self) -> SocketAddr {
-        // Return the first server's address, or a placeholder if none
         self.server_list
             .first()
             .map(|s| s.addr())

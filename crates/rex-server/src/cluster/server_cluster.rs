@@ -12,8 +12,7 @@ use rex_cluster::types::{ClusterConfig as RexClusterConfig, ClusterMessage, Node
 use rex_core::RexData;
 use tokio::sync::mpsc;
 
-use crate::ClusterPort;
-use crate::RexSystem;
+use crate::{ClusterPort, Services};
 
 /// Server-side cluster manager - handles cluster communication
 pub struct ServerClusterManager {
@@ -29,8 +28,7 @@ pub struct ServerClusterManager {
     enabled: bool,
     /// Cluster message sender
     cluster_tx: RwLock<Option<mpsc::UnboundedSender<ClusterMessage>>>,
-    /// Reference to the system for message delivery
-    system: RwLock<Option<Arc<RexSystem>>>,
+    services: RwLock<Option<Arc<Services>>>,
 }
 
 impl ServerClusterManager {
@@ -50,13 +48,13 @@ impl ServerClusterManager {
             local_addr: RwLock::new(default_addr),
             enabled,
             cluster_tx: RwLock::new(None),
-            system: RwLock::new(None),
+            services: RwLock::new(None),
         })
     }
 
-    /// Set the system reference for message delivery
-    pub fn set_system(self: &Arc<Self>, system: Arc<RexSystem>) {
-        *self.system.write() = Some(system);
+    /// Set the services reference for message delivery
+    pub fn set_services(self: &Arc<Self>, services: Arc<Services>) {
+        *self.services.write() = Some(services);
     }
 
     /// Start the cluster manager
@@ -447,13 +445,13 @@ impl ServerClusterManager {
         let is_broadcast = forward.is_broadcast;
         let is_group = forward.is_group;
 
-        // Get system reference
-        let system = {
-            let system_lock = self.system.read();
-            match system_lock.as_ref() {
+        // Get services reference
+        let services = {
+            let lock = self.services.read();
+            match lock.as_ref() {
                 Some(s) => Arc::clone(s),
                 None => {
-                    tracing::warn!("No system reference available for message delivery");
+                    tracing::warn!("No services reference available for message delivery");
                     return;
                 }
             }
@@ -466,7 +464,7 @@ impl ServerClusterManager {
         // Handle broadcast or group messages
         if is_broadcast || is_group {
             // Find all subscribers for this title
-            let clients = system.find_all_by_title(&title, None);
+            let clients = services.registry.find_all_by_title(&title, None);
             if clients.is_empty() {
                 tracing::warn!(
                     "No local subscribers found for broadcast/group title: {}",
@@ -491,10 +489,10 @@ impl ServerClusterManager {
         // Handle unicast message
         let target_client = if forward.target_client_id != 0 {
             // Specific target client
-            system.find_some_by_id(forward.target_client_id)
+            services.registry.find_some_by_id(forward.target_client_id)
         } else {
             // Find any subscriber for this title
-            system.find_one_by_title(&title, None)
+            services.registry.find_one_by_title(&title, None)
         };
 
         match target_client {

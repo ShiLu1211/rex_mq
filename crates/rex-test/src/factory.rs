@@ -11,8 +11,8 @@ use rex_client::{
 };
 use rex_core::{Protocol, RexClientInner, RexCommand, RexData};
 use rex_server::{
-    ClusterConfig, RexServerConfig, RexServerTrait, RexSystem, RexSystemConfig, Shutdown,
-    open_server,
+    ClusterConfig, RexServerConfig, RexServerTrait, RexSystemConfig, Services, Shutdown,
+    build_services, open_server,
 };
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tracing::{info, warn};
@@ -87,8 +87,7 @@ impl RexClientHandlerTrait for TestClientHandler {
 
 /// ------------------------- TestEnv -------------------------
 pub struct TestEnv {
-    system: Arc<RexSystem>,
-    shutdown: Arc<Shutdown>,
+    services: Arc<Services>,
     servers: HashMap<Protocol, Arc<dyn RexServerTrait>>,
     base_port: u16,
     /// ACK enabled flag
@@ -108,9 +107,10 @@ impl TestEnv {
         let base_port = 28800 + (rand::random::<u16>() % 1000);
         let cluster_port = 38800 + (rand::random::<u16>() % 1000);
         let shutdown = Shutdown::new();
+        let services =
+            build_services(RexSystemConfig::from_id("test-system"), shutdown, None).await;
         Self {
-            system: RexSystem::new(RexSystemConfig::from_id("test-system"), shutdown.clone()).await,
-            shutdown,
+            services,
             servers: HashMap::new(),
             base_port,
             ack_enabled: false,
@@ -130,9 +130,9 @@ impl TestEnv {
         let base_port = 28800 + (rand::random::<u16>() % 1000);
         let cluster_port = 38800 + (rand::random::<u16>() % 1000);
         let shutdown = Shutdown::new();
+        let services = build_services(config, shutdown, None).await;
         Self {
-            system: RexSystem::new(config, shutdown.clone()).await,
-            shutdown,
+            services,
             servers: HashMap::new(),
             base_port,
             ack_enabled: true,
@@ -158,7 +158,7 @@ impl TestEnv {
     pub async fn start_server(&mut self, proto: Protocol) -> Result<Arc<dyn RexServerTrait>> {
         let addr = self.next_addr(proto);
         let cfg = RexServerConfig::new(proto, addr);
-        let server = open_server(self.system.clone(), cfg).await?;
+        let server = open_server(self.services.clone(), cfg).await?;
         self.servers.insert(proto, server.clone());
         self.server_addrs.insert(proto, addr);
         Ok(server)
@@ -171,7 +171,7 @@ impl TestEnv {
         addr: SocketAddr,
     ) -> Result<Arc<dyn RexServerTrait>> {
         let cfg = RexServerConfig::new(proto, addr);
-        let server = open_server(self.system.clone(), cfg).await?;
+        let server = open_server(self.services.clone(), cfg).await?;
         self.servers.insert(proto, server.clone());
         self.server_addrs.insert(proto, addr);
         Ok(server)
@@ -209,7 +209,7 @@ impl TestEnv {
             }),
         };
 
-        let server = open_server(self.system.clone(), cfg).await?;
+        let server = open_server(self.services.clone(), cfg).await?;
         self.servers.insert(proto, server.clone());
         Ok(server)
     }
@@ -287,6 +287,6 @@ impl TestEnv {
         for (_, s) in self.servers.drain() {
             s.close().await;
         }
-        self.system.close().await;
+        self.services.shutdown.signal();
     }
 }

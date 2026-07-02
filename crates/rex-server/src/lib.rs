@@ -14,40 +14,34 @@ pub use aggregate::*;
 pub use server::RexServerTrait;
 pub use system::{
     AckTracker, AckTrackerImpl, ClientRegistry, ClientRegistryImpl, ClusterPort, Janitor,
-    PendingAckInfo, RexSystem, RexSystemConfig, Services, Shutdown,
+    NoopOfflineBuffer, OfflineBuffer, PendingAckInfo, RexSystemConfig, Services, Shutdown,
+    SledOfflineBuffer,
 };
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use tracing::info;
+use tracing::{info, warn};
 
 use rex_cluster::ClusterConfig as RexClusterConfig;
 use rex_cluster::types::ClusterMessage;
 use rex_core::Protocol;
 
 pub async fn open_server(
-    system: Arc<RexSystem>,
+    services: Arc<Services>,
     server_config: RexServerConfig,
 ) -> Result<Arc<dyn RexServerTrait>> {
-    // Build the Services bundle from the system's ports. The cluster port
-    // comes from RexSystem's cluster_manager when present, otherwise a
-    // noop stand-in. Commit 8 will route cluster bootstrap through Services
-    // directly; for now we keep the existing RexSystem-based path.
-    let services = build_services_from_system(&system);
-
-    // Start cluster manager if enabled. This path goes through RexSystem
-    // for commit 7; commit 8 will route it through Services directly.
+    // Start cluster manager if enabled.
     if let Some(cluster_config) = &server_config.cluster
         && cluster_config.enabled
     {
-        start_cluster_manager(&system, cluster_config).await?;
+        start_cluster_manager(&services, cluster_config).await?;
     }
 
-    // Spawn the Janitor for periodic cleanup. One task per server.
-    let check_interval = Duration::from_secs(system.config.check_interval);
-    let client_timeout = system.config.client_timeout;
+    // Spawn the Janitor for periodic cleanup.
+    let check_interval = Duration::from_secs(services.config.check_interval);
+    let client_timeout = services.config.client_timeout;
     let janitor = Janitor::new(services.clone());
     tokio::spawn(async move {
         janitor.run(check_interval, client_timeout).await;
@@ -60,27 +54,38 @@ pub async fn open_server(
     }
 }
 
-/// Build a `Services` bundle from an existing `RexSystem` — extracts the
-/// ports via their accessors and packs them into a new struct. Used by
-/// `open_server` for now; commit 8 deletes `RexSystem` and constructs
-/// `Services` directly.
-fn build_services_from_system(system: &Arc<RexSystem>) -> Arc<Services> {
-    let cluster: Arc<dyn ClusterPort> = system
-        .cluster_manager()
-        .map(|c| c as Arc<dyn ClusterPort>)
-        .unwrap_or_else(|| Arc::new(NoopClusterPort) as Arc<dyn ClusterPort>);
-    Arc::new(Services {
-        registry: system.registry(),
-        acks: system.acks(),
-        offline: system.offline(),
-        cluster,
-        shutdown: system.shutdown.clone(),
-        config: system.config.clone(),
-    })
+/// Build a `Services` bundle. This is the canonical construction site.
+/// Takes an optional cluster port — when `None`, a `NoopClusterPort` is
+/// used (behaves as if the local node owns everything).
+pub async fn build_services(
+    config: RexSystemConfig,
+    shutdown: Arc<Shutdown>,
+    cluster: Option<Arc<dyn ClusterPort>>,
+) -> Arc<Services> {
+    let offline: Arc<dyn OfflineBuffer> = if config.persistence_enabled {
+        match SledOfflineBuffer::open(config.persistence_path.clone()).await {
+            Ok(buf) => buf,
+            Err(e) => {
+                warn!(
+                    "Failed to open persistence store: {}, continuing without persistence",
+                    e
+                );
+                Arc::new(NoopOfflineBuffer)
+            }
+        }
+    } else {
+        Arc::new(NoopOfflineBuffer)
+    };
+
+    let registry: Arc<dyn ClientRegistry> = ClientRegistryImpl::new();
+    let acks: Arc<dyn AckTracker> = AckTrackerImpl::new(config.ack_timeout);
+    let cluster = cluster.unwrap_or_else(|| Arc::new(NoopClusterPort) as Arc<dyn ClusterPort>);
+
+    Services::new(registry, acks, offline, cluster, shutdown, config)
 }
 
-/// Start the cluster manager and wire it into the system.
-async fn start_cluster_manager(system: &Arc<RexSystem>, config: &ClusterConfig) -> Result<()> {
+/// Start the cluster manager and wire it into Services.
+async fn start_cluster_manager(services: &Arc<Services>, config: &ClusterConfig) -> Result<()> {
     let node_id = config
         .node_id
         .clone()
@@ -100,8 +105,7 @@ async fn start_cluster_manager(system: &Arc<RexSystem>, config: &ClusterConfig) 
     };
 
     cluster_manager.start(cluster_config).await;
-    cluster_manager.set_system(system.clone());
-    system.set_cluster_manager(cluster_manager).await;
+    cluster_manager.set_services(services.clone());
 
     info!(
         "Cluster manager started on {} with node_id={}",
@@ -111,8 +115,7 @@ async fn start_cluster_manager(system: &Arc<RexSystem>, config: &ClusterConfig) 
     Ok(())
 }
 
-/// Noop cluster port — used when no cluster is configured. Behaves as if
-/// the local node owned everything.
+/// Noop cluster port — used when no cluster is configured.
 struct NoopClusterPort;
 
 #[async_trait::async_trait]
