@@ -5,10 +5,10 @@ use rex_cluster::types::{ClusterMessage, TitleUnregisterMessage};
 use rex_core::{RetCode, RexClientInner, RexCommand, RexData};
 use tracing::{debug, warn};
 
-use crate::RexSystem;
+use crate::Services;
 
 pub async fn handle(
-    system: &Arc<RexSystem>,
+    services: &Services,
     source_client: &Arc<RexClientInner>,
     rex_data: &mut RexData,
 ) -> Result<()> {
@@ -16,23 +16,23 @@ pub async fn handle(
     let title = rex_data.title().to_string();
     debug!("[{:032X}] Received del title [{}]", client_id, title);
 
-    if let Some(client) = system.find_some_by_id(client_id) {
-        system.unregister_title(client_id, &title);
+    if let Some(client) = services.registry.find_some_by_id(client_id) {
+        services.registry.unregister_title(client_id, &title);
 
         // Broadcast title unregistration to cluster
-        if let Some(cluster) = system.cluster_manager() {
-            let local_node_id = cluster.local_node_id().to_string();
-            let unregister_msg = TitleUnregisterMessage {
-                node_id: local_node_id,
-                title: title.clone(),
-            };
-            let cluster_msg = ClusterMessage::TitleUnregister(unregister_msg);
-            cluster.broadcast(cluster_msg).await;
-            debug!(
-                "Broadcasted title unregistration for [{}] to cluster",
-                title
-            );
-        }
+        let local_id = services.cluster.get_local_node_id().unwrap_or_default();
+        let unregister_msg = TitleUnregisterMessage {
+            node_id: local_id,
+            title: title.clone(),
+        };
+        let _ = services
+            .cluster
+            .broadcast(ClusterMessage::TitleUnregister(unregister_msg))
+            .await;
+        debug!(
+            "Broadcasted title unregistration for [{}] to cluster",
+            title
+        );
 
         if let Err(e) = client
             .send_buf(rex_data.set_command(RexCommand::DelTitleReturn).pack_ref())

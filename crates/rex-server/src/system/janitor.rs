@@ -1,32 +1,30 @@
 //! Periodic cleanup task.
 //!
-//! Owns no state of its own — borrows `Arc<RexSystem>` to reach the
-//! `ClientRegistry` and `AckTracker` ports, and a `Shutdown` receiver to
-//! exit on server stop. The effects (close inactive clients, deliver ACK
-//! timeouts) live here so the ports stay pure state.
+//! Owns no state of its own — borrows `Arc<Services>` to reach the
+//! `ClientRegistry` and `AckTracker` ports. Effects (close inactive clients,
+//! deliver ACK timeouts) live here so the ports stay pure state.
 
 use std::{sync::Arc, time::Duration};
 
 use rex_core::{RetCode, RexCommand, utils::now_secs};
 use tracing::{info, warn};
 
-use crate::{RexSystem, Shutdown};
+use crate::Services;
 
-/// Background cleanup driver. Spawned by `lib.rs::open_server` (replacing
-/// the previous `tokio::spawn` that lived inside `RexSystem::new`).
+/// Background cleanup driver. Spawned by `lib.rs::open_server`.
 pub struct Janitor {
-    system: Arc<RexSystem>,
+    services: Arc<Services>,
 }
 
 impl Janitor {
-    pub fn new(system: Arc<RexSystem>) -> Self {
-        Self { system }
+    pub fn new(services: Arc<Services>) -> Self {
+        Self { services }
     }
 
     /// Periodic loop. Wakes every `check_interval` seconds and runs both
-    /// cleanup arms. Exits when `Shutdown` signals.
-    pub async fn run(self, shutdown: Arc<Shutdown>, check_interval: Duration, client_timeout: u64) {
-        let mut shutdown_rx = shutdown.subscribe();
+    /// cleanup arms. Exits when `Services::shutdown` signals.
+    pub async fn run(self, check_interval: Duration, client_timeout: u64) {
+        let mut shutdown_rx = self.services.shutdown.subscribe();
 
         loop {
             tokio::select! {
@@ -47,9 +45,9 @@ impl Janitor {
     /// `registry.remove_client` to take ownership of the `Arc<RexClientInner>`
     /// for closing.
     async fn cleanup_inactive_clients(&self, client_timeout: u64) {
-        let stale_ids = self.system.registry().take_inactive(client_timeout);
+        let stale_ids = self.services.registry.take_inactive(client_timeout);
         for client_id in stale_ids {
-            let Some(client) = self.system.registry().remove_client(client_id) else {
+            let Some(client) = self.services.registry.remove_client(client_id) else {
                 continue;
             };
 
@@ -71,13 +69,13 @@ impl Janitor {
     /// sender via the registry and deliver an `AckReturn` with
     /// `RetCode::AckTimeout`.
     async fn cleanup_expired_acks(&self) {
-        if !self.system.is_ack_enabled() {
+        if !self.services.is_ack_enabled() {
             return;
         }
         let now = now_secs();
 
-        for (msg_id, source_client_id) in self.system.acks().take_expired(now) {
-            let Some(sender) = self.system.registry().find_some_by_id(source_client_id) else {
+        for (msg_id, source_client_id) in self.services.acks.take_expired(now) {
+            let Some(sender) = self.services.registry.find_some_by_id(source_client_id) else {
                 continue;
             };
 

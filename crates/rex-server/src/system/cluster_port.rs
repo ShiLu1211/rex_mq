@@ -8,11 +8,13 @@
 
 use async_trait::async_trait;
 
+use rex_cluster::types::ClusterMessage;
+
 use crate::ForwardRequest;
 
 /// Cluster-facing operations. Mixed sync/async — most methods are sync
-/// state queries on the local route table; only `forward_message` is async
-/// because it crosses the wire to a remote node.
+/// state queries on the local route table; only `forward_message` and
+/// `broadcast` are async because they cross the wire to peer nodes.
 #[allow(dead_code)] // Port added in commit 6; consumed in commit 7+.
 #[async_trait]
 pub trait ClusterPort: Send + Sync {
@@ -27,4 +29,9 @@ pub trait ClusterPort: Send + Sync {
 
     /// Forward a message to a peer node. Returns true on accepted-by-channel.
     async fn forward_message(&self, target_node: &str, request: ForwardRequest) -> bool;
+
+    /// Broadcast a cluster message to all known peers. Returns the number
+    /// of sends accepted (best-effort). Added in commit 7 so handlers can
+    /// stay on the trait surface.
+    async fn broadcast(&self, message: ClusterMessage) -> usize;
 }

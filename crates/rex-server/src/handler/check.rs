@@ -4,10 +4,10 @@ use anyhow::Result;
 use rex_core::{RexClientInner, RexCommand, RexData};
 use tracing::{debug, warn};
 
-use crate::RexSystem;
+use crate::Services;
 
 pub async fn handle(
-    _system: &Arc<RexSystem>,
+    _services: &Services,
     source_client: &Arc<RexClientInner>,
     rex_data: &mut RexData,
 ) -> Result<()> {

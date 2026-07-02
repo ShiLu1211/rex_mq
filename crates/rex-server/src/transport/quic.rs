@@ -10,7 +10,7 @@ use tokio::io::AsyncReadExt;
 use tracing::{debug, info, warn};
 
 use super::base::ServerBase;
-use crate::{RexServerConfig, RexServerTrait, RexSystem, Shutdown};
+use crate::{RexServerConfig, RexServerTrait, Services};
 
 pub struct QuicServer {
     base: ServerBase,
@@ -39,9 +39,8 @@ impl RexServerTrait for QuicServer {
 
 impl QuicServer {
     pub async fn open(
-        system: Arc<RexSystem>,
+        services: Arc<Services>,
         config: RexServerConfig,
-        shutdown: Arc<Shutdown>,
     ) -> Result<Arc<dyn RexServerTrait>> {
         let addr = config.bind_addr;
 
@@ -54,7 +53,7 @@ impl QuicServer {
         // 创建 endpoint
         let endpoint = Endpoint::server(server_config, addr)?;
 
-        let (base, mut shutdown_rx) = ServerBase::new(system, config, shutdown);
+        let (base, mut shutdown_rx) = ServerBase::new(services, config);
 
         let server = Arc::new(QuicServer { base, endpoint });
 
@@ -126,7 +125,7 @@ impl QuicServer {
                     .await;
 
                 let client_id = peer.id();
-                server.base.system.remove_client(client_id).await;
+                server.base.services.remove_client(client_id).await;
 
                 info!("QUIC connection {} closed and cleaned up", peer_addr);
             }

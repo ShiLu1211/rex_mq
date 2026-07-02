@@ -4,10 +4,10 @@ use anyhow::Result;
 use rex_core::{RetCode, RexClientInner, RexCommand, RexData};
 use tracing::{debug, info, warn};
 
-use crate::RexSystem;
+use crate::Services;
 
 pub async fn handle(
-    system: &Arc<RexSystem>,
+    services: &Services,
     source_client: &Arc<RexClientInner>,
     rex_data: &mut RexData,
 ) -> Result<()> {
@@ -19,7 +19,7 @@ pub async fn handle(
     let mut success = false;
 
     // First, try to find local target
-    if let Some(target_client) = system.find_one_by_title(&title, Some(client_id)) {
+    if let Some(target_client) = services.registry.find_one_by_title(&title, Some(client_id)) {
         let target_client_id = target_client.id();
 
         debug!(
@@ -27,7 +27,7 @@ pub async fn handle(
             client_id, target_client_id, data_len
         );
 
-        success = deliver_message(system, source_client, rex_data, &target_client).await;
+        success = deliver_message(services, source_client, rex_data, &target_client).await;
     } else {
         // No local target, try to find remote target via cluster
         info!("no local target for title [{}], checking cluster", title);
@@ -35,26 +35,24 @@ pub async fn handle(
         let mut tried_nodes = Vec::new();
 
         // First try the specific target node from route table
-        if let Some(target_node) = system.find_node_for_title(&title) {
+        if let Some(target_node) = services.cluster.find_node_for_title(&title) {
             debug!(
                 "route table returned node: {} for title: {}",
                 target_node, title
             );
 
-            if let Some(local_id) = system.get_local_node_id() {
+            if let Some(local_id) = services.cluster.get_local_node_id() {
                 debug!(
                     "comparing target_node={} with local_id={}",
                     target_node, local_id
                 );
 
                 if target_node != local_id {
-                    // Target is on another node, forward the message
                     debug!("forwarding title [{}] to node {}", title, target_node);
                     tried_nodes.push(target_node.clone());
-                    success = forward_to_node(system, source_client, rex_data, &target_node).await;
+                    success =
+                        forward_to_node(services, source_client, rex_data, &target_node).await;
                 } else {
-                    // Target is local node but no local subscriber
-                    // This could happen if route table is stale or title registered on another node
                     info!("target node is local but no local subscriber found, trying other nodes");
                 }
             }
@@ -63,14 +61,13 @@ pub async fn handle(
         }
 
         // If not successful, try all other cluster nodes
-        if !success && let Some(cluster) = system.cluster_manager() {
-            let all_nodes = cluster.get_nodes();
-            for node in all_nodes {
+        if !success {
+            for node in services.cluster.get_nodes() {
                 if !tried_nodes.contains(&node) {
-                    let local_id = system.get_local_node_id().unwrap_or_default();
+                    let local_id = services.cluster.get_local_node_id().unwrap_or_default();
                     if node != local_id {
                         debug!("trying to forward to node {} for title [{}]", node, title);
-                        if forward_to_node(system, source_client, rex_data, &node).await {
+                        if forward_to_node(services, source_client, rex_data, &node).await {
                             success = true;
                             break;
                         }
@@ -106,7 +103,7 @@ pub async fn handle(
 
 /// Deliver message to local target client
 async fn deliver_message(
-    system: &Arc<RexSystem>,
+    services: &Services,
     source_client: &Arc<RexClientInner>,
     rex_data: &mut RexData,
     target_client: &Arc<RexClientInner>,
@@ -114,8 +111,7 @@ async fn deliver_message(
     let client_id = source_client.id();
     let target_client_id = target_client.id();
 
-    // Generate message ID for ACK if enabled
-    if system.is_ack_enabled() {
+    if services.is_ack_enabled() {
         let title = rex_data.title().to_string();
         let msg_id = if rex_data.message_id() != 0 {
             rex_data.message_id()
@@ -124,7 +120,7 @@ async fn deliver_message(
         };
         rex_data.set_message_id(msg_id);
 
-        system.register_pending_ack(msg_id, client_id, title, false);
+        services.register_pending_ack(msg_id, client_id, title, false);
     }
 
     if let Err(e) = target_client.send_buf(rex_data.pack_ref()).await {
@@ -141,29 +137,30 @@ async fn deliver_message(
 
 /// Forward message to another node
 async fn forward_to_node(
-    system: &Arc<RexSystem>,
-    source_client: &Arc<RexClientInner>,
+    services: &Services,
+    _source_client: &Arc<RexClientInner>,
     rex_data: &mut RexData,
     target_node: &str,
 ) -> bool {
-    let client_id = source_client.id();
+    let client_id = rex_data.source();
 
-    // Forward via cluster
-    if let Some(cluster) = system.cluster_manager() {
-        let forward_request = crate::ForwardRequest {
-            source_client_id: client_id,
-            target_client_id: 0, // Let target node find the subscriber
-            title: rex_data.title().to_string(),
-            payload: rex_data.pack_ref().to_vec(),
-            msg_type: crate::ForwardType::Unicast,
-        };
+    let forward_request = crate::ForwardRequest {
+        source_client_id: client_id,
+        target_client_id: 0,
+        title: rex_data.title().to_string(),
+        payload: rex_data.pack_ref().to_vec(),
+        msg_type: crate::ForwardType::Unicast,
+    };
 
-        if cluster.forward_message(target_node, forward_request).await {
-            debug!("forwarded to node {}", target_node);
-            return true;
-        } else {
-            warn!("failed to forward to node {}", target_node);
-        }
+    if services
+        .cluster
+        .forward_message(target_node, forward_request)
+        .await
+    {
+        debug!("forwarded to node {}", target_node);
+        return true;
+    } else {
+        warn!("failed to forward to node {}", target_node);
     }
 
     false

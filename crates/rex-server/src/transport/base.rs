@@ -6,30 +6,27 @@ use rex_core::{RexClientInner, RexData};
 use tokio::sync::{Semaphore, broadcast};
 use tracing::{debug, warn};
 
-use crate::{RexServerConfig, RexSystem, Shutdown, handler::handle};
+use crate::{RexServerConfig, Services, handler::handle};
 
 /// 服务器基础结构,包含所有通用字段
 pub struct ServerBase {
-    pub system: Arc<RexSystem>,
+    pub services: Arc<Services>,
     pub config: RexServerConfig,
     pub semaphore: Arc<Semaphore>,
-    pub shutdown: Arc<Shutdown>,
 }
 
 impl ServerBase {
     pub fn new(
-        system: Arc<RexSystem>,
+        services: Arc<Services>,
         config: RexServerConfig,
-        shutdown: Arc<Shutdown>,
     ) -> (Self, broadcast::Receiver<()>) {
         let semaphore = Arc::new(Semaphore::new(config.max_concurrent_handlers));
-        let shutdown_rx = shutdown.subscribe();
+        let shutdown_rx = services.shutdown.subscribe();
 
         let base = Self {
-            system,
+            services,
             config,
             semaphore,
-            shutdown,
         };
 
         (base, shutdown_rx)
@@ -52,7 +49,7 @@ impl ServerBase {
                         rex_data.command(),
                     );
 
-                    if let Err(e) = handle(&self.system, peer, &mut rex_data).await {
+                    if let Err(e) = handle(&self.services, peer, &mut rex_data).await {
                         warn!("Error handling data from {}: {}", peer_addr, e);
                     }
 
@@ -88,7 +85,7 @@ impl ServerBase {
 
     /// 通用的关闭逻辑
     pub fn send_shutdown_signal(&self) {
-        self.shutdown.signal();
+        self.services.shutdown.signal();
     }
 
     /// 获取一个连接许可

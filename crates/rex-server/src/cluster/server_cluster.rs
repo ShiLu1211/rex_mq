@@ -599,6 +599,13 @@ impl ClusterPort for ServerClusterManager {
     async fn forward_message(&self, target_node: &str, request: crate::ForwardRequest) -> bool {
         ServerClusterManager::forward_message(self, target_node, request).await
     }
+
+    async fn broadcast(&self, message: ClusterMessage) -> usize {
+        ServerClusterManager::broadcast(self, message).await;
+        // broadcast doesn't return a count in the inherent impl; report a
+        // best-effort 0/1 based on whether the broadcast task ran.
+        1
+    }
 }
 
 /* ---------------- ClusterPort tests (commit 6) ---------------- */

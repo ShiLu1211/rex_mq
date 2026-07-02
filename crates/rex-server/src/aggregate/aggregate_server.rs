@@ -63,7 +63,7 @@ impl AggregateServer {
     }
 
     pub async fn add_server(&mut self, server_config: RexServerConfig) -> Result<()> {
-        let server = open_server(self.system.clone(), server_config, self.shutdown.clone()).await?;
+        let server = open_server(self.system.clone(), server_config).await?;
         self.server_list.push(server);
         Ok(())
     }

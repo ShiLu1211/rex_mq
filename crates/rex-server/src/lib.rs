@@ -14,7 +14,7 @@ pub use aggregate::*;
 pub use server::RexServerTrait;
 pub use system::{
     AckTracker, AckTrackerImpl, ClientRegistry, ClientRegistryImpl, ClusterPort, Janitor,
-    PendingAckInfo, RexSystem, RexSystemConfig, Shutdown,
+    PendingAckInfo, RexSystem, RexSystemConfig, Services, Shutdown,
 };
 
 use std::sync::Arc;
@@ -24,42 +24,63 @@ use anyhow::Result;
 use tracing::info;
 
 use rex_cluster::ClusterConfig as RexClusterConfig;
+use rex_cluster::types::ClusterMessage;
 use rex_core::Protocol;
 
 pub async fn open_server(
     system: Arc<RexSystem>,
     server_config: RexServerConfig,
-    shutdown: Arc<Shutdown>,
 ) -> Result<Arc<dyn RexServerTrait>> {
-    // Start cluster manager if enabled
+    // Build the Services bundle from the system's ports. The cluster port
+    // comes from RexSystem's cluster_manager when present, otherwise a
+    // noop stand-in. Commit 8 will route cluster bootstrap through Services
+    // directly; for now we keep the existing RexSystem-based path.
+    let services = build_services_from_system(&system);
+
+    // Start cluster manager if enabled. This path goes through RexSystem
+    // for commit 7; commit 8 will route it through Services directly.
     if let Some(cluster_config) = &server_config.cluster
         && cluster_config.enabled
     {
         start_cluster_manager(&system, cluster_config).await?;
     }
 
-    // Spawn the Janitor for periodic cleanup (replaces the previous
-    // tokio::spawn that lived inside RexSystem::new). One task per server.
+    // Spawn the Janitor for periodic cleanup. One task per server.
     let check_interval = Duration::from_secs(system.config.check_interval);
     let client_timeout = system.config.client_timeout;
-    let janitor = Janitor::new(system.clone());
-    let janitor_shutdown = shutdown.clone();
+    let janitor = Janitor::new(services.clone());
     tokio::spawn(async move {
-        janitor
-            .run(janitor_shutdown, check_interval, client_timeout)
-            .await;
+        janitor.run(check_interval, client_timeout).await;
     });
 
     match server_config.protocol {
-        Protocol::Tcp => TcpServer::open(system, server_config, shutdown).await,
-        Protocol::Quic => QuicServer::open(system, server_config, shutdown).await,
-        Protocol::WebSocket => WebSocketServer::open(system, server_config, shutdown).await,
+        Protocol::Tcp => TcpServer::open(services, server_config).await,
+        Protocol::Quic => QuicServer::open(services, server_config).await,
+        Protocol::WebSocket => WebSocketServer::open(services, server_config).await,
     }
 }
 
-/// Start the cluster manager
+/// Build a `Services` bundle from an existing `RexSystem` — extracts the
+/// ports via their accessors and packs them into a new struct. Used by
+/// `open_server` for now; commit 8 deletes `RexSystem` and constructs
+/// `Services` directly.
+fn build_services_from_system(system: &Arc<RexSystem>) -> Arc<Services> {
+    let cluster: Arc<dyn ClusterPort> = system
+        .cluster_manager()
+        .map(|c| c as Arc<dyn ClusterPort>)
+        .unwrap_or_else(|| Arc::new(NoopClusterPort) as Arc<dyn ClusterPort>);
+    Arc::new(Services {
+        registry: system.registry(),
+        acks: system.acks(),
+        offline: system.offline(),
+        cluster,
+        shutdown: system.shutdown.clone(),
+        config: system.config.clone(),
+    })
+}
+
+/// Start the cluster manager and wire it into the system.
 async fn start_cluster_manager(system: &Arc<RexSystem>, config: &ClusterConfig) -> Result<()> {
-    // Create cluster manager
     let node_id = config
         .node_id
         .clone()
@@ -78,13 +99,8 @@ async fn start_cluster_manager(system: &Arc<RexSystem>, config: &ClusterConfig) 
         max_retries: 3,
     };
 
-    // Start cluster manager
     cluster_manager.start(cluster_config).await;
-
-    // Set system reference in cluster manager for message delivery
     cluster_manager.set_system(system.clone());
-
-    // Store cluster manager in system
     system.set_cluster_manager(cluster_manager).await;
 
     info!(
@@ -93,4 +109,29 @@ async fn start_cluster_manager(system: &Arc<RexSystem>, config: &ClusterConfig) 
     );
 
     Ok(())
+}
+
+/// Noop cluster port — used when no cluster is configured. Behaves as if
+/// the local node owned everything.
+struct NoopClusterPort;
+
+#[async_trait::async_trait]
+impl ClusterPort for NoopClusterPort {
+    fn register_client(&self, _client_id: u128) {}
+    fn unregister_client(&self, _client_id: u128) {}
+    fn find_node_for_title(&self, _title: &str) -> Option<String> {
+        Some("local".to_string())
+    }
+    fn get_local_node_id(&self) -> Option<String> {
+        Some("local".to_string())
+    }
+    fn get_nodes(&self) -> Vec<String> {
+        vec!["local".to_string()]
+    }
+    async fn forward_message(&self, _target_node: &str, _request: ForwardRequest) -> bool {
+        false
+    }
+    async fn broadcast(&self, _message: ClusterMessage) -> usize {
+        0
+    }
 }

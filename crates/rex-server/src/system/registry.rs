@@ -16,7 +16,7 @@ pub struct RexSystem {
     /// maps that handlers query. Replaces the previous `id2client` and
     /// `title2clients` fields; existing methods now delegate here.
     registry: Arc<dyn ClientRegistry>,
-    shutdown: Arc<Shutdown>,
+    pub shutdown: Arc<Shutdown>,
     // Offline buffer + client-state persistence (port added in commit 5).
     // Noop when persistence is disabled; Sled-backed otherwise.
     offline: Arc<dyn OfflineBuffer>,

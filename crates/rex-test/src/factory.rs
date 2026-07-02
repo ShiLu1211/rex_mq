@@ -158,7 +158,7 @@ impl TestEnv {
     pub async fn start_server(&mut self, proto: Protocol) -> Result<Arc<dyn RexServerTrait>> {
         let addr = self.next_addr(proto);
         let cfg = RexServerConfig::new(proto, addr);
-        let server = open_server(self.system.clone(), cfg, self.shutdown.clone()).await?;
+        let server = open_server(self.system.clone(), cfg).await?;
         self.servers.insert(proto, server.clone());
         self.server_addrs.insert(proto, addr);
         Ok(server)
@@ -171,7 +171,7 @@ impl TestEnv {
         addr: SocketAddr,
     ) -> Result<Arc<dyn RexServerTrait>> {
         let cfg = RexServerConfig::new(proto, addr);
-        let server = open_server(self.system.clone(), cfg, self.shutdown.clone()).await?;
+        let server = open_server(self.system.clone(), cfg).await?;
         self.servers.insert(proto, server.clone());
         self.server_addrs.insert(proto, addr);
         Ok(server)
@@ -209,7 +209,7 @@ impl TestEnv {
             }),
         };
 
-        let server = open_server(self.system.clone(), cfg, self.shutdown.clone()).await?;
+        let server = open_server(self.system.clone(), cfg).await?;
         self.servers.insert(proto, server.clone());
         Ok(server)
     }

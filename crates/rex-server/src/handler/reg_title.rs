@@ -5,10 +5,10 @@ use rex_cluster::types::{ClusterMessage, TitleRegisterMessage};
 use rex_core::{RetCode, RexClientInner, RexCommand, RexData};
 use tracing::{debug, warn};
 
-use crate::RexSystem;
+use crate::Services;
 
 pub async fn handle(
-    system: &Arc<RexSystem>,
+    services: &Services,
     source_client: &Arc<RexClientInner>,
     rex_data: &mut RexData,
 ) -> Result<()> {
@@ -16,21 +16,22 @@ pub async fn handle(
     let title = rex_data.title().to_string();
     debug!("[{:032X}] Received reg title [{}]", client_id, title);
 
-    if let Some(client) = system.find_some_by_id(client_id) {
-        system.register_title(client_id, &title);
+    if let Some(client) = services.registry.find_some_by_id(client_id) {
+        services.registry.register_title(client_id, &title);
 
-        // Broadcast title registration to cluster
-        if let Some(cluster) = system.cluster_manager() {
-            let local_node_id = cluster.local_node_id().to_string();
-            let register_msg = TitleRegisterMessage {
-                node_id: local_node_id,
-                title: title.clone(),
-                client_id,
-            };
-            let cluster_msg = ClusterMessage::TitleRegister(register_msg);
-            cluster.broadcast(cluster_msg).await;
-            debug!("Broadcasted title registration for [{}] to cluster", title);
-        }
+        // Broadcast title registration to cluster. The cluster port's
+        // broadcast returns a count of accepted sends.
+        let local_id = services.cluster.get_local_node_id().unwrap_or_default();
+        let register_msg = TitleRegisterMessage {
+            node_id: local_id,
+            title: title.clone(),
+            client_id,
+        };
+        let _ = services
+            .cluster
+            .broadcast(ClusterMessage::TitleRegister(register_msg))
+            .await;
+        debug!("Broadcasted title registration for [{}] to cluster", title);
 
         if let Err(e) = client
             .send_buf(rex_data.set_command(RexCommand::RegTitleReturn).pack_ref())

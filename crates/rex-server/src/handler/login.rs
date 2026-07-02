@@ -4,10 +4,10 @@ use anyhow::Result;
 use rex_core::{RexClientInner, RexCommand, RexData};
 use tracing::{debug, info, warn};
 
-use crate::RexSystem;
+use crate::Services;
 
 pub async fn handle(
-    system: &Arc<RexSystem>,
+    services: &Services,
     source_client: &Arc<RexClientInner>,
     rex_data: &mut RexData,
 ) -> Result<()> {
@@ -15,7 +15,7 @@ pub async fn handle(
     debug!("[{:032X}] Received login message", client_id);
     let title = rex_data.title().to_owned();
 
-    if let Some(client) = system.find_some_by_id(client_id) {
+    if let Some(client) = services.registry.find_some_by_id(client_id) {
         warn!("[{:032X}] Client already exists", client_id);
         client.set_sender(source_client.sender().clone());
         client.insert_title(&title);
@@ -38,13 +38,10 @@ pub async fn handle(
         source_client.set_id(client_id);
         source_client.insert_title(&title);
 
-        system.add_client(source_client.clone()).await;
+        services.add_client(source_client.clone()).await;
 
         // Drain any messages queued for this client ID while it was offline.
-        // For each OfflineMessage, deliver it as a Title packet. After all
-        // sends complete, clear the queue so reconnecting twice doesn't
-        // re-deliver.
-        let queued = system.get_offline_messages(client_id).await;
+        let queued = services.get_offline_messages(client_id).await;
         if !queued.is_empty() {
             info!(
                 "Client [{:032X}] reconnecting with {} queued offline message(s)",
@@ -62,7 +59,7 @@ pub async fn handle(
                     );
                 }
             }
-            system.clear_offline_messages(client_id).await;
+            services.clear_offline_messages(client_id).await;
         }
 
         if let Err(e) = source_client

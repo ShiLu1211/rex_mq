@@ -6,18 +6,18 @@ use anyhow::Result;
 use rex_core::{AckData, RexClientInner, RexCommand, RexData};
 use tracing::{debug, warn};
 
-use crate::RexSystem;
+use crate::Services;
 
 /// Handle ACK from receiver to sender
 ///
 /// When a receiver gets a message and wants to acknowledge it,
 /// the server forwards the ACK to the original sender.
 pub async fn handle(
-    system: &Arc<RexSystem>,
+    services: &Services,
     _source_client: &Arc<RexClientInner>,
     rex_data: &mut RexData,
 ) -> Result<()> {
-    if !system.is_ack_enabled() {
+    if !services.is_ack_enabled() {
         debug!("ACK received but ACK is not enabled, ignoring");
         return Ok(());
     }
@@ -29,9 +29,12 @@ pub async fn handle(
     debug!("Received ACK for message: {}", message_id);
 
     // Look up the original sender
-    if let Some(pending_ack) = system.take_pending_ack(message_id) {
+    if let Some(pending_ack) = services.take_pending_ack(message_id) {
         // Forward ACK to the original sender
-        if let Some(sender) = system.find_some_by_id(pending_ack.source_client_id) {
+        if let Some(sender) = services
+            .registry
+            .find_some_by_id(pending_ack.source_client_id)
+        {
             // Create a new AckData to forward
             let ack_to_send = AckData::new(message_id);
             let rex_data =
