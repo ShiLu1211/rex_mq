@@ -55,8 +55,12 @@ impl CommandHandler for SessionMutator {
     ) -> Result<()> {
         let client_id = rex_data.source();
         let title = rex_data.title().to_string();
-        let mutation = Mutation::from_command(rex_data.command())
-            .expect("SessionMutator invoked with non-mutator command");
+        let mutation = Mutation::from_command(rex_data.command()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "SessionMutator invoked with non-mutator command: {:?}",
+                rex_data.command()
+            )
+        })?;
 
         debug!(
             "[{:032X}] Received {:?} [{}]",
