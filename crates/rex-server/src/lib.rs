@@ -1,4 +1,3 @@
-mod aggregate;
 mod cluster;
 mod config;
 pub mod handler;
@@ -9,7 +8,6 @@ mod transport;
 pub use crate::cluster::{ForwardRequest, ForwardType, ServerClusterManager};
 pub use crate::config::{ClusterConfig, RexServerConfig};
 pub use crate::transport::{QuicServer, TcpServer, WebSocketServer};
-pub use aggregate::*;
 pub use server::RexServerTrait;
 pub use system::{
     AckTracker, AckTrackerImpl, ClientRegistry, ClientRegistryImpl, ClusterPort, ClusterRouter,
