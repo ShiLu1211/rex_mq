@@ -13,7 +13,8 @@ use rex_cluster::types::ClusterMessage;
 use rex_core::RexClientInner;
 
 use crate::{
-    AckTracker, ClientRegistry, ClientRegistryImpl, ClusterPort, ForwardRequest, PendingAckInfo,
+    AckTracker, ClientRegistry, ClientRegistryImpl, ClusterPort, ClusterRouter, ForwardRequest,
+    NoopOfflineBuffer, OfflineBuffer, PendingAckInfo, RexSystemConfig, Services, Shutdown,
 };
 
 // ---- ClientRegistry mock -------------------------------------------------
@@ -192,6 +193,25 @@ pub fn dummy_client_with_id(id: u128) -> Arc<RexClientInner> {
     ))
 }
 
-pub fn dummy_client() -> Arc<RexClientInner> {
-    dummy_client_with_id(rand::random::<u128>())
+// ---- Shared test Services constructor ------------------------------------
+
+/// Build a `Services` bundle for handler unit tests. All ports are in-memory
+/// mocks. Pass `ack_enabled: true` for ACK-specific tests; `false` otherwise.
+pub fn make_services(ack_enabled: bool) -> Arc<Services> {
+    let registry = TestRegistry::new();
+    let acks = Arc::new(TestAckTracker::new()) as Arc<dyn AckTracker>;
+    let offline = Arc::new(NoopOfflineBuffer) as Arc<dyn OfflineBuffer>;
+    let cluster: Arc<dyn ClusterPort> = Arc::new(TestClusterPort::new());
+    let shutdown = Shutdown::new();
+    let mut config = RexSystemConfig::from_id("test");
+    config.ack_enabled = ack_enabled;
+    Services::new(
+        registry.to_arc(),
+        acks,
+        offline,
+        cluster.clone(),
+        ClusterRouter::new(registry.to_arc(), cluster.clone()),
+        shutdown,
+        config,
+    )
 }

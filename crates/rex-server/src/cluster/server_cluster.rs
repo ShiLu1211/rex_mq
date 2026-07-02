@@ -9,7 +9,6 @@ use parking_lot::RwLock;
 use rex_cluster::node::NodeManager;
 use rex_cluster::route_table::GlobalRouteTable;
 use rex_cluster::types::{ClusterConfig as RexClusterConfig, ClusterMessage, NodeId, NodeInfo};
-use rex_core::RexData;
 use tokio::sync::mpsc;
 
 use crate::{ClusterPort, Services};
@@ -180,8 +179,20 @@ impl ServerClusterManager {
                 ClusterMessage::Forward(forward) => {
                     tracing::debug!("Received forward message for title: {}", forward.title);
 
-                    // Deliver the message locally
-                    self.deliver_forward_message(forward).await;
+                    // Clone services out of the lock so the guard is dropped
+                    // before the async delivery call.
+                    let services = {
+                        let lock = self.services.read();
+                        lock.as_ref().map(Arc::clone)
+                    };
+                    if let Some(services) = services {
+                        crate::cluster::forward_relay::deliver_forward_message(
+                            &services,
+                            forward,
+                            self.local_node_id.as_str(),
+                        )
+                        .await;
+                    }
                 }
                 ClusterMessage::TitleRegister(msg) => {
                     tracing::info!(
@@ -432,140 +443,6 @@ impl ServerClusterManager {
                 tracing::warn!("Failed to broadcast to node {}: {}", node_id, e);
             }
         }
-    }
-
-    /// Deliver a forwarded message to local subscribers
-    async fn deliver_forward_message(&self, forward: rex_cluster::types::ForwardMessage) {
-        // Save fields needed for ACK before moving
-        let forward_id = forward.forward_id;
-        let original_source = forward.original_source;
-        let require_ack = forward.require_ack;
-        let title = forward.title.clone();
-        let payload = forward.payload;
-        let is_broadcast = forward.is_broadcast;
-        let is_group = forward.is_group;
-
-        // Get services reference
-        let services = {
-            let lock = self.services.read();
-            match lock.as_ref() {
-                Some(s) => Arc::clone(s),
-                None => {
-                    tracing::warn!("No services reference available for message delivery");
-                    return;
-                }
-            }
-        };
-
-        // Build RexData from payload
-        // The payload is already the raw RexData bytes, unpack it
-        let rex_data = RexData::unpack(bytes::BytesMut::from(payload.as_slice()));
-
-        // Handle broadcast or group messages
-        if is_broadcast || is_group {
-            // Find all subscribers for this title
-            let clients = services.registry.find_all_by_title(&title, None);
-            if clients.is_empty() {
-                tracing::warn!(
-                    "No local subscribers found for broadcast/group title: {}",
-                    title
-                );
-            } else {
-                tracing::info!(
-                    "Delivering {} message to {} local subscribers",
-                    if is_broadcast { "broadcast" } else { "group" },
-                    clients.len()
-                );
-                for client in clients {
-                    let client_id = client.id();
-                    if let Err(e) = client.send_buf(rex_data.pack_ref()).await {
-                        tracing::warn!("Failed to send to client {:032x}: {}", client_id, e);
-                    }
-                }
-            }
-            return;
-        }
-
-        // Handle unicast message
-        let target_client = if forward.target_client_id != 0 {
-            // Specific target client
-            services.registry.find_some_by_id(forward.target_client_id)
-        } else {
-            // Find any subscriber for this title
-            services.registry.find_one_by_title(&title, None)
-        };
-
-        match target_client {
-            Some(client) => {
-                let client_id = client.id();
-                tracing::info!(
-                    "Delivering forwarded message to local client {:032x}",
-                    client_id
-                );
-
-                // Send the message
-                if let Err(e) = client.send_buf(rex_data.pack_ref()).await {
-                    tracing::warn!("Failed to send to client {:032x}: {}", client_id, e);
-                    // Send failure ACK if requested
-                    if require_ack {
-                        self.send_forward_ack(
-                            forward_id,
-                            original_source,
-                            false,
-                            Some(e.to_string()),
-                        )
-                        .await;
-                    }
-                } else {
-                    tracing::debug!(
-                        "Successfully delivered forwarded message to {:032x}",
-                        client_id
-                    );
-                    // Send success ACK if requested
-                    if require_ack {
-                        self.send_forward_ack(forward_id, original_source, true, None)
-                            .await;
-                    }
-                }
-            }
-            None => {
-                tracing::warn!("No local subscriber found for title: {}", title);
-                // Send failure ACK if requested
-                if require_ack {
-                    self.send_forward_ack(
-                        forward_id,
-                        original_source,
-                        false,
-                        Some("No local subscriber".to_string()),
-                    )
-                    .await;
-                }
-            }
-        }
-    }
-
-    /// Send forward acknowledgment back to source node
-    async fn send_forward_ack(
-        &self,
-        forward_id: u64,
-        original_source: u128,
-        success: bool,
-        error: Option<String>,
-    ) {
-        let local_node_id = self.local_node_id.to_string();
-        let ack = rex_cluster::types::ForwardAckMessage {
-            forward_id,
-            from_node_id: local_node_id,
-            original_source,
-            success,
-            error,
-        };
-        let msg = ClusterMessage::ForwardAck(ack);
-
-        // Get transport to find the source node
-        // For now, we just broadcast - the original node will recognize the forward_id
-        // A more optimized approach would be to track pending forwards
-        self.broadcast(msg).await;
     }
 }
 

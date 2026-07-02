@@ -7,6 +7,7 @@
 //! `ForwardRequest` and `ForwardType` live in `forward.rs`.
 
 pub mod forward;
+pub(crate) mod forward_relay;
 pub mod server_cluster;
 
 pub use forward::{ForwardRequest, ForwardType};

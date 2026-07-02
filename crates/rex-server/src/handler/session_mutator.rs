@@ -128,36 +128,11 @@ impl CommandHandler for SessionMutator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handler::test_util::{
-        TestAckTracker, TestClusterPort, TestRegistry, dummy_client_with_id,
-    };
-    use crate::{
-        AckTracker, ClientRegistry, ClusterPort, ClusterRouter, NoopOfflineBuffer, OfflineBuffer,
-        RexSystemConfig, Router, Services, Shutdown,
-    };
-    use std::sync::Arc;
-
-    fn make_services() -> Arc<Services> {
-        let registry = TestRegistry::new();
-        let acks = Arc::new(TestAckTracker::new()) as Arc<dyn AckTracker>;
-        let offline = Arc::new(NoopOfflineBuffer) as Arc<dyn OfflineBuffer>;
-        let cluster: Arc<dyn ClusterPort> = Arc::new(TestClusterPort::new());
-        let shutdown = Shutdown::new();
-        let config = RexSystemConfig::from_id("test");
-        Services::new(
-            registry.to_arc(),
-            acks,
-            offline,
-            cluster.clone(),
-            ClusterRouter::new(registry.to_arc(), cluster.clone()),
-            shutdown,
-            config,
-        )
-    }
+    use crate::handler::test_util::{dummy_client_with_id, make_services};
 
     #[tokio::test]
     async fn reg_title_registers_and_broadcasts() {
-        let services = make_services();
+        let services = make_services(false);
         let id = 0xBADu128;
         let source = dummy_client_with_id(id);
 
@@ -179,7 +154,7 @@ mod tests {
 
     #[tokio::test]
     async fn del_title_unregisters_and_broadcasts() {
-        let services = make_services();
+        let services = make_services(false);
         let id = 0xBADu128;
         let source = dummy_client_with_id(id);
         services.registry.add_client(source.clone());
@@ -200,7 +175,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_mutator_unknown_client_returns_no_target() {
-        let services = make_services();
+        let services = make_services(false);
         let source = dummy_client_with_id(0xDEADu128);
 
         let mut rex_data = RexData::new(RexCommand::RegTitle, "news", b"");
