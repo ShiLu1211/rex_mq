@@ -53,6 +53,7 @@ pub async fn parse_and_handle_buffer(
     services: &Arc<Services>,
     peer: &Arc<RexClientInner>,
     buffer: &mut BytesMut,
+    max_buffer_size: usize,
 ) -> Result<()> {
     let peer_addr = peer.local_addr();
 
@@ -85,7 +86,7 @@ pub async fn parse_and_handle_buffer(
         }
     }
 
-    if buffer.len() > 8192 {
+    if buffer.len() > max_buffer_size {
         warn!(
             "Buffer too large for connection {} ({}KB), clearing",
             peer_addr,

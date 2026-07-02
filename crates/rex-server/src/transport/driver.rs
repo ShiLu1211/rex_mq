@@ -85,6 +85,7 @@ impl<'a> ConnectionDriver<'a> {
                                 self.services,
                                 self.peer,
                                 &mut buffer,
+                                self.max_buffer_size,
                             ).await {
                                 warn!(
                                     "Error processing buffer for {}: {}",

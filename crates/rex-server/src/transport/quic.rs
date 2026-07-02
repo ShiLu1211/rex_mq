@@ -180,8 +180,13 @@ impl QuicServer {
                     break;
                 }
                 Ok(_) => {
-                    if let Err(e) =
-                        parse_and_handle_buffer(&self.base.services, &peer, &mut buffer).await
+                    if let Err(e) = parse_and_handle_buffer(
+                        &self.base.services,
+                        &peer,
+                        &mut buffer,
+                        self.base.config.max_buffer_size,
+                    )
+                    .await
                     {
                         warn!("Error processing buffer for {}: {}", peer_addr, e);
                     }
