@@ -6,14 +6,10 @@
 pub mod failover;
 pub mod gossip;
 pub mod hash_ring;
-pub mod manager;
 pub mod node;
 pub mod route_table;
 pub mod sync;
 pub mod transport;
 pub mod types;
-
-#[cfg(test)]
-mod manager_tests;
 
 pub use types::*;

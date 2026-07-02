@@ -6,8 +6,7 @@ mod server;
 mod system;
 mod transport;
 
-pub use crate::cluster::server_cluster::ServerClusterManager;
-pub use crate::cluster::{ClusterIntegration, ForwardRequest, ForwardType};
+pub use crate::cluster::{ForwardRequest, ForwardType, ServerClusterManager};
 pub use crate::config::{ClusterConfig, RexServerConfig};
 pub use crate::transport::{QuicServer, TcpServer, WebSocketServer};
 pub use aggregate::*;
