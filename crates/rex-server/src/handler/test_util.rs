@@ -32,8 +32,8 @@ impl TestRegistry {
         }
     }
 
-    pub fn to_arc(self) -> Arc<dyn ClientRegistry> {
-        self.inner
+    pub fn to_arc(&self) -> Arc<dyn ClientRegistry> {
+        self.inner.clone()
     }
 }
 

@@ -69,8 +69,8 @@ mod tests {
     use super::*;
     use crate::handler::test_util::{TestAckTracker, TestRegistry, dummy_client_with_id};
     use crate::{
-        AckTracker, ClientRegistry, ClusterPort, NoopOfflineBuffer, OfflineBuffer, RexSystemConfig,
-        Services, Shutdown,
+        AckTracker, ClientRegistry, ClusterPort, ClusterRouter, NoopOfflineBuffer, OfflineBuffer,
+        RexSystemConfig, Router, Services, Shutdown,
     };
     use std::sync::Arc;
 
@@ -83,7 +83,15 @@ mod tests {
         let shutdown = Shutdown::new();
         let mut config = RexSystemConfig::from_id("test");
         config.ack_enabled = ack_enabled;
-        Services::new(registry.to_arc(), acks, offline, cluster, shutdown, config)
+        Services::new(
+            registry.to_arc(),
+            acks,
+            offline,
+            cluster.clone(),
+            ClusterRouter::new(registry.to_arc(), cluster.clone()),
+            shutdown,
+            config,
+        )
     }
 
     #[tokio::test]

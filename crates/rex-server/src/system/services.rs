@@ -24,6 +24,7 @@ use crate::system::ack::AckTracker;
 use crate::system::client_registry::ClientRegistry;
 use crate::system::cluster_port::ClusterPort;
 use crate::system::offline::OfflineBuffer;
+use crate::system::router::{ClusterRouter, Router};
 
 pub struct Services {
     /// In-memory client/title maps. Owns the canonical id and title state.
@@ -36,8 +37,12 @@ pub struct Services {
     /// queues messages for offline targets.
     pub offline: Arc<dyn OfflineBuffer>,
 
-    /// Cluster route table + forward channel.
+    /// Cluster route table + forward channel (for non-routing cluster ops).
     pub cluster: Arc<dyn ClusterPort>,
+
+    /// Title routing — local-first then cluster-fallback. Composes the
+    /// registry and cluster port (added in C4).
+    pub router: Arc<dyn Router>,
 
     /// Cross-cutting shutdown signal — held by every long-running task.
     pub shutdown: Arc<Shutdown>,
@@ -54,6 +59,7 @@ impl Services {
         acks: Arc<dyn AckTracker>,
         offline: Arc<dyn OfflineBuffer>,
         cluster: Arc<dyn ClusterPort>,
+        router: Arc<dyn Router>,
         shutdown: Arc<Shutdown>,
         config: RexSystemConfig,
     ) -> Arc<Self> {
@@ -62,6 +68,7 @@ impl Services {
             acks,
             offline,
             cluster,
+            router,
             shutdown,
             config,
         })

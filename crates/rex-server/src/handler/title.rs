@@ -4,7 +4,7 @@ use anyhow::Result;
 use rex_core::{RetCode, RexClientInner, RexCommand, RexData};
 use tracing::{debug, info, warn};
 
-use crate::Services;
+use crate::{RoutePlan, Services};
 
 pub async fn handle(
     services: &Services,
@@ -18,70 +18,57 @@ pub async fn handle(
 
     let mut success = false;
 
-    // First, try to find local target
-    if let Some(target_client) = services.registry.find_one_by_title(&title, Some(client_id)) {
-        let target_client_id = target_client.id();
-
-        debug!(
-            "client [{:032X}] title to local [{:032X}] data_len[{}]",
-            client_id, target_client_id, data_len
-        );
-
-        success = deliver_message(services, source_client, rex_data, &target_client).await;
-    } else {
-        // No local target, try to find remote target via cluster
-        info!("no local target for title [{}], checking cluster", title);
-
-        let mut tried_nodes = Vec::new();
-
-        // First try the specific target node from route table
-        if let Some(target_node) = services.cluster.find_node_for_title(&title) {
+    match services.router.route(&title, Some(client_id)) {
+        RoutePlan::Local(target) => {
+            let target_client_id = target.id();
             debug!(
-                "route table returned node: {} for title: {}",
-                target_node, title
+                "client [{:032X}] title to local [{:032X}] data_len[{}]",
+                client_id, target_client_id, data_len
+            );
+            success = deliver_message(services, source_client, rex_data, &target).await;
+        }
+        RoutePlan::Remote(node) => {
+            info!(
+                "no local target for title [{}], forwarding to node {}",
+                title, node
             );
 
-            if let Some(local_id) = services.cluster.get_local_node_id() {
-                debug!(
-                    "comparing target_node={} with local_id={}",
-                    target_node, local_id
-                );
+            let request = crate::ForwardRequest {
+                source_client_id: client_id,
+                target_client_id: 0,
+                title: title.clone(),
+                payload: rex_data.pack_ref().to_vec(),
+                msg_type: crate::ForwardType::Unicast,
+            };
 
-                if target_node != local_id {
-                    debug!("forwarding title [{}] to node {}", title, target_node);
-                    tried_nodes.push(target_node.clone());
-                    success =
-                        forward_to_node(services, source_client, rex_data, &target_node).await;
-                } else {
-                    info!("target node is local but no local subscriber found, trying other nodes");
-                }
-            }
-        } else {
-            debug!("route table returned None for title: {}", title);
-        }
+            success = services.router.forward(&node, request).await;
 
-        // If not successful, try all other cluster nodes
-        if !success {
-            for node in services.cluster.get_nodes() {
-                if !tried_nodes.contains(&node) {
-                    let local_id = services.cluster.get_local_node_id().unwrap_or_default();
-                    if node != local_id {
-                        debug!("trying to forward to node {} for title [{}]", node, title);
-                        if forward_to_node(services, source_client, rex_data, &node).await {
+            // Broadcast fallback: try all other known nodes.
+            if !success {
+                let local_id = services.router.local_node_id().unwrap_or_default();
+                for other in services.router.known_nodes() {
+                    if other != node && other != local_id {
+                        let fallback = crate::ForwardRequest {
+                            source_client_id: client_id,
+                            target_client_id: 0,
+                            title: title.clone(),
+                            payload: rex_data.pack_ref().to_vec(),
+                            msg_type: crate::ForwardType::Unicast,
+                        };
+                        if services.router.forward(&other, fallback).await {
                             success = true;
+                            debug!("fallback forward to node {} succeeded", other);
                             break;
                         }
                     }
                 }
             }
         }
-
-        if !success {
+        RoutePlan::None => {
             info!("no target available for title [{}]", title);
         }
     }
 
-    // Send error back if no success
     if !success {
         if let Err(e) = source_client
             .send_buf(
@@ -135,36 +122,8 @@ async fn deliver_message(
     }
 }
 
-/// Forward message to another node
-async fn forward_to_node(
-    services: &Services,
-    _source_client: &Arc<RexClientInner>,
-    rex_data: &mut RexData,
-    target_node: &str,
-) -> bool {
-    let client_id = rex_data.source();
-
-    let forward_request = crate::ForwardRequest {
-        source_client_id: client_id,
-        target_client_id: 0,
-        title: rex_data.title().to_string(),
-        payload: rex_data.pack_ref().to_vec(),
-        msg_type: crate::ForwardType::Unicast,
-    };
-
-    if services
-        .cluster
-        .forward_message(target_node, forward_request)
-        .await
-    {
-        debug!("forwarded to node {}", target_node);
-        return true;
-    } else {
-        warn!("failed to forward to node {}", target_node);
-    }
-
-    false
-}
+// `forward_to_node` is dead code after C4 — routing now goes through
+// `services.router.forward()`, which wraps `ClusterPort::forward_message`.
 
 #[cfg(test)]
 mod tests {
@@ -173,8 +132,8 @@ mod tests {
         TestAckTracker, TestClusterPort, TestRegistry, dummy_client_with_id,
     };
     use crate::{
-        AckTracker, ClientRegistry, ClusterPort, NoopOfflineBuffer, OfflineBuffer, RexSystemConfig,
-        Services, Shutdown,
+        AckTracker, ClientRegistry, ClusterPort, ClusterRouter, NoopOfflineBuffer, OfflineBuffer,
+        RexSystemConfig, Router, Services, Shutdown,
     };
     use std::sync::Arc;
 
@@ -185,7 +144,15 @@ mod tests {
         let cluster: Arc<dyn ClusterPort> = Arc::new(TestClusterPort::new());
         let shutdown = Shutdown::new();
         let config = RexSystemConfig::from_id("test");
-        Services::new(registry.to_arc(), acks, offline, cluster, shutdown, config)
+        Services::new(
+            registry.to_arc(),
+            acks,
+            offline,
+            cluster.clone(),
+            ClusterRouter::new(registry.to_arc(), cluster.clone()),
+            shutdown,
+            config,
+        )
     }
 
     #[tokio::test]

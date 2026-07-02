@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod test_util;
+pub(crate) mod test_util;
 
 mod ack;
 mod cast;

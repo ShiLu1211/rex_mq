@@ -13,9 +13,9 @@ pub use crate::transport::{QuicServer, TcpServer, WebSocketServer};
 pub use aggregate::*;
 pub use server::RexServerTrait;
 pub use system::{
-    AckTracker, AckTrackerImpl, ClientRegistry, ClientRegistryImpl, ClusterPort, Janitor,
-    NoopOfflineBuffer, OfflineBuffer, PendingAckInfo, RexSystemConfig, Services, Shutdown,
-    SledOfflineBuffer,
+    AckTracker, AckTrackerImpl, ClientRegistry, ClientRegistryImpl, ClusterPort, ClusterRouter,
+    Janitor, NoopOfflineBuffer, OfflineBuffer, PendingAckInfo, RexSystemConfig, RoutePlan, Router,
+    Services, Shutdown, SledOfflineBuffer,
 };
 
 use std::sync::Arc;
@@ -79,9 +79,11 @@ pub async fn build_services(
 
     let registry: Arc<dyn ClientRegistry> = ClientRegistryImpl::new();
     let acks: Arc<dyn AckTracker> = AckTrackerImpl::new(config.ack_timeout);
-    let cluster = cluster.unwrap_or_else(|| Arc::new(NoopClusterPort) as Arc<dyn ClusterPort>);
+    let cluster: Arc<dyn ClusterPort> =
+        cluster.unwrap_or_else(|| Arc::new(NoopClusterPort) as Arc<dyn ClusterPort>);
+    let router: Arc<dyn Router> = ClusterRouter::new(registry.clone(), cluster.clone());
 
-    Services::new(registry, acks, offline, cluster, shutdown, config)
+    Services::new(registry, acks, offline, cluster, router, shutdown, config)
 }
 
 /// Start the cluster manager and wire it into Services.

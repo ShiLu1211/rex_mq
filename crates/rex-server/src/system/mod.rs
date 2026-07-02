@@ -6,6 +6,7 @@ mod cluster_port;
 mod config;
 mod janitor;
 mod offline;
+mod router;
 mod services;
 mod shutdown;
 
@@ -15,5 +16,6 @@ pub use cluster_port::ClusterPort;
 pub use config::RexSystemConfig;
 pub use janitor::Janitor;
 pub use offline::{NoopOfflineBuffer, OfflineBuffer, SledOfflineBuffer};
+pub use router::{ClusterRouter, RoutePlan, Router};
 pub use services::Services;
 pub use shutdown::Shutdown;
