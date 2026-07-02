@@ -78,3 +78,18 @@ pub async fn handle(
     }
     Ok(())
 }
+
+use crate::handler::port::CommandHandler;
+
+pub struct GroupHandler;
+
+impl CommandHandler for GroupHandler {
+    async fn handle(
+        &self,
+        services: &crate::Services,
+        client: &Arc<RexClientInner>,
+        rex_data: &mut RexData,
+    ) -> Result<()> {
+        super::group::handle(services, client, rex_data).await
+    }
+}

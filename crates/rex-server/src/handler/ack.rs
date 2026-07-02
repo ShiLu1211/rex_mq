@@ -132,3 +132,21 @@ mod tests {
         assert!(services.acks.take(4).is_none(), "pending ACK consumed");
     }
 }
+
+// ---- CommandHandler impl (C1) -------------------------------------------
+
+use crate::handler::port::CommandHandler;
+
+pub struct AckHandler;
+
+impl CommandHandler for AckHandler {
+    async fn handle(
+        &self,
+        services: &crate::Services,
+        client: &Arc<RexClientInner>,
+        rex_data: &mut RexData,
+    ) -> Result<()> {
+        // Delegate to the free function to keep existing tests working.
+        crate::handler::ack::handle(services, client, rex_data).await
+    }
+}

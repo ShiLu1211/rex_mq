@@ -215,3 +215,18 @@ mod tests {
         assert!(handle(&services, &source, &mut rex_data).await.is_ok());
     }
 }
+
+use crate::handler::port::CommandHandler;
+
+pub struct TitleHandler;
+
+impl CommandHandler for TitleHandler {
+    async fn handle(
+        &self,
+        services: &crate::Services,
+        client: &Arc<RexClientInner>,
+        rex_data: &mut RexData,
+    ) -> Result<()> {
+        super::title::handle(services, client, rex_data).await
+    }
+}

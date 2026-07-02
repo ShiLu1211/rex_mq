@@ -162,3 +162,18 @@ mod tests {
         assert!(handle(&services, &source, &mut rex_data).await.is_ok());
     }
 }
+
+use crate::handler::port::CommandHandler;
+
+pub struct LoginHandler;
+
+impl CommandHandler for LoginHandler {
+    async fn handle(
+        &self,
+        services: &crate::Services,
+        client: &Arc<RexClientInner>,
+        rex_data: &mut RexData,
+    ) -> Result<()> {
+        super::login::handle(services, client, rex_data).await
+    }
+}

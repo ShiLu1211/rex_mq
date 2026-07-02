@@ -56,3 +56,18 @@ mod tests {
         assert!(handle(&services, &source, &mut rex_data).await.is_ok());
     }
 }
+
+use crate::handler::port::CommandHandler;
+
+pub struct CheckHandler;
+
+impl CommandHandler for CheckHandler {
+    async fn handle(
+        &self,
+        services: &crate::Services,
+        client: &Arc<RexClientInner>,
+        rex_data: &mut RexData,
+    ) -> Result<()> {
+        super::check::handle(services, client, rex_data).await
+    }
+}
