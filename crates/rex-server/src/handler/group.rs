@@ -36,23 +36,8 @@ pub async fn handle(
         return Ok(());
     }
 
-    // Generate message ID for ACK if enabled
-    if services.is_ack_enabled() {
-        let title_clone = title.to_string();
-        let msg_id = if rex_data.message_id() != 0 {
-            rex_data.message_id()
-        } else {
-            fastrand::u64(..)
-        };
-        rex_data.set_message_id(msg_id);
-
-        services.register_pending_ack(
-            msg_id,
-            client_id,
-            title_clone,
-            true, // Group is a group message
-        );
-    }
+    // ACK setup: generate msg_id and register pending ACK.
+    services.setup_message_ack(rex_data, client_id, title.to_string(), true);
 
     // 安全的轮询选择
     static GROUP_ROUND_ROBIN_INDEX: AtomicUsize = AtomicUsize::new(0);

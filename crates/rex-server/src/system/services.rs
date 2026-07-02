@@ -139,6 +139,30 @@ impl Services {
         self.offline.clear_offline_messages(client_id).await;
     }
 
+    /// ACK setup shared by cast, group, and title handlers. No-op when
+    /// ack is disabled. When enabled, generates a msg_id (reusing an
+    /// existing one if already set), stamps it into `rex_data`, and
+    /// registers the pending ACK. Extracted in C8 from three duplicate
+    /// ~14-line blocks.
+    pub fn setup_message_ack(
+        &self,
+        rex_data: &mut rex_core::RexData,
+        client_id: u128,
+        title: String,
+        is_group: bool,
+    ) {
+        if !self.config.ack_enabled {
+            return;
+        }
+        let msg_id = if rex_data.message_id() != 0 {
+            rex_data.message_id()
+        } else {
+            fastrand::u64(..)
+        };
+        rex_data.set_message_id(msg_id);
+        self.register_pending_ack(msg_id, client_id, title, is_group);
+    }
+
     /* ---------------- accessors / config-driven flags ---------------- */
 
     pub fn is_ack_enabled(&self) -> bool {

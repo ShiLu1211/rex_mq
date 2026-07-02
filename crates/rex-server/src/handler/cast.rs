@@ -34,25 +34,8 @@ pub async fn handle(
         return Ok(());
     }
 
-    // Generate message ID for ACK if enabled
-    if services.is_ack_enabled() {
-        let title_clone = title.to_string();
-        // Use the message_id from client if already set, otherwise generate a new one
-        let msg_id = if rex_data.message_id() != 0 {
-            rex_data.message_id()
-        } else {
-            fastrand::u64(..)
-        };
-        rex_data.set_message_id(msg_id);
-
-        // Register pending ACK
-        services.register_pending_ack(
-            msg_id,
-            client_id,
-            title_clone,
-            false, // Cast is not group
-        );
-    }
+    // ACK setup: generate msg_id and register pending ACK.
+    services.setup_message_ack(rex_data, client_id, title.to_string(), false);
 
     // 并行发送 - 复用 buf 避免重复打包
     let buf = rex_data.pack_ref();

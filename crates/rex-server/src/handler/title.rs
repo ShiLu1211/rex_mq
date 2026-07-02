@@ -98,17 +98,7 @@ async fn deliver_message(
     let client_id = source_client.id();
     let target_client_id = target_client.id();
 
-    if services.is_ack_enabled() {
-        let title = rex_data.title().to_string();
-        let msg_id = if rex_data.message_id() != 0 {
-            rex_data.message_id()
-        } else {
-            fastrand::u64(..)
-        };
-        rex_data.set_message_id(msg_id);
-
-        services.register_pending_ack(msg_id, client_id, title, false);
-    }
+    services.setup_message_ack(rex_data, client_id, rex_data.title().to_string(), false);
 
     if let Err(e) = target_client.send_buf(rex_data.pack_ref()).await {
         warn!(
