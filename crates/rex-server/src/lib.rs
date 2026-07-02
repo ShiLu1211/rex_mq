@@ -13,11 +13,12 @@ pub use crate::transport::{QuicServer, TcpServer, WebSocketServer};
 pub use aggregate::*;
 pub use server::RexServerTrait;
 pub use system::{
-    AckTracker, AckTrackerImpl, ClientRegistry, ClientRegistryImpl, PendingAckInfo, RexSystem,
-    RexSystemConfig, Shutdown,
+    AckTracker, AckTrackerImpl, ClientRegistry, ClientRegistryImpl, Janitor, PendingAckInfo,
+    RexSystem, RexSystemConfig, Shutdown,
 };
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use tracing::info;
@@ -36,6 +37,18 @@ pub async fn open_server(
     {
         start_cluster_manager(&system, cluster_config).await?;
     }
+
+    // Spawn the Janitor for periodic cleanup (replaces the previous
+    // tokio::spawn that lived inside RexSystem::new). One task per server.
+    let check_interval = Duration::from_secs(system.config.check_interval);
+    let client_timeout = system.config.client_timeout;
+    let janitor = Janitor::new(system.clone());
+    let janitor_shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        janitor
+            .run(janitor_shutdown, check_interval, client_timeout)
+            .await;
+    });
 
     match server_config.protocol {
         Protocol::Tcp => TcpServer::open(system, server_config, shutdown).await,

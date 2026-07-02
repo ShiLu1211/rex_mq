@@ -53,6 +53,12 @@ pub trait ClientRegistry: Send + Sync {
 
     /// Look up a client by its id.
     fn find_some_by_id(&self, id: u128) -> Option<Arc<RexClientInner>>;
+
+    /// Return ids of clients whose last-received timestamp is older than
+    /// `timeout_secs`. Does **not** remove them — the caller is expected to
+    /// follow up with `remove_client` for each id returned. Pure state query,
+    /// no side-effects.
+    fn take_inactive(&self, timeout_secs: u64) -> Vec<u128>;
 }
 
 /// DashMap-backed production implementation.
@@ -162,6 +168,16 @@ impl ClientRegistry for ClientRegistryImpl {
 
     fn find_some_by_id(&self, id: u128) -> Option<Arc<RexClientInner>> {
         self.id2client.get(&id).as_deref().cloned()
+    }
+
+    fn take_inactive(&self, timeout_secs: u64) -> Vec<u128> {
+        use rex_core::utils::now_secs;
+        let now = now_secs();
+        self.id2client
+            .iter()
+            .filter(|entry| now.saturating_sub(entry.value().last_recv()) > timeout_secs)
+            .map(|entry| *entry.key())
+            .collect()
     }
 }
 
@@ -309,5 +325,47 @@ mod tests {
         assert_eq!(news.id(), id);
         let weather = reg.find_one_by_title("weather", None).expect("weather");
         assert_eq!(weather.id(), id);
+    }
+
+    #[test]
+    fn take_inactive_returns_only_stale_clients() {
+        let reg = ClientRegistryImpl::new();
+        let c1 = dummy_client();
+        let c2 = dummy_client();
+        let id1 = c1.id();
+        let id2 = c2.id();
+        reg.add_client(c1.clone());
+        reg.add_client(c2.clone());
+
+        // Backdate c1 by 100 seconds so it is "stale" relative to a 10s timeout.
+        // c2 keeps its current timestamp.
+        use rex_core::utils::now_secs;
+        c1.set_last_recv_for_test(now_secs().saturating_sub(100));
+        c2.set_last_recv_for_test(now_secs());
+
+        let stale = reg.take_inactive(10);
+        assert_eq!(stale, vec![id1]);
+        // c2 not in the list
+        assert!(!stale.contains(&id2));
+    }
+
+    #[test]
+    fn take_inactive_returns_empty_for_empty_registry() {
+        let reg = ClientRegistryImpl::new();
+        assert!(reg.take_inactive(0).is_empty());
+    }
+
+    #[test]
+    fn take_inactive_does_not_remove() {
+        let reg = ClientRegistryImpl::new();
+        let c = dummy_client();
+        let id = c.id();
+        reg.add_client(c.clone());
+        use rex_core::utils::now_secs;
+        c.set_last_recv_for_test(now_secs().saturating_sub(100));
+
+        let _ = reg.take_inactive(10);
+        // Still in id map
+        assert!(reg.find_some_by_id(id).is_some());
     }
 }

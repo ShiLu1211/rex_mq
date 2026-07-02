@@ -1,8 +1,5 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
-use ahash::RandomState;
-use dashmap::DashMap;
-use rand::seq::IteratorRandom;
 use rex_core::{RexClientInner, utils::now_secs};
 use rex_persistence::{PersistenceStore, StoreConfig};
 use tracing::{info, warn};
@@ -11,11 +8,14 @@ use crate::RexSystemConfig;
 use crate::Shutdown;
 use crate::cluster::server_cluster::ServerClusterManager;
 use crate::system::ack::{AckTracker, AckTrackerImpl, PendingAckInfo};
+use crate::system::client_registry::{ClientRegistry, ClientRegistryImpl};
 
 pub struct RexSystem {
     pub config: RexSystemConfig,
-    id2client: DashMap<u128, Arc<RexClientInner>, RandomState>,
-    title2clients: DashMap<String, Vec<Arc<RexClientInner>>, RandomState>,
+    /// Client registry port (commit 4 wiring). Owns the in-memory id and title
+    /// maps that handlers query. Replaces the previous `id2client` and
+    /// `title2clients` fields; existing methods now delegate here.
+    registry: Arc<dyn ClientRegistry>,
     shutdown: Arc<Shutdown>,
     // Persistence
     persistence: Option<Arc<PersistenceStore>>,
@@ -49,43 +49,29 @@ impl RexSystem {
             None
         };
 
+        let registry: Arc<dyn ClientRegistry> = ClientRegistryImpl::new();
         let acks: Arc<dyn AckTracker> = AckTrackerImpl::new(config.ack_timeout);
 
-        let system = Arc::new(Self {
+        Arc::new(Self {
             config,
-            id2client: DashMap::with_hasher(RandomState::new()),
-            title2clients: DashMap::with_hasher(RandomState::new()),
+            registry,
             shutdown: shutdown.clone(),
             persistence,
             acks,
             cluster_manager: parking_lot::RwLock::new(None),
-        });
+        })
+    }
 
-        // Subscribe to shutdown signal for cleanup task
-        let mut shutdown_rx = shutdown.subscribe();
+    /// Public accessor for the client registry port. The Janitor uses this
+    /// to call `take_inactive` for cleanup.
+    pub fn registry(&self) -> Arc<dyn ClientRegistry> {
+        self.registry.clone()
+    }
 
-        tokio::spawn({
-            let system_clone = system.clone();
-            async move {
-                let check_interval = Duration::from_secs(system_clone.config.check_interval);
-                let client_timeout = system_clone.config.client_timeout;
-
-                loop {
-                    tokio::select! {
-                        _ = tokio::time::sleep(check_interval) => {
-                            system_clone.cleanup_inactive_clients(client_timeout).await;
-                            system_clone.cleanup_expired_acks().await;
-                        }
-                        _ = shutdown_rx.recv() => {
-                            info!("Cleanup task received shutdown signal, stopping.");
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-
-        system
+    /// Public accessor for the ACK tracker port. The Janitor uses this to
+    /// call `take_expired` for cleanup.
+    pub fn acks(&self) -> Arc<dyn AckTracker> {
+        self.acks.clone()
     }
 
     /// Set cluster manager
@@ -128,19 +114,11 @@ impl RexSystem {
 
     pub async fn add_client(&self, client: Arc<RexClientInner>) {
         let id = client.id();
-        self.id2client.insert(id, client.clone());
+        self.registry.add_client(client.clone());
 
         // Register client in cluster route table
         if let Some(ref cluster) = self.cluster_manager() {
             cluster.register_client(id);
-        }
-
-        for title in client.title_iter() {
-            let mut clients = self.title2clients.entry(title).or_default();
-            // 避免重复添加
-            if !clients.iter().any(|c| c.id() == id) {
-                clients.push(client.clone());
-            }
         }
 
         // Save client state to persistence
@@ -148,24 +126,14 @@ impl RexSystem {
     }
 
     pub async fn remove_client(&self, client_id: u128) {
-        let client = match self.id2client.remove(&client_id) {
-            Some((_id, client)) => client,
+        let client = match self.registry.remove_client(client_id) {
+            Some(client) => client,
             None => return,
         };
 
         // Unregister client from cluster route table
         if let Some(ref cluster) = self.cluster_manager() {
             cluster.unregister_client(&client_id);
-        }
-
-        for title in client.title_iter() {
-            if let Some(mut clients) = self.title2clients.get_mut(&title) {
-                clients.retain(|c| c.id() != client_id);
-                if clients.is_empty() {
-                    drop(clients);
-                    self.title2clients.remove(&title);
-                }
-            }
         }
 
         if let Err(e) = client.close().await {
@@ -179,42 +147,17 @@ impl RexSystem {
     }
 
     pub fn register_title(&self, client_id: u128, title: &str) {
-        let Some(client) = self.id2client.get(&client_id) else {
-            return;
-        };
-
-        client.insert_title(title);
-
-        let mut clients = self.title2clients.entry(title.to_string()).or_default();
-        // 避免重复添加
-        if !clients.iter().any(|c| c.id() == client_id) {
-            clients.push(client.clone());
-        }
+        self.registry.register_title(client_id, title);
     }
 
     pub fn unregister_title(&self, client_id: u128, title: &str) {
-        let Some(client) = self.id2client.get(&client_id) else {
-            return;
-        };
-
-        client.remove_title(title);
-
-        if let Some(mut clients) = self.title2clients.get_mut(title) {
-            clients.retain(|c| c.id() != client_id);
-            if clients.is_empty() {
-                drop(clients);
-                self.title2clients.remove(title);
-            }
-        }
+        self.registry.unregister_title(client_id, title);
     }
 
     /* ---------------- query ---------------- */
 
     pub fn find_all(&self) -> Vec<Arc<RexClientInner>> {
-        self.id2client
-            .iter()
-            .map(|entry| entry.value().clone())
-            .collect()
+        self.registry.find_all()
     }
 
     pub fn find_all_by_title(
@@ -222,15 +165,7 @@ impl RexSystem {
         title: &str,
         exclude: Option<u128>,
     ) -> Vec<Arc<RexClientInner>> {
-        let Some(clients) = self.title2clients.get(title) else {
-            return Vec::new();
-        };
-
-        clients
-            .iter()
-            .filter(|c| exclude != Some(c.id()))
-            .cloned()
-            .collect()
+        self.registry.find_all_by_title(title, exclude)
     }
 
     pub fn find_one_by_title(
@@ -238,18 +173,11 @@ impl RexSystem {
         title: &str,
         exclude: Option<u128>,
     ) -> Option<Arc<RexClientInner>> {
-        let clients = self.title2clients.get(title)?;
-        let mut rng = rand::rng();
-
-        clients
-            .iter()
-            .filter(|c| exclude != Some(c.id()))
-            .choose(&mut rng)
-            .cloned()
+        self.registry.find_one_by_title(title, exclude)
     }
 
     pub fn find_some_by_id(&self, id: u128) -> Option<Arc<RexClientInner>> {
-        self.id2client.get(&id).as_deref().cloned()
+        self.registry.find_some_by_id(id)
     }
 
     /* ---------------- persistence ---------------- */
@@ -369,95 +297,22 @@ impl RexSystem {
         self.acks.get(message_id)
     }
 
-    /// Clean up expired ACKs
-    pub async fn cleanup_expired_acks(&self) {
-        if !self.config.ack_enabled {
-            return;
-        }
-        let now = now_secs();
-
-        for (msg_id, source_client_id) in self.acks.take_expired(now) {
-            // Send timeout error to sender
-            if let Some(sender) = self.id2client.get(&source_client_id) {
-                let retcode = rex_core::RetCode::AckTimeout;
-                let ack_data = rex_core::AckData::new(msg_id);
-                let rex_data =
-                    ack_data.to_rex_data(source_client_id, rex_core::RexCommand::AckReturn);
-                let mut rex_data = rex_data;
-                rex_data.set_retcode(retcode);
-
-                if let Err(e) = sender.send_buf(rex_data.pack_ref()).await {
-                    warn!("Failed to send ACK timeout to client: {}", e);
-                }
-            }
-        }
-    }
-
     /* ---------------- shutdown ---------------- */
 
     pub async fn close(&self) {
         self.shutdown.signal();
 
-        for entry in self.id2client.iter() {
-            if let Err(e) = entry.value().close().await {
+        for client in self.registry.find_all() {
+            if let Err(e) = client.close().await {
                 warn!("close client error: {}", e);
             }
         }
-
-        self.id2client.clear();
-        self.title2clients.clear();
 
         // Close persistence store
         if let Some(ref store) = self.persistence
             && let Err(e) = store.close().await
         {
             warn!("Error closing persistence store: {}", e);
-        }
-    }
-}
-
-/* ---------------- background cleanup ---------------- */
-
-impl RexSystem {
-    async fn cleanup_inactive_clients(&self, timeout_secs: u64) {
-        let now = now_secs();
-        let mut to_remove = Vec::new();
-
-        for entry in self.id2client.iter() {
-            let client = entry.value();
-            if now - client.last_recv() > timeout_secs {
-                to_remove.push(*entry.key());
-            }
-        }
-
-        for client_id in to_remove {
-            let client = match self.id2client.remove(&client_id) {
-                Some((_id, client)) => client,
-                None => continue,
-            };
-
-            warn!(
-                "Client [{:032X}] (addr: {}) timed out, removing...",
-                client_id,
-                client.local_addr()
-            );
-
-            if let Err(e) = client.close().await {
-                warn!("close client [{:032X}] error: {}", client_id, e);
-            } else {
-                info!("client [{:032X}] removed", client_id);
-            }
-
-            // 清理 title2clients
-            for title in client.title_iter() {
-                if let Some(mut clients) = self.title2clients.get_mut(&title) {
-                    clients.retain(|c| c.id() != client_id);
-                    if clients.is_empty() {
-                        drop(clients);
-                        self.title2clients.remove(&title);
-                    }
-                }
-            }
         }
     }
 }

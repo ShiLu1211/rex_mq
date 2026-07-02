@@ -139,6 +139,12 @@ impl RexClientInner {
         self.last_recv.load(Ordering::Relaxed)
     }
 
+    /// Test-only: backdate `last_recv` so cleanup-task tests can simulate
+    /// inactivity without sleeping. Has no production caller.
+    pub fn set_last_recv_for_test(&self, ts: u64) {
+        self.last_recv.store(ts, Ordering::Relaxed);
+    }
+
     #[inline(always)]
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
