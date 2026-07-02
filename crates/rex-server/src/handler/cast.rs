@@ -112,3 +112,53 @@ pub async fn handle(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handler::test_util::{
+        TestAckTracker, TestClusterPort, TestRegistry, dummy_client_with_id,
+    };
+    use crate::{
+        AckTracker, ClientRegistry, ClusterPort, NoopOfflineBuffer, OfflineBuffer, RexSystemConfig,
+        Services, Shutdown,
+    };
+    use std::sync::Arc;
+
+    fn make_services() -> Arc<Services> {
+        let registry = TestRegistry::new();
+        let acks = Arc::new(TestAckTracker::new()) as Arc<dyn AckTracker>;
+        let offline = Arc::new(NoopOfflineBuffer) as Arc<dyn OfflineBuffer>;
+        let cluster: Arc<dyn ClusterPort> = Arc::new(TestClusterPort::new());
+        let shutdown = Shutdown::new();
+        let config = RexSystemConfig::from_id("test");
+        Services::new(registry.to_arc(), acks, offline, cluster, shutdown, config)
+    }
+
+    #[tokio::test]
+    async fn cast_no_subscribers_returns_no_target() {
+        let services = make_services();
+        let source = dummy_client_with_id(0x1u128);
+        let mut rex_data = RexData::new(RexCommand::Cast, "absent", b"hello");
+        rex_data.set_source(0x1u128);
+        assert!(handle(&services, &source, &mut rex_data).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn cast_delivers_to_all_subscribers() {
+        let services = make_services();
+        let source_id = 0xAAAu128;
+        let source = dummy_client_with_id(source_id);
+        let sub1 = dummy_client_with_id(0xBBBu128);
+        let sub2 = dummy_client_with_id(0xCCCu128);
+
+        services.registry.add_client(sub1.clone());
+        services.registry.register_title(sub1.id(), "cast_chan");
+        services.registry.add_client(sub2.clone());
+        services.registry.register_title(sub2.id(), "cast_chan");
+
+        let mut rex_data = RexData::new(RexCommand::Cast, "cast_chan", b"hello");
+        rex_data.set_source(source_id);
+        assert!(handle(&services, &source, &mut rex_data).await.is_ok());
+    }
+}

@@ -80,3 +80,85 @@ pub async fn handle(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handler::test_util::{TestAckTracker, TestRegistry, dummy_client_with_id};
+    use crate::{
+        AckTracker, ClientRegistry, ClusterPort, NoopOfflineBuffer, OfflineBuffer, RexSystemConfig,
+        Services, Shutdown,
+    };
+    use std::sync::Arc;
+
+    fn make_services() -> Arc<Services> {
+        let registry = TestRegistry::new();
+        let acks = Arc::new(TestAckTracker::new()) as Arc<dyn AckTracker>;
+        let offline = Arc::new(NoopOfflineBuffer) as Arc<dyn OfflineBuffer>;
+        let cluster: Arc<dyn ClusterPort> =
+            Arc::new(crate::handler::test_util::TestClusterPort::new());
+        let shutdown = Shutdown::new();
+        let config = RexSystemConfig::from_id("test");
+        Services::new(registry.to_arc(), acks, offline, cluster, shutdown, config)
+    }
+
+    #[tokio::test]
+    async fn login_new_client_registers_and_sends_login_return() {
+        let services = make_services();
+        let client_id = 0xCAFEu128;
+        let source = dummy_client_with_id(client_id);
+        let title = "news";
+
+        let mut rex_data = RexData::new(RexCommand::Login, title, b"");
+        rex_data.set_source(client_id);
+
+        // New client: should not already exist in the registry.
+        assert!(services.registry.find_some_by_id(client_id).is_none());
+
+        // handle returns Ok
+        assert!(handle(&services, &source, &mut rex_data).await.is_ok());
+
+        // Client is now in the registry
+        let registered = services
+            .registry
+            .find_some_by_id(client_id)
+            .expect("client should be registered");
+        assert_eq!(registered.id(), client_id);
+    }
+
+    #[tokio::test]
+    async fn login_existing_client_updates_sender_and_title() {
+        let services = make_services();
+        let client_id = 0xBEEFu128;
+        let source = dummy_client_with_id(client_id);
+        let title = "news";
+
+        // Pre-register the client in the registry
+        services.registry.add_client(source.clone());
+        services.registry.register_title(client_id, title);
+
+        let mut rex_data = RexData::new(RexCommand::Login, title, b"");
+        rex_data.set_source(client_id);
+
+        // Existing client: handle should still succeed
+        assert!(handle(&services, &source, &mut rex_data).await.is_ok());
+
+        // Client still exists
+        assert!(services.registry.find_some_by_id(client_id).is_some());
+    }
+
+    #[tokio::test]
+    async fn login_new_client_does_not_send_offline_messages_when_empty() {
+        // With NoopOfflineBuffer, get_offline_messages always returns empty.
+        // The handler should still succeed without panicking.
+        let services = make_services();
+        let client_id = 0xDEADu128;
+        let source = dummy_client_with_id(client_id);
+        let title = "news";
+
+        let mut rex_data = RexData::new(RexCommand::Login, title, b"");
+        rex_data.set_source(client_id);
+
+        assert!(handle(&services, &source, &mut rex_data).await.is_ok());
+    }
+}

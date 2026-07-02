@@ -24,3 +24,35 @@ pub async fn handle(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handler::test_util::dummy_client_with_id;
+    use crate::handler::test_util::{TestAckTracker, TestRegistry};
+    use crate::{
+        AckTracker, ClientRegistry, ClusterPort, NoopOfflineBuffer, OfflineBuffer, RexSystemConfig,
+        Services, Shutdown,
+    };
+    use std::sync::Arc;
+
+    fn make_services() -> Arc<Services> {
+        let registry = TestRegistry::new();
+        let acks = Arc::new(TestAckTracker::new()) as Arc<dyn AckTracker>;
+        let offline = Arc::new(NoopOfflineBuffer) as Arc<dyn OfflineBuffer>;
+        let cluster: Arc<dyn ClusterPort> =
+            Arc::new(crate::handler::test_util::TestClusterPort::new());
+        let shutdown = Shutdown::new();
+        let config = RexSystemConfig::from_id("test");
+        Services::new(registry.to_arc(), acks, offline, cluster, shutdown, config)
+    }
+
+    #[tokio::test]
+    async fn check_returns_ok() {
+        let services = make_services();
+        let source = dummy_client_with_id(0xABu128);
+        let mut rex_data = RexData::new(RexCommand::Check, "", b"");
+        rex_data.set_source(0xABu128);
+        assert!(handle(&services, &source, &mut rex_data).await.is_ok());
+    }
+}

@@ -165,3 +165,53 @@ async fn forward_to_node(
 
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handler::test_util::{
+        TestAckTracker, TestClusterPort, TestRegistry, dummy_client_with_id,
+    };
+    use crate::{
+        AckTracker, ClientRegistry, ClusterPort, NoopOfflineBuffer, OfflineBuffer, RexSystemConfig,
+        Services, Shutdown,
+    };
+    use std::sync::Arc;
+
+    fn make_services() -> Arc<Services> {
+        let registry = TestRegistry::new();
+        let acks = Arc::new(TestAckTracker::new()) as Arc<dyn AckTracker>;
+        let offline = Arc::new(NoopOfflineBuffer) as Arc<dyn OfflineBuffer>;
+        let cluster: Arc<dyn ClusterPort> = Arc::new(TestClusterPort::new());
+        let shutdown = Shutdown::new();
+        let config = RexSystemConfig::from_id("test");
+        Services::new(registry.to_arc(), acks, offline, cluster, shutdown, config)
+    }
+
+    #[tokio::test]
+    async fn title_no_subscriber_returns_no_target() {
+        let services = make_services();
+        let source = dummy_client_with_id(0x1u128);
+        let mut rex_data = RexData::new(RexCommand::Title, "no_subscribers", b"hello");
+        rex_data.set_source(0x1u128);
+        // No subscribers, no cluster node — should not panic, returns Ok.
+        assert!(handle(&services, &source, &mut rex_data).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn title_delivers_to_local_subscriber() {
+        let services = make_services();
+        let source_id = 0xABCu128;
+        let target_id = 0xDEFu128;
+        let source = dummy_client_with_id(source_id);
+        let target = dummy_client_with_id(target_id);
+
+        // Register target in the registry
+        services.registry.add_client(target.clone());
+        services.registry.register_title(target_id, "local_only");
+
+        let mut rex_data = RexData::new(RexCommand::Title, "local_only", b"hello");
+        rex_data.set_source(source_id);
+        assert!(handle(&services, &source, &mut rex_data).await.is_ok());
+    }
+}

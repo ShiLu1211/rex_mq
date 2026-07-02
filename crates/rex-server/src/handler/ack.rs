@@ -63,3 +63,72 @@ pub async fn handle(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handler::test_util::{TestAckTracker, TestRegistry, dummy_client_with_id};
+    use crate::{
+        AckTracker, ClientRegistry, ClusterPort, NoopOfflineBuffer, OfflineBuffer, RexSystemConfig,
+        Services, Shutdown,
+    };
+    use std::sync::Arc;
+
+    fn make_services(ack_enabled: bool) -> Arc<Services> {
+        let registry = TestRegistry::new();
+        let acks = Arc::new(TestAckTracker::new()) as Arc<dyn AckTracker>;
+        let offline = Arc::new(NoopOfflineBuffer) as Arc<dyn OfflineBuffer>;
+        let cluster: Arc<dyn ClusterPort> =
+            Arc::new(crate::handler::test_util::TestClusterPort::new());
+        let shutdown = Shutdown::new();
+        let mut config = RexSystemConfig::from_id("test");
+        config.ack_enabled = ack_enabled;
+        Services::new(registry.to_arc(), acks, offline, cluster, shutdown, config)
+    }
+
+    #[tokio::test]
+    async fn ack_ignores_when_disabled() {
+        let services = make_services(false);
+        let source = dummy_client_with_id(1);
+
+        let ack_data = rex_core::AckData::new(42);
+        let mut rex_data = ack_data.to_rex_data(100, RexCommand::Ack);
+        assert!(handle(&services, &source, &mut rex_data).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn ack_unknown_message_is_silent() {
+        let services = make_services(true);
+        let source = dummy_client_with_id(1);
+
+        // Register an ACK we can satisfy, then query for a different one.
+        services.acks.register(7, 200, "news".to_string(), false);
+
+        let ack_data = rex_core::AckData::new(42); // not 7
+        let mut rex_data = ack_data.to_rex_data(100, RexCommand::Ack);
+        assert!(handle(&services, &source, &mut rex_data).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn ack_forward_to_sender() {
+        let services = make_services(true);
+        let source = dummy_client_with_id(1);
+        let sender_id = 0xDECAFu128;
+
+        // Pre-register the sender in the registry so find_some_by_id works.
+        let sender_client = dummy_client_with_id(sender_id);
+        services.registry.add_client(sender_client);
+
+        // Register a pending ACK from sender_id for msg 4.
+        services
+            .acks
+            .register(4, sender_id, "news".to_string(), false);
+
+        let ack_data = rex_core::AckData::new(4);
+        let mut rex_data = ack_data.to_rex_data(100, RexCommand::Ack);
+        assert!(handle(&services, &source, &mut rex_data).await.is_ok());
+
+        // Pending ACK should be consumed by take.
+        assert!(services.acks.take(4).is_none(), "pending ACK consumed");
+    }
+}
