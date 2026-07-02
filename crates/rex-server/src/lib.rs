@@ -13,8 +13,8 @@ pub use crate::transport::{QuicServer, TcpServer, WebSocketServer};
 pub use aggregate::*;
 pub use server::RexServerTrait;
 pub use system::{
-    AckTracker, AckTrackerImpl, ClientRegistry, ClientRegistryImpl, Janitor, PendingAckInfo,
-    RexSystem, RexSystemConfig, Shutdown,
+    AckTracker, AckTrackerImpl, ClientRegistry, ClientRegistryImpl, ClusterPort, Janitor,
+    PendingAckInfo, RexSystem, RexSystemConfig, Shutdown,
 };
 
 use std::sync::Arc;

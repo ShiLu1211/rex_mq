@@ -12,6 +12,7 @@ use rex_cluster::types::{ClusterConfig as RexClusterConfig, ClusterMessage, Node
 use rex_core::RexData;
 use tokio::sync::mpsc;
 
+use crate::ClusterPort;
 use crate::RexSystem;
 
 /// Server-side cluster manager - handles cluster communication
@@ -567,5 +568,123 @@ impl ServerClusterManager {
         // For now, we just broadcast - the original node will recognize the forward_id
         // A more optimized approach would be to track pending forwards
         self.broadcast(msg).await;
+    }
+}
+
+/* ---------------- ClusterPort impl (commit 6) ---------------- */
+
+#[async_trait::async_trait]
+impl ClusterPort for ServerClusterManager {
+    fn register_client(&self, client_id: u128) {
+        // Delegate to the inherent method.
+        ServerClusterManager::register_client(self, client_id);
+    }
+
+    fn unregister_client(&self, client_id: u128) {
+        ServerClusterManager::unregister_client(self, &client_id);
+    }
+
+    fn find_node_for_title(&self, title: &str) -> Option<String> {
+        ServerClusterManager::get_node_for_title(self, title)
+    }
+
+    fn get_local_node_id(&self) -> Option<String> {
+        Some(self.local_node_id.to_string())
+    }
+
+    fn get_nodes(&self) -> Vec<String> {
+        ServerClusterManager::get_nodes(self)
+    }
+
+    async fn forward_message(&self, target_node: &str, request: crate::ForwardRequest) -> bool {
+        ServerClusterManager::forward_message(self, target_node, request).await
+    }
+}
+
+/* ---------------- ClusterPort tests (commit 6) ---------------- */
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ClusterPort;
+    use crate::ForwardRequest;
+    use crate::ForwardType;
+
+    fn make_manager() -> Arc<ServerClusterManager> {
+        let m = ServerClusterManager::new("test-node".to_string(), true);
+        // `with_local_node` only sets the local_node_id field; the route
+        // table's hash ring is empty until `start()` runs (which calls
+        // `route_table.add_node`). For unit tests, seed the ring directly.
+        m.route_table()
+            .add_node("test-node".to_string(), "127.0.0.1:0".to_string());
+        m
+    }
+
+    #[test]
+    fn cluster_port_get_local_node_id_returns_local() {
+        let m = make_manager();
+        let id = m.get_local_node_id();
+        assert_eq!(id.as_deref(), Some("test-node"));
+    }
+
+    #[test]
+    fn cluster_port_get_nodes_includes_local_at_construction() {
+        let m = make_manager();
+        let nodes = m.get_nodes();
+        assert!(nodes.iter().any(|n| n == "test-node"));
+    }
+
+    #[test]
+    fn cluster_port_register_and_unregister_client() {
+        let m = make_manager();
+        m.register_client(0xABCD);
+        m.unregister_client(&0xABCD);
+        // is_client_local goes through the route table; after unregister
+        // the client should not be present.
+        assert!(!m.is_client_local(&0xABCD));
+    }
+
+    #[test]
+    fn cluster_port_inherent_methods_still_callable() {
+        // Inherent methods are kept so existing callers don't need to
+        // bring the ClusterPort trait into scope.
+        let m = make_manager();
+        m.register_client(0xCAFE);
+        // Inherent unregister_client takes &u128.
+        ServerClusterManager::unregister_client(&m, &0xCAFE);
+        assert!(!m.is_client_local(&0xCAFE));
+    }
+
+    #[test]
+    fn cluster_port_find_node_for_title_returns_some_node() {
+        let m = make_manager();
+        // With only the local node in the ring, every title hashes to it.
+        let node = m.find_node_for_title("news");
+        assert_eq!(node.as_deref(), Some("test-node"));
+    }
+
+    #[test]
+    fn cluster_port_add_node_then_list() {
+        let m = make_manager();
+        m.route_table()
+            .add_node("peer-1".to_string(), "127.0.0.1:9999".to_string());
+        let nodes = m.get_nodes();
+        assert!(nodes.iter().any(|n| n == "peer-1"));
+    }
+
+    #[tokio::test]
+    async fn cluster_port_forward_message_to_unknown_node_returns_false() {
+        // The manager's node_manager is None here (never started), so
+        // forward_message cannot reach the wire and must return false.
+        let m = make_manager();
+        let req = ForwardRequest {
+            source_client_id: 1,
+            target_client_id: 2,
+            title: "news".to_string(),
+            payload: vec![0u8; 8],
+            msg_type: ForwardType::Unicast,
+        };
+        let accepted = m.forward_message("peer-1", req).await;
+        assert!(!accepted, "forward to unknown node must return false");
     }
 }
