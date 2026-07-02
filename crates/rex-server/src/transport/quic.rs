@@ -9,7 +9,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::io::AsyncReadExt;
 use tracing::{debug, info, warn};
 
-use super::base::ServerBase;
+use super::base::{ServerBase, parse_and_handle_buffer};
 use crate::{RexServerConfig, RexServerTrait, Services};
 
 pub struct QuicServer {
@@ -180,7 +180,9 @@ impl QuicServer {
                     break;
                 }
                 Ok(_) => {
-                    if let Err(e) = self.base.parse_and_handle_buffer(&peer, &mut buffer).await {
+                    if let Err(e) =
+                        parse_and_handle_buffer(&self.base.services, &peer, &mut buffer).await
+                    {
                         warn!("Error processing buffer for {}: {}", peer_addr, e);
                     }
                 }

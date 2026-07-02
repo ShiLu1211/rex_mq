@@ -1,16 +1,13 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
-use bytes::BytesMut;
 use rex_core::{RexClientInner, utils::new_uuid};
 use rex_sender::TcpSender;
-use tokio::{
-    io::AsyncReadExt,
-    net::{TcpListener, TcpStream, tcp::OwnedReadHalf},
-};
-use tracing::{debug, info, warn};
+use tokio::net::{TcpListener, TcpStream, tcp::OwnedReadHalf};
+use tracing::{info, warn};
 
 use super::base::ServerBase;
+use super::driver::{ConnectionDriver, TcpByteSource};
 use crate::{RexServerConfig, RexServerTrait, Services};
 
 pub struct TcpServer {
@@ -111,37 +108,16 @@ impl TcpServer {
         let peer_addr = peer.local_addr();
         info!("Handling TCP connection: {}", peer_addr);
 
-        let mut buffer = BytesMut::with_capacity(self.base.config.max_buffer_size);
-        let mut shutdown_rx = self.base.services.shutdown.subscribe();
-
-        loop {
-            tokio::select! {
-                // 从 TCP 流中读取数据
-                result = reader.read_buf(&mut buffer) => {
-                    match result {
-                        Ok(0) => {
-                            info!("TCP connection {} closed by client", peer_addr);
-                            break;
-                        }
-                        Ok(_) => {
-                            debug!("TCP connection {} received {} bytes", peer_addr, buffer.len());
-                            if let Err(e) = self.base.parse_and_handle_buffer(&peer, &mut buffer).await {
-                                warn!("Error processing buffer for {}: {}", peer_addr, e);
-                            }
-                        }
-                        Err(e) => {
-                            info!("TCP connection {} read error: {}", peer_addr, e);
-                            break;
-                        }
-                    }
-                }
-                // 监听关闭信号
-                _ = shutdown_rx.recv() => {
-                    info!("TCP connection {} shutting down due to server shutdown", peer_addr);
-                    break;
-                }
-            }
-        }
+        let driver = ConnectionDriver::new(
+            &self.base.services,
+            &peer,
+            "TCP",
+            self.base.config.max_buffer_size,
+        );
+        let source = TcpByteSource {
+            reader: &mut reader,
+        };
+        driver.drive(source).await;
 
         info!("Finished handling TCP connection: {}", peer_addr);
     }

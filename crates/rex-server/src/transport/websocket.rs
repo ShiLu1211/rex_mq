@@ -1,15 +1,15 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
-use bytes::BytesMut;
 use futures_util::StreamExt;
 use rex_core::{RexClientInner, utils::new_uuid};
 use rex_sender::WebSocketSender;
 use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::{accept_async, tungstenite::Message};
-use tracing::{debug, info, warn};
+use tokio_tungstenite::accept_async;
+use tracing::{info, warn};
 
 use super::base::ServerBase;
+use super::driver::{ConnectionDriver, WebSocketByteSource};
 use crate::{RexServerConfig, RexServerTrait, Services};
 
 pub struct WebSocketServer {
@@ -119,55 +119,17 @@ impl WebSocketServer {
         let peer_addr = peer.local_addr();
         info!("Handling WebSocket connection: {}", peer_addr);
 
-        let mut buffer = BytesMut::with_capacity(self.base.config.max_buffer_size);
-        let mut shutdown_rx = self.base.services.shutdown.subscribe();
-
-        loop {
-            tokio::select! {
-                // 从 WebSocket 流中读取数据
-                result = stream.next() => {
-                    match result {
-                        Some(Ok(Message::Binary(data))) => {
-                            // 将读取的数据添加到缓冲区
-                            buffer.extend_from_slice(&data);
-
-                            // 使用 ServerBase 的通用解析和处理逻辑
-                            if let Err(e) = self.base.parse_and_handle_buffer(&peer, &mut buffer).await {
-                                warn!("Error processing buffer for {}: {}", peer_addr, e);
-                            }
-                        }
-                        Some(Ok(Message::Close(_))) => {
-                            info!("WebSocket connection {} closed by client", peer_addr);
-                            break;
-                        }
-                        Some(Ok(Message::Ping(data))) => {
-                            // 自动响应 Pong
-                            debug!("Received ping from {}, sending pong", peer_addr);
-                            if let Err(e) = peer.send_buf(&Message::Pong(data).into_data()).await {
-                                warn!("Failed to send pong to {}: {}", peer_addr, e);
-                            }
-                        }
-                        Some(Ok(_)) => {
-                            // 忽略其他类型的消息(Text, Pong等)
-                            debug!("Received non-binary message from {}", peer_addr);
-                        }
-                        Some(Err(e)) => {
-                            info!("WebSocket connection {} error: {}", peer_addr, e);
-                            break;
-                        }
-                        None => {
-                            info!("WebSocket connection {} stream ended", peer_addr);
-                            break;
-                        }
-                    }
-                }
-                // 监听关闭信号
-                _ = shutdown_rx.recv() => {
-                    info!("WebSocket connection {} shutting down due to server shutdown", peer_addr);
-                    break;
-                }
-            }
-        }
+        let driver = ConnectionDriver::new(
+            &self.base.services,
+            &peer,
+            "WebSocket",
+            self.base.config.max_buffer_size,
+        );
+        let source = WebSocketByteSource {
+            stream,
+            peer: &peer,
+        };
+        driver.drive(source).await;
 
         info!("Finished handling WebSocket connection: {}", peer_addr);
     }
