@@ -4,6 +4,7 @@ mod ack;
 mod client_registry;
 mod cluster_port;
 mod config;
+mod forwarder;
 mod janitor;
 mod offline;
 mod router;
@@ -14,6 +15,10 @@ pub use ack::{AckTracker, AckTrackerImpl, PendingAckInfo};
 pub use client_registry::{ClientRegistry, ClientRegistryImpl};
 pub use cluster_port::ClusterPort;
 pub use config::RexSystemConfig;
+// Forwarder lives in the system bag so commit 2 can wire it into
+// Services; nothing imports it yet, so allow the unused imports.
+#[allow(unused_imports)]
+pub use forwarder::{DeliveryOutcome, Forwarder, FwdResult, NetworkForwarder};
 pub use janitor::Janitor;
 pub use offline::{NoopOfflineBuffer, OfflineBuffer, SledOfflineBuffer};
 pub use router::{ClusterRouter, RoutePlan, Router};
