@@ -5,7 +5,10 @@ mod tests {
     use anyhow::Result;
     use rex_core::{Protocol, RetCode, RexCommand};
     use rex_test::factory::TestEnv;
-    use tokio::time::sleep;
+
+    /// Default per-recv timeout for message arrivals.
+    const RECV_TIMEOUT: Duration = Duration::from_secs(2);
+    const LOGIN_TIMEOUT: Duration = Duration::from_secs(2);
 
     /// Test ACK functionality with Title (unicast) message - TCP only
     #[tokio::test]
@@ -17,17 +20,25 @@ mod tests {
         let mut ss = TestEnv::new_with_ack().await;
 
         let server = ss.start_server(protocol).await?;
+        server.ready().await;
 
         // Create sender first
         let mut sender = ss.create_client_with_ack(protocol, "sender").await?;
-        sender.wait_connected().await;
+        assert!(
+            sender.wait_connected_with_timeout(RECV_TIMEOUT).await,
+            "sender should connect"
+        );
 
         // Create receiver and wait for it to connect
         let mut receiver = ss.create_client_with_ack(protocol, "test-title").await?;
-        receiver.wait_connected().await;
-
-        // Small delay to ensure both clients are fully registered
-        sleep(Duration::from_millis(200)).await;
+        assert!(
+            receiver.wait_connected_with_timeout(RECV_TIMEOUT).await,
+            "receiver should connect"
+        );
+        assert!(
+            receiver.wait_logged_in(LOGIN_TIMEOUT).await,
+            "receiver should log in"
+        );
 
         // Send a message with ACK
         let test_data = b"Hello, ACK test!";
@@ -36,11 +47,19 @@ mod tests {
             .await?;
 
         // Receiver should receive the message
-        let recv_data = receiver.recv().await.expect("Should receive message");
+        let recv_data = receiver
+            .recv_timeout(RECV_TIMEOUT)
+            .await
+            .expect("receiver channel should not close")
+            .expect("receiver should receive message within timeout");
         assert_eq!(test_data, recv_data.data());
 
         // Sender should receive ACK return
-        let ack_data = sender.recv().await.expect("Should receive ACK");
+        let ack_data = sender
+            .recv_timeout(RECV_TIMEOUT)
+            .await
+            .expect("sender channel should not close")
+            .expect("sender should receive ACK within timeout");
         assert_eq!(RexCommand::AckReturn, ack_data.command());
         assert_eq!(RetCode::Success, ack_data.retcode());
 
@@ -48,7 +67,6 @@ mod tests {
         receiver.close().await;
         server.close().await;
         ss.shutdown().await;
-        sleep(Duration::from_secs(1)).await;
         Ok(())
     }
 
@@ -62,19 +80,30 @@ mod tests {
         let mut ss = TestEnv::new_with_ack().await;
 
         let server = ss.start_server(protocol).await?;
+        server.ready().await;
 
         // Create sender first
         let mut sender = ss.create_client_with_ack(protocol, "sender").await?;
-        sender.wait_connected().await;
+        assert!(
+            sender.wait_connected_with_timeout(RECV_TIMEOUT).await,
+            "sender should connect"
+        );
 
         // Create receivers
         let mut receiver1 = ss.create_client_with_ack(protocol, "group-test").await?;
         let receiver2 = ss.create_client_with_ack(protocol, "group-test").await?;
-        receiver1.wait_connected().await;
-        receiver2.wait_connected().await;
-
-        // Small delay to ensure all clients are fully registered
-        sleep(Duration::from_millis(200)).await;
+        assert!(
+            receiver1.wait_connected_with_timeout(RECV_TIMEOUT).await,
+            "receiver1 should connect"
+        );
+        assert!(
+            receiver2.wait_connected_with_timeout(RECV_TIMEOUT).await,
+            "receiver2 should connect"
+        );
+        assert!(
+            receiver2.wait_logged_in(LOGIN_TIMEOUT).await,
+            "receiver2 should log in"
+        );
 
         // Send a group message
         let test_data = b"Group message with ACK";
@@ -83,11 +112,19 @@ mod tests {
             .await?;
 
         // One receiver should get the message
-        let recv_data = receiver1.recv().await.expect("Should receive message");
+        let recv_data = receiver1
+            .recv_timeout(RECV_TIMEOUT)
+            .await
+            .expect("receiver1 channel should not close")
+            .expect("receiver1 should receive message within timeout");
         assert_eq!(test_data, recv_data.data());
 
         // Sender should receive ACK
-        let ack_data = sender.recv().await.expect("Should receive ACK");
+        let ack_data = sender
+            .recv_timeout(RECV_TIMEOUT)
+            .await
+            .expect("sender channel should not close")
+            .expect("sender should receive ACK within timeout");
         assert_eq!(RexCommand::AckReturn, ack_data.command());
         assert_eq!(RetCode::Success, ack_data.retcode());
 
@@ -96,7 +133,6 @@ mod tests {
         receiver2.close().await;
         server.close().await;
         ss.shutdown().await;
-        sleep(Duration::from_secs(1)).await;
         Ok(())
     }
 
@@ -110,19 +146,34 @@ mod tests {
         let mut ss = TestEnv::new_with_ack().await;
 
         let server = ss.start_server(protocol).await?;
+        server.ready().await;
 
         // Create sender first
         let mut sender = ss.create_client_with_ack(protocol, "sender").await?;
-        sender.wait_connected().await;
+        assert!(
+            sender.wait_connected_with_timeout(RECV_TIMEOUT).await,
+            "sender should connect"
+        );
 
         // Create receivers
         let mut receiver1 = ss.create_client_with_ack(protocol, "broadcast").await?;
         let mut receiver2 = ss.create_client_with_ack(protocol, "broadcast").await?;
-        receiver1.wait_connected().await;
-        receiver2.wait_connected().await;
-
-        // Small delay to ensure all clients are fully registered
-        sleep(Duration::from_millis(200)).await;
+        assert!(
+            receiver1.wait_connected_with_timeout(RECV_TIMEOUT).await,
+            "receiver1 should connect"
+        );
+        assert!(
+            receiver2.wait_connected_with_timeout(RECV_TIMEOUT).await,
+            "receiver2 should connect"
+        );
+        assert!(
+            receiver1.wait_logged_in(LOGIN_TIMEOUT).await,
+            "receiver1 should log in"
+        );
+        assert!(
+            receiver2.wait_logged_in(LOGIN_TIMEOUT).await,
+            "receiver2 should log in"
+        );
 
         // Send a broadcast message
         let test_data = b"Broadcast message with ACK";
@@ -131,14 +182,26 @@ mod tests {
             .await?;
 
         // Both receivers should get the message
-        let recv1 = receiver1.recv().await.expect("Receiver 1 should receive");
+        let recv1 = receiver1
+            .recv_timeout(RECV_TIMEOUT)
+            .await
+            .expect("receiver1 channel should not close")
+            .expect("receiver1 should receive within timeout");
         assert_eq!(test_data, recv1.data());
 
-        let recv2 = receiver2.recv().await.expect("Receiver 2 should receive");
+        let recv2 = receiver2
+            .recv_timeout(RECV_TIMEOUT)
+            .await
+            .expect("receiver2 channel should not close")
+            .expect("receiver2 should receive within timeout");
         assert_eq!(test_data, recv2.data());
 
         // Sender should receive ACK (one for each receiver that got the message)
-        let ack_data = sender.recv().await.expect("Should receive ACK");
+        let ack_data = sender
+            .recv_timeout(RECV_TIMEOUT)
+            .await
+            .expect("sender channel should not close")
+            .expect("sender should receive ACK within timeout");
         assert_eq!(RexCommand::AckReturn, ack_data.command());
         assert_eq!(RetCode::Success, ack_data.retcode());
 
@@ -147,7 +210,6 @@ mod tests {
         receiver2.close().await;
         server.close().await;
         ss.shutdown().await;
-        sleep(Duration::from_secs(1)).await;
         Ok(())
     }
 
@@ -161,15 +223,23 @@ mod tests {
         let mut ss = TestEnv::new().await;
 
         let server = ss.start_server(protocol).await?;
+        server.ready().await;
 
         let sender = ss.create_client(protocol, "sender").await?;
-        sender.wait_connected().await;
+        assert!(
+            sender.wait_connected_with_timeout(RECV_TIMEOUT).await,
+            "sender should connect"
+        );
 
         let mut receiver = ss.create_client(protocol, "test-title").await?;
-        receiver.wait_connected().await;
-
-        // Small delay to ensure both clients are fully registered
-        sleep(Duration::from_millis(200)).await;
+        assert!(
+            receiver.wait_connected_with_timeout(RECV_TIMEOUT).await,
+            "receiver should connect"
+        );
+        assert!(
+            receiver.wait_logged_in(LOGIN_TIMEOUT).await,
+            "receiver should log in"
+        );
 
         // Send a message without ACK
         let test_data = b"No ACK expected";
@@ -178,14 +248,17 @@ mod tests {
             .await?;
 
         // Receiver should get the message
-        let recv_data = receiver.recv().await.expect("Should receive message");
+        let recv_data = receiver
+            .recv_timeout(RECV_TIMEOUT)
+            .await
+            .expect("receiver channel should not close")
+            .expect("receiver should receive within timeout");
         assert_eq!(test_data, recv_data.data());
 
         sender.close().await;
         receiver.close().await;
         server.close().await;
         ss.shutdown().await;
-        sleep(Duration::from_secs(1)).await;
         Ok(())
     }
 
@@ -199,14 +272,17 @@ mod tests {
         let mut ss = TestEnv::new_with_ack().await;
 
         let server = ss.start_server(protocol).await?;
+        server.ready().await;
 
         // Create sender first
         let mut sender = ss.create_client_with_ack(protocol, "sender").await?;
-        sender.wait_connected().await;
+        assert!(
+            sender.wait_connected_with_timeout(RECV_TIMEOUT).await,
+            "sender should connect"
+        );
 
         // Create a receiver with a different title
         let _receiver = ss.create_client_with_ack(protocol, "other-title").await?;
-        sleep(Duration::from_millis(200)).await;
 
         // Send a message to a title no one is listening to
         // This should result in NoTarget, not ACK
@@ -215,14 +291,17 @@ mod tests {
             .await?;
 
         // Should receive NoTarget error, not ACK
-        let response = sender.recv().await.expect("Should receive response");
+        let response = sender
+            .recv_timeout(RECV_TIMEOUT)
+            .await
+            .expect("sender channel should not close")
+            .expect("sender should receive response within timeout");
         assert_eq!(RexCommand::TitleReturn, response.command());
         assert_eq!(RetCode::NoTarget, response.retcode());
 
         sender.close().await;
         server.close().await;
         ss.shutdown().await;
-        sleep(Duration::from_secs(1)).await;
         Ok(())
     }
 
@@ -236,15 +315,23 @@ mod tests {
         let mut ss = TestEnv::new_with_ack().await;
 
         let server = ss.start_server(protocol).await?;
+        server.ready().await;
 
         let sender = ss.create_client_with_ack(protocol, "sender").await?;
-        sender.wait_connected().await;
+        assert!(
+            sender.wait_connected_with_timeout(RECV_TIMEOUT).await,
+            "sender should connect"
+        );
 
         let mut receiver = ss.create_client_with_ack(protocol, "test-title").await?;
-        receiver.wait_connected().await;
-
-        // Small delay to ensure both clients are fully registered
-        sleep(Duration::from_millis(200)).await;
+        assert!(
+            receiver.wait_connected_with_timeout(RECV_TIMEOUT).await,
+            "receiver should connect"
+        );
+        assert!(
+            receiver.wait_logged_in(LOGIN_TIMEOUT).await,
+            "receiver should log in"
+        );
 
         // Send a message
         sender
@@ -252,7 +339,11 @@ mod tests {
             .await?;
 
         // Receiver should get message with non-zero message_id
-        let recv_data = receiver.recv().await.expect("Should receive");
+        let recv_data = receiver
+            .recv_timeout(RECV_TIMEOUT)
+            .await
+            .expect("receiver channel should not close")
+            .expect("receiver should receive within timeout");
         let msg_id = recv_data.message_id();
         assert!(
             msg_id != 0,
@@ -263,7 +354,6 @@ mod tests {
         receiver.close().await;
         server.close().await;
         ss.shutdown().await;
-        sleep(Duration::from_secs(1)).await;
         Ok(())
     }
 }

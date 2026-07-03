@@ -25,6 +25,10 @@ impl RexServerTrait for TcpServer {
     fn addr(&self) -> SocketAddr {
         self.base.config.bind_addr
     }
+
+    async fn ready(&self) {
+        self.base.wait_ready().await;
+    }
 }
 
 impl TcpServer {
@@ -47,6 +51,7 @@ impl TcpServer {
             let server = server.clone();
             async move {
                 info!("Accepting TCP connections on {}", addr);
+                server.base.mark_ready();
                 loop {
                     tokio::select! {
                         Ok((stream, peer_addr)) = server.listener.accept() => {

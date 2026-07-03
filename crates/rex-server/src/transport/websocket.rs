@@ -27,6 +27,10 @@ impl RexServerTrait for WebSocketServer {
     fn addr(&self) -> SocketAddr {
         self.base.config.bind_addr
     }
+
+    async fn ready(&self) {
+        self.base.wait_ready().await;
+    }
 }
 
 impl WebSocketServer {
@@ -49,6 +53,7 @@ impl WebSocketServer {
             let server = server.clone();
             async move {
                 info!("Accepting WebSocket connections on {}", addr);
+                server.base.mark_ready();
                 loop {
                     tokio::select! {
                         Ok((stream, peer_addr)) = server.listener.accept() => {

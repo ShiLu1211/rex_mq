@@ -7,8 +7,9 @@
 //!
 //! `ClusterRouter` is the production implementation — it checks the local
 //! registry first (`ClientRegistry::find_one_by_title`), then falls back to
-//! the cluster route table (`ClusterPort::find_node_for_title`). `forward`
-//! delegates to `ClusterPort::forward_message`.
+//! the cluster route table (`ClusterPort::find_node_for_title`).
+//! Forwarding and node-access queries stay on `ClusterPort` where they belong,
+//! keeping the Router interface narrow (1 method).
 //!
 //! Two adapters justify the seam:
 //! - `ClusterRouter` (prod, DashMap + hash-ring)
@@ -16,10 +17,8 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use rex_core::RexClientInner;
 
-use crate::ForwardRequest;
 use crate::system::client_registry::ClientRegistry;
 use crate::system::cluster_port::ClusterPort;
 
@@ -33,23 +32,16 @@ pub enum RoutePlan {
     None,
 }
 
-/// Answers routing questions. `forward` is async because it crosses the
-/// wire to a peer node; `route` and the accessors are sync.
-#[async_trait]
+/// Answers a single question: where does this title route to?
+///
+/// The trait was narrowed from 4 methods (C6 candidate #6) — `forward`,
+/// `local_node_id`, and `known_nodes` were pass-through wrappers that
+/// delegated to `ClusterPort` without adding behaviour. Callers that
+/// need forwarding or node-info now access `services.cluster` directly.
 pub trait Router: Send + Sync {
     /// Resolve a title to a delivery plan. `exclude` is the sender's client
     /// id (so we don't route back to ourselves).
     fn route(&self, title: &str, exclude: Option<u128>) -> RoutePlan;
-
-    /// Forward a message to a peer node. Returns true on accepted-by-channel.
-    async fn forward(&self, target_node: &str, request: ForwardRequest) -> bool;
-
-    /// The local node's id, if the cluster is active.
-    fn local_node_id(&self) -> Option<String>;
-
-    /// All known peer nodes (including the local node). Useful for
-    /// broadcast-fallback when the primary route fails.
-    fn known_nodes(&self) -> Vec<String>;
 }
 
 /// Production implementation: local registry + cluster route table.
@@ -62,9 +54,15 @@ impl ClusterRouter {
     pub fn new(registry: Arc<dyn ClientRegistry>, cluster: Arc<dyn ClusterPort>) -> Arc<Self> {
         Arc::new(Self { registry, cluster })
     }
+
+    /// Expose the cluster port for callers that need `forward_message`,
+    /// `get_local_node_id`, or `get_nodes` — these used to live on the
+    /// `Router` trait but were pure delegation.
+    pub fn cluster(&self) -> &Arc<dyn ClusterPort> {
+        &self.cluster
+    }
 }
 
-#[async_trait]
 impl Router for ClusterRouter {
     fn route(&self, title: &str, exclude: Option<u128>) -> RoutePlan {
         // Local subscriber has priority.
@@ -76,18 +74,6 @@ impl Router for ClusterRouter {
             return RoutePlan::Remote(node);
         }
         RoutePlan::None
-    }
-
-    async fn forward(&self, target_node: &str, request: ForwardRequest) -> bool {
-        self.cluster.forward_message(target_node, request).await
-    }
-
-    fn local_node_id(&self) -> Option<String> {
-        self.cluster.get_local_node_id()
-    }
-
-    fn known_nodes(&self) -> Vec<String> {
-        self.cluster.get_nodes()
     }
 }
 

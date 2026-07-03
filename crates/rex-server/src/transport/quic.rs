@@ -36,6 +36,10 @@ impl RexServerTrait for QuicServer {
     fn addr(&self) -> SocketAddr {
         self.base.config.bind_addr
     }
+
+    async fn ready(&self) {
+        self.base.wait_ready().await;
+    }
 }
 
 impl QuicServer {
@@ -63,6 +67,7 @@ impl QuicServer {
             let server = server.clone();
             async move {
                 info!("Accepting QUIC connections on {}", addr);
+                server.base.mark_ready();
                 loop {
                     tokio::select! {
                         Some(incoming) = server.endpoint.accept() => {

@@ -14,22 +14,54 @@ use rex_server::{
     ClusterConfig, RexServerConfig, RexServerTrait, RexSystemConfig, Services, Shutdown,
     build_services, open_server,
 };
-use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::{
+    Notify,
+    mpsc::{Receiver, Sender, channel},
+};
 use tracing::{info, warn};
 
 /// ------------------------- Client -------------------------
 pub struct TestClient {
     client: Arc<dyn RexClientTrait>,
     rx: Receiver<RexData>,
+    /// Signalled when the server's `LoginReturn` is received — i.e. the
+    /// title has been registered server-side. `wait_logged_in` waits on
+    /// this; tests should call it before publishing to ensure the receiver
+    /// route exists.
+    logged_in: Arc<Notify>,
 }
 
 impl TestClient {
-    pub fn new(client: Arc<dyn RexClientTrait>, rx: Receiver<RexData>) -> Self {
-        Self { client, rx }
+    pub fn new(
+        client: Arc<dyn RexClientTrait>,
+        rx: Receiver<RexData>,
+        logged_in: Arc<Notify>,
+    ) -> Self {
+        Self {
+            client,
+            rx,
+            logged_in,
+        }
     }
 
+    /// Unbounded receive — a missed message will hang the caller forever.
+    /// Prefer `recv_timeout(d)` from test code.
     pub async fn recv(&mut self) -> Option<RexData> {
         self.rx.recv().await
+    }
+
+    /// Bounded receive. Returns `Ok(None)` on timeout, `Ok(Some(data))` on
+    /// success, `Err(reason)` on channel closure. Use this instead of bare
+    /// `.recv().await` so test failures surface immediately.
+    pub async fn recv_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<Option<RexData>, String> {
+        match tokio::time::timeout(timeout, self.rx.recv()).await {
+            Ok(Some(data)) => Ok(Some(data)),
+            Ok(None) => Err("client rx channel closed".to_string()),
+            Err(_) => Ok(None),
+        }
     }
 
     pub async fn send(&self, cmd: RexCommand, title: &str, data: &[u8]) -> Result<()> {
@@ -37,9 +69,35 @@ impl TestClient {
         self.client.send_data(&mut d).await
     }
 
+    /// Unbounded wait — a connection that never opens will hang forever.
+    /// Prefer `wait_connected_with_timeout(d)`.
     pub async fn wait_connected(&self) {
         while self.client.get_connection_state() != ConnectionState::Connected {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Bounded wait for TCP-connected state. Returns true on success.
+    pub async fn wait_connected_with_timeout(&self, timeout: std::time::Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if self.client.get_connection_state() == ConnectionState::Connected {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Wait for the server's `LoginReturn` (title registered server-side).
+    /// `wait_connected_with_timeout` only checks TCP state; this waits for
+    /// the actual login completion that makes the title routable.
+    pub async fn wait_logged_in(&self, timeout: std::time::Duration) -> bool {
+        match tokio::time::timeout(timeout, self.logged_in.notified()).await {
+            Ok(()) => true,
+            Err(_) => false,
         }
     }
 
@@ -55,6 +113,7 @@ impl TestClient {
 /// ------------------------- Handler -------------------------
 struct TestClientHandler {
     tx: Sender<RexData>,
+    logged_in: Arc<Notify>,
 }
 
 #[async_trait::async_trait]
@@ -65,6 +124,7 @@ impl RexClientHandlerTrait for TestClientHandler {
             client.id(),
             client.title_str()
         );
+        self.logged_in.notify_waiters();
         Ok(())
     }
 
@@ -223,10 +283,14 @@ impl TestEnv {
             .copied()
             .unwrap_or_else(|| self.next_addr(proto));
         let (tx, rx) = channel(100);
-        let handler = Arc::new(TestClientHandler { tx });
+        let logged_in = Arc::new(Notify::new());
+        let handler = Arc::new(TestClientHandler {
+            tx,
+            logged_in: logged_in.clone(),
+        });
         let cfg = RexClientConfig::new(proto, server_addr, title, handler);
         let client = open_client(cfg).await?;
-        Ok(TestClient::new(client, rx))
+        Ok(TestClient::new(client, rx, logged_in))
     }
 
     /// 创建连接到指定服务器地址的 client
@@ -236,10 +300,14 @@ impl TestEnv {
         title: &str,
     ) -> Result<TestClient> {
         let (tx, rx) = channel(100);
-        let handler = Arc::new(TestClientHandler { tx });
+        let logged_in = Arc::new(Notify::new());
+        let handler = Arc::new(TestClientHandler {
+            tx,
+            logged_in: logged_in.clone(),
+        });
         let cfg = RexClientConfig::new(Protocol::Tcp, server_addr, title, handler);
         let client = open_client(cfg).await?;
-        Ok(TestClient::new(client, rx))
+        Ok(TestClient::new(client, rx, logged_in))
     }
 
     /// 为指定协议创建支持 ACK 的 client
@@ -255,13 +323,17 @@ impl TestEnv {
             .copied()
             .unwrap_or_else(|| self.next_addr(proto));
         let (tx, rx) = channel(100);
-        let handler = Arc::new(TestClientHandler { tx });
+        let logged_in = Arc::new(Notify::new());
+        let handler = Arc::new(TestClientHandler {
+            tx,
+            logged_in: logged_in.clone(),
+        });
         let cfg = RexClientConfig::new(proto, server_addr, title, handler);
         let mut cfg = cfg;
         cfg.ack_enabled = self.ack_enabled;
         cfg.ack_timeout_ms = 5000;
         let client = open_client(cfg).await?;
-        Ok(TestClient::new(client, rx))
+        Ok(TestClient::new(client, rx, logged_in))
     }
 
     /// 启动所有协议的聚合 server（AggregateServer）

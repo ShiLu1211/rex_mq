@@ -46,12 +46,12 @@ impl CommandHandler for TitleHandler {
                     msg_type: crate::ForwardType::Unicast,
                 };
 
-                success = services.router.forward(&node, request).await;
+                success = services.cluster.forward_message(&node, request).await;
 
                 // Broadcast fallback: try all other known nodes.
                 if !success {
-                    let local_id = services.router.local_node_id().unwrap_or_default();
-                    for other in services.router.known_nodes() {
+                    let local_id = services.cluster.get_local_node_id().unwrap_or_default();
+                    for other in services.cluster.get_nodes() {
                         if other != node && other != local_id {
                             let fallback = crate::ForwardRequest {
                                 source_client_id: client_id,
@@ -60,7 +60,7 @@ impl CommandHandler for TitleHandler {
                                 payload: rex_data.pack_ref().to_vec(),
                                 msg_type: crate::ForwardType::Unicast,
                             };
-                            if services.router.forward(&other, fallback).await {
+                            if services.cluster.forward_message(&other, fallback).await {
                                 success = true;
                                 debug!("fallback forward to node {} succeeded", other);
                                 break;

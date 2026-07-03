@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use bytes::BytesMut;
 use rex_core::{RexClientInner, RexData};
-use tokio::sync::{Semaphore, broadcast};
+use tokio::sync::{Semaphore, broadcast, watch};
 use tracing::{debug, warn};
 
 use crate::{RexServerConfig, Services, handler::handle};
@@ -13,6 +13,10 @@ pub struct ServerBase {
     pub services: Arc<Services>,
     pub config: RexServerConfig,
     pub semaphore: Arc<Semaphore>,
+    /// Readiness signal: 0 = not ready, 1 = listener bound and accepting.
+    /// Transports publish via `mark_ready`; consumers wait via `ready_rx`.
+    ready_tx: watch::Sender<u8>,
+    pub ready_rx: watch::Receiver<u8>,
 }
 
 impl ServerBase {
@@ -22,11 +26,14 @@ impl ServerBase {
     ) -> (Self, broadcast::Receiver<()>) {
         let semaphore = Arc::new(Semaphore::new(config.max_concurrent_handlers));
         let shutdown_rx = services.shutdown.subscribe();
+        let (ready_tx, ready_rx) = watch::channel(0u8);
 
         let base = Self {
             services,
             config,
             semaphore,
+            ready_tx,
+            ready_rx,
         };
 
         (base, shutdown_rx)
@@ -34,6 +41,27 @@ impl ServerBase {
 
     pub fn send_shutdown_signal(&self) {
         self.services.shutdown.signal();
+    }
+
+    /// Signal that the listener is bound and accepting connections.
+    /// Idempotent — calling twice is harmless.
+    pub fn mark_ready(&self) {
+        let _ = self.ready_tx.send(1);
+    }
+
+    /// Wait until `mark_ready` has been called (or the watch channel
+    /// itself changes). Resolves immediately if already ready.
+    pub async fn wait_ready(&self) {
+        let mut rx = self.ready_rx.clone();
+        if *rx.borrow_and_update() == 1 {
+            return;
+        }
+        // Wait for the next change to 1, or fall through on error.
+        while rx.changed().await.is_ok() {
+            if *rx.borrow_and_update() == 1 {
+                return;
+            }
+        }
     }
 
     pub async fn acquire_connection_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
