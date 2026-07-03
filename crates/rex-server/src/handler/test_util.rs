@@ -13,61 +13,9 @@ use rex_cluster::types::ClusterMessage;
 use rex_core::RexClientInner;
 
 use crate::{
-    AckTracker, ClientRegistry, ClientRegistryImpl, ClusterPort, ClusterRouter, ForwardRequest,
-    NoopOfflineBuffer, OfflineBuffer, PendingAckInfo, RexSystemConfig, Services, Shutdown,
+    AckTracker, ClusterPort, ClusterRouter, ForwardRequest, NoopOfflineBuffer, OfflineBuffer,
+    PendingAckInfo, RexSystemConfig, Services, Shutdown,
 };
-
-// ---- ClientRegistry mock -------------------------------------------------
-
-/// In-memory `ClientRegistry` backed by a real `ClientRegistryImpl`. Unlike
-/// the production code which holds `Arc<dyn ClientRegistry>`, tests use this
-/// concrete type directly so they can pre-populate client state.
-pub struct TestRegistry {
-    inner: Arc<ClientRegistryImpl>,
-}
-
-impl TestRegistry {
-    pub fn new() -> Self {
-        Self {
-            inner: ClientRegistryImpl::new(),
-        }
-    }
-
-    pub fn to_arc(&self) -> Arc<dyn ClientRegistry> {
-        self.inner.clone()
-    }
-}
-
-// Delegate every ClientRegistry method to the real impl.
-impl ClientRegistry for TestRegistry {
-    fn add_client(&self, client: Arc<RexClientInner>) {
-        self.inner.add_client(client);
-    }
-    fn remove_client(&self, client_id: u128) -> Option<Arc<RexClientInner>> {
-        self.inner.remove_client(client_id)
-    }
-    fn register_title(&self, client_id: u128, title: &str) {
-        self.inner.register_title(client_id, title);
-    }
-    fn unregister_title(&self, client_id: u128, title: &str) {
-        self.inner.unregister_title(client_id, title);
-    }
-    fn find_all(&self) -> Vec<Arc<RexClientInner>> {
-        self.inner.find_all()
-    }
-    fn find_all_by_title(&self, title: &str, exclude: Option<u128>) -> Vec<Arc<RexClientInner>> {
-        self.inner.find_all_by_title(title, exclude)
-    }
-    fn find_one_by_title(&self, title: &str, exclude: Option<u128>) -> Option<Arc<RexClientInner>> {
-        self.inner.find_one_by_title(title, exclude)
-    }
-    fn find_some_by_id(&self, id: u128) -> Option<Arc<RexClientInner>> {
-        self.inner.find_some_by_id(id)
-    }
-    fn take_inactive(&self, _timeout_secs: u64) -> Vec<u128> {
-        Vec::new()
-    }
-}
 
 // ---- AckTracker mock -----------------------------------------------------
 
@@ -198,7 +146,7 @@ pub fn dummy_client_with_id(id: u128) -> Arc<RexClientInner> {
 /// Build a `Services` bundle for handler unit tests. All ports are in-memory
 /// mocks. Pass `ack_enabled: true` for ACK-specific tests; `false` otherwise.
 pub fn make_services(ack_enabled: bool) -> Arc<Services> {
-    let registry = TestRegistry::new();
+    let registry = crate::ClientRegistryImpl::new();
     let acks = Arc::new(TestAckTracker::new()) as Arc<dyn AckTracker>;
     let offline = Arc::new(NoopOfflineBuffer) as Arc<dyn OfflineBuffer>;
     let cluster: Arc<dyn ClusterPort> = Arc::new(TestClusterPort::new());
@@ -206,11 +154,11 @@ pub fn make_services(ack_enabled: bool) -> Arc<Services> {
     let mut config = RexSystemConfig::from_id("test");
     config.ack_enabled = ack_enabled;
     Services::new(
-        registry.to_arc(),
+        registry.clone(),
         acks,
         offline,
         cluster.clone(),
-        ClusterRouter::new(registry.to_arc(), cluster.clone()),
+        ClusterRouter::new(registry.clone(), cluster.clone()),
         shutdown,
         config,
     )

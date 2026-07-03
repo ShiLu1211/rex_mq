@@ -82,14 +82,14 @@ impl Router for ClusterRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ForwardType;
-    use crate::handler::test_util::{TestClusterPort, TestRegistry, dummy_client_with_id};
+    use crate::handler::test_util::{TestClusterPort, dummy_client_with_id};
+    use crate::system::client_registry::ClientRegistryImpl;
 
     #[test]
     fn route_returns_local_when_subscriber_present() {
-        let registry = TestRegistry::new();
+        let registry = ClientRegistryImpl::new();
         let cluster: Arc<dyn ClusterPort> = Arc::new(TestClusterPort::new());
-        let router = ClusterRouter::new(registry.to_arc(), cluster);
+        let router = ClusterRouter::new(registry.clone(), cluster);
 
         let target = dummy_client_with_id(0x42u128);
         registry.add_client(target.clone());
@@ -104,11 +104,11 @@ mod tests {
 
     #[test]
     fn route_returns_remote_when_cluster_has_node() {
-        let registry = TestRegistry::new();
+        let registry = ClientRegistryImpl::new();
         let mut cluster = TestClusterPort::new();
         cluster.find_node_for_title = Some("peer-1".to_string());
         let cluster: Arc<dyn ClusterPort> = Arc::new(cluster);
-        let router = ClusterRouter::new(registry.to_arc(), cluster);
+        let router = ClusterRouter::new(registry.clone(), cluster);
 
         let plan = router.route("remote_chan", None);
         match plan {
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn route_prefers_local_over_remote() {
-        let registry = TestRegistry::new();
+        let registry = ClientRegistryImpl::new();
         let target = dummy_client_with_id(0x99u128);
         registry.add_client(target.clone());
         registry.register_title(0x99u128, "both_chan");
@@ -127,7 +127,7 @@ mod tests {
         let mut cluster = TestClusterPort::new();
         cluster.find_node_for_title = Some("peer-1".to_string());
         let cluster: Arc<dyn ClusterPort> = Arc::new(cluster);
-        let router = ClusterRouter::new(registry.to_arc(), cluster);
+        let router = ClusterRouter::new(registry.clone(), cluster);
 
         // Local subscriber should shadow the cluster entry.
         let plan = router.route("both_chan", None);
@@ -139,9 +139,9 @@ mod tests {
 
     #[test]
     fn route_returns_none_when_no_match() {
-        let registry = TestRegistry::new();
+        let registry = ClientRegistryImpl::new();
         let cluster: Arc<dyn ClusterPort> = Arc::new(TestClusterPort::new());
-        let router = ClusterRouter::new(registry.to_arc(), cluster);
+        let router = ClusterRouter::new(registry.clone(), cluster);
 
         let plan = router.route("nobody_here", None);
         assert!(matches!(plan, RoutePlan::None));
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn route_excludes_sender() {
-        let registry = TestRegistry::new();
+        let registry = ClientRegistryImpl::new();
         let sender = dummy_client_with_id(0x3u128);
         let target = dummy_client_with_id(0x4u128);
         registry.add_client(sender.clone());
@@ -158,7 +158,7 @@ mod tests {
         registry.register_title(0x4u128, "echo_chan");
 
         let cluster: Arc<dyn ClusterPort> = Arc::new(TestClusterPort::new());
-        let router = ClusterRouter::new(registry.to_arc(), cluster);
+        let router = ClusterRouter::new(registry.clone(), cluster);
 
         // Excluding 3 means only 4 should be returned.
         let plan = router.route("echo_chan", Some(0x3u128));
