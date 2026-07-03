@@ -11,14 +11,16 @@ pub use crate::transport::{QuicServer, TcpServer, WebSocketServer};
 pub use server::RexServerTrait;
 pub use system::{
     AckTracker, AckTrackerImpl, ClientRegistry, ClientRegistryImpl, ClusterPort, ClusterRouter,
-    Janitor, NoopOfflineBuffer, OfflineBuffer, PendingAckInfo, RexSystemConfig, RoutePlan, Router,
-    Services, Shutdown, SledOfflineBuffer,
+    DeliveryOutcome, Forwarder, FwdResult, Janitor, NetworkForwarder, NoopOfflineBuffer,
+    OfflineBuffer, PendingAckInfo, RexSystemConfig, RoutePlan, Router, Services, Shutdown,
+    SledOfflineBuffer,
 };
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use arc_swap::ArcSwap;
 use tracing::{info, warn};
 
 use rex_cluster::ClusterConfig as RexClusterConfig;
@@ -80,7 +82,23 @@ pub async fn build_services(
         cluster.unwrap_or_else(|| Arc::new(NoopClusterPort) as Arc<dyn ClusterPort>);
     let router: Arc<dyn Router> = ClusterRouter::new(registry.clone(), cluster.clone());
 
-    Services::new(registry, acks, offline, cluster, router, shutdown, config)
+    // Forwarder: construct with empty `node_manager` / `route_table`
+    // slots. When the cluster starts (`start_cluster_manager`), the
+    // slots get populated. Forwarding before that returns
+    // `PeerUnreachable("cluster-not-started")`.
+    let local_node_id = cluster
+        .get_local_node_id()
+        .unwrap_or_else(|| "local".to_string());
+    let forwarder: Arc<dyn Forwarder> = NetworkForwarder::new(
+        Arc::new(ArcSwap::from_pointee(None)),
+        Arc::new(ArcSwap::from_pointee(None)),
+        rex_cluster::types::NodeId::new(local_node_id),
+        registry.clone(),
+    );
+
+    Services::new(
+        registry, acks, offline, cluster, router, forwarder, shutdown, config,
+    )
 }
 
 /// Start the cluster manager and wire it into Services.

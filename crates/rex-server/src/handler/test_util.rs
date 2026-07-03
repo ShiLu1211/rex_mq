@@ -7,14 +7,15 @@
 use std::sync::Arc;
 
 use ahash::RandomState;
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use rex_cluster::types::ClusterMessage;
 use rex_core::RexClientInner;
 
 use crate::{
-    AckTracker, ClusterPort, ClusterRouter, ForwardRequest, NoopOfflineBuffer, OfflineBuffer,
-    PendingAckInfo, RexSystemConfig, Services, Shutdown,
+    AckTracker, ClusterPort, ClusterRouter, ForwardRequest, NetworkForwarder, NoopOfflineBuffer,
+    OfflineBuffer, PendingAckInfo, RexSystemConfig, Services, Shutdown,
 };
 
 // ---- AckTracker mock -----------------------------------------------------
@@ -153,12 +154,21 @@ pub fn make_services(ack_enabled: bool) -> Arc<Services> {
     let shutdown = Shutdown::new();
     let mut config = RexSystemConfig::from_id("test");
     config.ack_enabled = ack_enabled;
+    // Forwarder with empty slots — tests don't exercise cross-node
+    // sending until commit 3 migrates the call sites.
+    let forwarder: Arc<dyn crate::Forwarder> = NetworkForwarder::new(
+        Arc::new(ArcSwap::from_pointee(None)),
+        Arc::new(ArcSwap::from_pointee(None)),
+        rex_cluster::types::NodeId::new("test-node"),
+        registry.clone(),
+    );
     Services::new(
         registry.clone(),
         acks,
         offline,
         cluster.clone(),
         ClusterRouter::new(registry.clone(), cluster.clone()),
+        forwarder,
         shutdown,
         config,
     )

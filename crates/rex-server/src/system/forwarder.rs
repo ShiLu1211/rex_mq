@@ -108,23 +108,29 @@ pub trait Forwarder: Send + Sync {
 
 /// Production [`Forwarder`] implementation.
 ///
-/// Holds an `ArcSwap<Option<Arc<NodeManager>>>` slot — empty at
-/// construction, populated by `ServerClusterManager::start()`. Reads
-/// use `ArcSwap::load` for an async-lock-free hot path.
+/// Holds two `ArcSwap` slots — empty at construction, populated by
+/// `ServerClusterManager::start()`:
+/// - `node_manager` — the cluster's `NodeManager` (gives us the
+///   transport for outbound sends).
+/// - `route_table` — the cluster's `GlobalRouteTable` (peer lookup).
+///
+/// Reads use `ArcSwap::load` for an async-lock-free hot path.
 pub struct NetworkForwarder {
     node_manager: Arc<ArcSwap<Option<Arc<NodeManager>>>>,
-    route_table: Arc<GlobalRouteTable>,
+    route_table: Arc<ArcSwap<Option<Arc<GlobalRouteTable>>>>,
     local_node_id: rex_cluster::types::NodeId,
     client_registry: Arc<dyn ClientRegistry>,
 }
 
 impl NetworkForwarder {
-    /// Construct a new `NetworkForwarder`. The `node_manager` slot is
-    /// empty — populate it via [`NetworkForwarder::set_node_manager`]
-    /// once the cluster has started.
+    /// Construct a new `NetworkForwarder`. Both slots are empty —
+    /// populate them via [`NetworkForwarder::set_node_manager`] and
+    /// [`NetworkForwarder::set_route_table`] once the cluster has
+    /// started. Until then, `forward` returns
+    /// `PeerUnreachable("cluster-not-started")`.
     pub fn new(
         node_manager: Arc<ArcSwap<Option<Arc<NodeManager>>>>,
-        route_table: Arc<GlobalRouteTable>,
+        route_table: Arc<ArcSwap<Option<Arc<GlobalRouteTable>>>>,
         local_node_id: rex_cluster::types::NodeId,
         client_registry: Arc<dyn ClientRegistry>,
     ) -> Arc<Self> {
@@ -145,12 +151,24 @@ impl NetworkForwarder {
         self.node_manager.store(Arc::new(nm));
     }
 
+    /// Populate the cluster's `GlobalRouteTable` slot. Same
+    /// lifecycle as `set_node_manager`.
+    pub fn set_route_table(&self, rt: Option<Arc<GlobalRouteTable>>) {
+        self.route_table.store(Arc::new(rt));
+    }
+
     /// Load the current node manager, if any. The hot path on
     /// `forward` uses this directly.
     fn node_manager(&self) -> Option<Arc<NodeManager>> {
         // `load` returns the inner `Arc<Option<Arc<NodeManager>>>`;
         // `as_ref().clone()` peels one Arc and clones the Option.
         self.node_manager.load().as_ref().clone()
+    }
+
+    /// Load the current route table, if any. The hot path on
+    /// `forward` uses this directly.
+    fn route_table(&self) -> Option<Arc<GlobalRouteTable>> {
+        self.route_table.load().as_ref().clone()
     }
 
     /// Walk all known connected peers (excluding `exclude` and self),
@@ -163,6 +181,10 @@ impl NetworkForwarder {
             Some(nm) => nm,
             None => return FwdResult::NoPeerForTitle,
         };
+        let route_table = match self.route_table() {
+            Some(rt) => rt,
+            None => return FwdResult::NoPeerForTitle,
+        };
         let transport = nm.get_transport();
         let local_id = self.local_node_id.to_string();
 
@@ -170,7 +192,7 @@ impl NetworkForwarder {
             if other == local_id || Some(other.as_str()) == exclude {
                 continue;
             }
-            let Some(addr_str) = self.route_table.get_node_addr(&other) else {
+            let Some(addr_str) = route_table.get_node_addr(&other) else {
                 continue;
             };
             let Ok(addr) = addr_str.parse::<SocketAddr>() else {
@@ -195,10 +217,14 @@ impl Forwarder for NetworkForwarder {
             Some(nm) => nm,
             None => return FwdResult::PeerUnreachable("cluster-not-started".into()),
         };
+        let route_table = match self.route_table() {
+            Some(rt) => rt,
+            None => return FwdResult::PeerUnreachable("cluster-not-started".into()),
+        };
 
         // 2. Look up the targeted peer's address. Unknown peer →
         //    try the fallback walk.
-        let Some(addr_str) = self.route_table.get_node_addr(target_node) else {
+        let Some(addr_str) = route_table.get_node_addr(target_node) else {
             return self.fallback_excluding(req, None).await;
         };
         let addr = match addr_str.parse::<SocketAddr>() {
@@ -394,17 +420,13 @@ mod tests {
     use crate::handler::test_util::dummy_client_with_id;
     use crate::system::client_registry::ClientRegistryImpl;
 
-    fn local_routing_table() -> Arc<GlobalRouteTable> {
-        let local_id = rex_cluster::types::NodeId::new("local-node");
-        Arc::new(GlobalRouteTable::with_local_node(local_id))
-    }
-
     fn empty_forwarder() -> Arc<NetworkForwarder> {
-        let slot = Arc::new(ArcSwap::from_pointee(None));
+        let nm_slot = Arc::new(ArcSwap::from_pointee(None));
+        let rt_slot = Arc::new(ArcSwap::from_pointee(None));
         let registry: Arc<dyn ClientRegistry> = ClientRegistryImpl::new();
         NetworkForwarder::new(
-            slot,
-            local_routing_table(),
+            nm_slot,
+            rt_slot,
             rex_cluster::types::NodeId::new("local-node"),
             registry,
         )
@@ -484,11 +506,11 @@ mod tests {
         registry.add_client(client.clone());
         registry.register_title(0x42u128, "delivered_chan");
 
-        let slot = Arc::new(ArcSwap::from_pointee(None));
-        let route_table = local_routing_table();
+        let nm_slot = Arc::new(ArcSwap::from_pointee(None));
+        let rt_slot = Arc::new(ArcSwap::from_pointee(None));
         let forwarder = NetworkForwarder::new(
-            slot,
-            route_table,
+            nm_slot,
+            rt_slot,
             rex_cluster::types::NodeId::new("local-node"),
             registry,
         );
@@ -521,11 +543,11 @@ mod tests {
             registry.register_title(id, "fanout_chan");
         }
 
-        let slot = Arc::new(ArcSwap::from_pointee(None));
-        let route_table = local_routing_table();
+        let nm_slot = Arc::new(ArcSwap::from_pointee(None));
+        let rt_slot = Arc::new(ArcSwap::from_pointee(None));
         let forwarder = NetworkForwarder::new(
-            slot,
-            route_table,
+            nm_slot,
+            rt_slot,
             rex_cluster::types::NodeId::new("local-node"),
             registry,
         );

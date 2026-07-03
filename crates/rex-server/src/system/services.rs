@@ -23,8 +23,10 @@ use crate::Shutdown;
 use crate::system::ack::AckTracker;
 use crate::system::client_registry::ClientRegistry;
 use crate::system::cluster_port::ClusterPort;
+use crate::system::forwarder::Forwarder;
 use crate::system::offline::OfflineBuffer;
-use crate::system::router::{ClusterRouter, Router};
+#[allow(unused_imports)]
+use crate::system::router::Router;
 
 pub struct Services {
     /// In-memory client/title maps. Owns the canonical id and title state.
@@ -44,6 +46,12 @@ pub struct Services {
     /// registry and cluster port (added in C4).
     pub router: Arc<dyn Router>,
 
+    /// Cross-node message delivery (outbound `forward`, inbound `deliver`,
+    /// `broadcast`). Added per ADR-0002; populated in `build_services`,
+    /// slots for `NodeManager` / `GlobalRouteTable` are filled by
+    /// `ServerClusterManager::start`.
+    pub forwarder: Arc<dyn Forwarder>,
+
     /// Cross-cutting shutdown signal — held by every long-running task.
     pub shutdown: Arc<Shutdown>,
 
@@ -54,12 +62,14 @@ pub struct Services {
 }
 
 impl Services {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         registry: Arc<dyn ClientRegistry>,
         acks: Arc<dyn AckTracker>,
         offline: Arc<dyn OfflineBuffer>,
         cluster: Arc<dyn ClusterPort>,
         router: Arc<dyn Router>,
+        forwarder: Arc<dyn Forwarder>,
         shutdown: Arc<Shutdown>,
         config: RexSystemConfig,
     ) -> Arc<Self> {
@@ -69,6 +79,7 @@ impl Services {
             offline,
             cluster,
             router,
+            forwarder,
             shutdown,
             config,
         })
