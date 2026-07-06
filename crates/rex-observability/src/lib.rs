@@ -1,6 +1,8 @@
 //! Observability framework: metrics, tracing, health, admin.
 
+pub mod admin;
 pub mod health;
+pub mod http;
 pub mod metrics;
 pub mod tracing_setup;
 
