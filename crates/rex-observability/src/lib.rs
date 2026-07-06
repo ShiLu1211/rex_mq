@@ -1,5 +1,7 @@
 //! Observability framework: metrics, tracing, health, admin.
 
+pub mod metrics;
+
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
