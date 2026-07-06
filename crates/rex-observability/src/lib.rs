@@ -4,6 +4,7 @@ pub mod admin;
 pub mod health;
 pub mod http;
 pub mod metrics;
+pub mod probe;
 pub mod tracing_setup;
 
 pub fn version() -> &'static str {

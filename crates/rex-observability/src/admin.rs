@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use axum::{Router, http::StatusCode, response::IntoResponse, routing::get};
+use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 use prometheus::{Encoder, TextEncoder};
 use serde::Serialize;
 
@@ -21,11 +21,12 @@ pub struct AdminState {
 }
 
 /// Build a router from a fully-configured `AdminState`. This is the canonical
-/// constructor; later tasks add `/readyz` and `/admin/*` routes here.
+/// constructor; later tasks add `/admin/*` routes here.
 pub fn build_router_with_state(state: AdminState) -> Router {
     Router::new()
         .route("/metrics", get(metrics_handler))
         .route("/healthz", get(healthz_handler))
+        .route("/readyz", get(readyz_handler))
         .with_state(state)
 }
 
@@ -49,17 +50,48 @@ async fn healthz_handler() -> impl IntoResponse {
     (StatusCode::OK, "ok")
 }
 
-// Stub types so the rest of the file compiles; replaced in Task 6.
 #[derive(Serialize)]
 struct ReadyResponse {
-    _dummy: (),
-}
-#[allow(dead_code)]
-async fn _stub() -> impl IntoResponse {
-    (StatusCode::OK, axum::Json(ReadyResponse { _dummy: () }))
+    status: &'static str,
+    probes: Vec<ProbeEntry>,
 }
 
-// `AggregatedHealth` and `AggregateStatus` are imported for Task 6's
-// `/readyz` route; silence the unused-import warning until then.
-#[allow(dead_code)]
-fn _unused_health_imports(_: &AggregatedHealth, _: AggregateStatus) {}
+#[derive(Serialize)]
+struct ProbeEntry {
+    name: &'static str,
+    status: &'static str,
+    reason: Option<String>,
+}
+
+async fn readyz_handler(State(state): State<AdminState>) -> impl IntoResponse {
+    let agg: AggregatedHealth = state.health.check_all();
+    let body = ReadyResponse {
+        status: match agg.status {
+            AggregateStatus::Healthy => "healthy",
+            AggregateStatus::Degraded => "degraded",
+            AggregateStatus::Unhealthy => "unhealthy",
+        },
+        probes: agg
+            .results
+            .into_iter()
+            .map(|(name, r)| ProbeEntry {
+                name,
+                status: match r {
+                    crate::health::ProbeResult::Healthy => "healthy",
+                    crate::health::ProbeResult::Degraded { .. } => "degraded",
+                    crate::health::ProbeResult::Unhealthy { .. } => "unhealthy",
+                },
+                reason: match r {
+                    crate::health::ProbeResult::Healthy => None,
+                    crate::health::ProbeResult::Degraded { reason }
+                    | crate::health::ProbeResult::Unhealthy { reason } => Some(reason),
+                },
+            })
+            .collect(),
+    };
+    let status = match agg.status {
+        AggregateStatus::Healthy | AggregateStatus::Degraded => StatusCode::OK,
+        AggregateStatus::Unhealthy => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    (status, Json(body))
+}
