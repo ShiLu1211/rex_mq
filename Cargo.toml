@@ -8,6 +8,7 @@ members = [
   "crates/rex-sender",
   "crates/rex-server",
   "crates/rex-test",
+  "crates/rex-observability",
   "bindings/rex4p",
   "bindings/rex4j",
 ]

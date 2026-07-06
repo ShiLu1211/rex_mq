@@ -1,0 +1,10 @@
+[package]
+name = "rex-observability"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Filled in by later tasks; this minimal manifest lets the crate compile.
