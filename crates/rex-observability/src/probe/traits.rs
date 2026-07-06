@@ -14,6 +14,29 @@ pub trait RegistrySnapshot: Send + Sync {
     fn max_clients(&self) -> usize {
         0
     }
+    /// List clients currently connected. Used by `/admin/clients` (Task 7)
+    /// and replaced with a real implementation in Task 8. The default
+    /// returns an empty vec so existing adapters keep compiling.
+    fn list_clients(&self) -> Vec<ClientSnapshot> {
+        Vec::new()
+    }
+}
+
+/// Plain-data snapshot of a single connected client. Returned by
+/// [`RegistrySnapshot::list_clients`].
+#[derive(Debug, Clone)]
+pub struct ClientSnapshot {
+    pub id: u64,
+    pub transport: String,
+    pub titles: Vec<String>,
+    pub connected_secs: u64,
+}
+
+/// Hook used by `/admin/clients/:id/disconnect` (Task 10). Implementing
+/// adapters call the live client's cancel signal. `None` causes the
+/// endpoint to return 503.
+pub trait ClientCancel: Send + Sync {
+    fn cancel(&self, client_id: u64);
 }
 
 pub trait ClusterSnapshot: Send + Sync {
