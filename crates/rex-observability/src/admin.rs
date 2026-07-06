@@ -14,6 +14,7 @@ use prometheus::{Encoder, TextEncoder};
 use serde::Serialize;
 
 use crate::health::{AggregateStatus, AggregatedHealth, HealthRegistry};
+use crate::probe::traits::ClientSummary;
 
 #[derive(Clone, Default)]
 pub struct AdminConfig {
@@ -147,7 +148,7 @@ async fn readyz_handler(State(state): State<AdminState>) -> impl IntoResponse {
 }
 
 #[derive(Serialize)]
-struct ClientSummary {
+struct ClientSummaryView {
     id: String,
     transport: String,
     titles: Vec<String>,
@@ -161,9 +162,9 @@ async fn list_clients_handler(State(state): State<AdminState>) -> impl IntoRespo
         Some(r) => r.list_clients(),
         None => vec![],
     };
-    let body: Vec<ClientSummary> = snaps
+    let body: Vec<ClientSummaryView> = snaps
         .into_iter()
-        .map(|c| ClientSummary {
+        .map(|c: ClientSummary| ClientSummaryView {
             id: format!("{:032X}", c.id),
             transport: c.transport,
             titles: c.titles,

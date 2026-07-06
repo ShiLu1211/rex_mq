@@ -87,6 +87,7 @@ impl WebSocketServer {
         let (sink, mut stream) = ws_stream.split();
         let sender = Arc::new(WebSocketSender::new_server(sink));
         let peer = Arc::new(RexClientInner::new(new_uuid(), peer_addr, "", sender));
+        peer.set_transport_label("websocket");
 
         let permit = match self.base.acquire_connection_permit().await {
             Ok(permit) => permit,

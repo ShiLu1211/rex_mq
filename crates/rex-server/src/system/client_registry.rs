@@ -18,6 +18,20 @@ use dashmap::DashMap;
 use rand::seq::IteratorRandom;
 use rex_core::RexClientInner;
 
+/// Read-only snapshot of a connected client for admin / metrics use.
+///
+/// Returned by [`ClientRegistry::list_snapshots`] and
+/// [`ClientRegistry::get_snapshot`]. Plain data — no `Arc` to the live
+/// client, so the caller can serialise / inspect after the client has
+/// disconnected without lifetime concerns.
+#[derive(Clone, Debug)]
+pub struct ClientSnapshot {
+    pub id: u128,
+    pub transport: String,
+    pub titles: Vec<String>,
+    pub connected_secs: u64,
+}
+
 /// Tracks which clients are connected, and which titles each is subscribed to.
 ///
 /// `remove_client` returns the removed client so the caller can close its
@@ -59,6 +73,14 @@ pub trait ClientRegistry: Send + Sync {
     /// follow up with `remove_client` for each id returned. Pure state query,
     /// no side-effects.
     fn take_inactive(&self, timeout_secs: u64) -> Vec<u128>;
+
+    /// Snapshot of every currently connected client. Order is unspecified;
+    /// callers that need a stable view should sort the result by `id`.
+    fn list_snapshots(&self) -> Vec<ClientSnapshot>;
+
+    /// Snapshot of a single client, or `None` if no client with that id is
+    /// currently connected.
+    fn get_snapshot(&self, id: u128) -> Option<ClientSnapshot>;
 }
 
 /// DashMap-backed production implementation.
@@ -75,6 +97,12 @@ impl ClientRegistryImpl {
             id2client: DashMap::with_hasher(RandomState::new()),
             title2clients: DashMap::with_hasher(RandomState::new()),
         })
+    }
+
+    /// Number of distinct titles currently in the title map. Thin accessor
+    /// for the observability adapter.
+    pub fn title_count(&self) -> usize {
+        self.title2clients.len()
     }
 }
 
@@ -178,6 +206,35 @@ impl ClientRegistry for ClientRegistryImpl {
             .filter(|entry| now.saturating_sub(entry.value().last_recv()) > timeout_secs)
             .map(|entry| *entry.key())
             .collect()
+    }
+
+    fn list_snapshots(&self) -> Vec<ClientSnapshot> {
+        use rex_core::utils::now_secs;
+        let now = now_secs();
+        self.id2client
+            .iter()
+            .map(|entry| {
+                let c = entry.value();
+                ClientSnapshot {
+                    id: c.id(),
+                    transport: c.transport_label(),
+                    titles: c.subscribed_titles(),
+                    connected_secs: now.saturating_sub(c.connected_at()),
+                }
+            })
+            .collect()
+    }
+
+    fn get_snapshot(&self, id: u128) -> Option<ClientSnapshot> {
+        use rex_core::utils::now_secs;
+        let c = self.id2client.get(&id)?;
+        let now = now_secs();
+        Some(ClientSnapshot {
+            id: c.id(),
+            transport: c.transport_label(),
+            titles: c.subscribed_titles(),
+            connected_secs: now.saturating_sub(c.connected_at()),
+        })
     }
 }
 
@@ -367,5 +424,37 @@ mod tests {
         let _ = reg.take_inactive(10);
         // Still in id map
         assert!(reg.find_some_by_id(id).is_some());
+    }
+
+    /// Build a client with a known id (mirrors the helper in
+    /// `handler::test_util::dummy_client_with_id` but lives here so the
+    /// registry tests don't depend on the handler test-util module).
+    fn make_test_client(id: u128) -> Arc<RexClientInner> {
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        Arc::new(RexClientInner::new(
+            id,
+            addr,
+            "",
+            Arc::new(NoopSender) as Arc<dyn RexSenderTrait>,
+        ))
+    }
+
+    #[test]
+    fn list_snapshots_returns_all_clients() {
+        let reg = ClientRegistryImpl::new();
+        let client_a = make_test_client(0xAA);
+        let client_b = make_test_client(0xBB);
+        reg.add_client(client_a.clone());
+        reg.add_client(client_b.clone());
+
+        let snaps = reg.list_snapshots();
+        assert_eq!(snaps.len(), 2);
+        let ids: std::collections::HashSet<u128> = snaps.iter().map(|s| s.id).collect();
+        assert!(ids.contains(&0xAA));
+        assert!(ids.contains(&0xBB));
+
+        let single = reg.get_snapshot(0xAA).expect("found");
+        assert_eq!(single.id, 0xAA);
+        assert!(reg.get_snapshot(0xDEAD).is_none());
     }
 }

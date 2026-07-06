@@ -17,16 +17,18 @@ pub trait RegistrySnapshot: Send + Sync {
     /// List clients currently connected. Used by `/admin/clients` (Task 7)
     /// and replaced with a real implementation in Task 8. The default
     /// returns an empty vec so existing adapters keep compiling.
-    fn list_clients(&self) -> Vec<ClientSnapshot> {
+    fn list_clients(&self) -> Vec<ClientSummary> {
         Vec::new()
     }
 }
 
 /// Plain-data snapshot of a single connected client. Returned by
-/// [`RegistrySnapshot::list_clients`].
+/// [`RegistrySnapshot::list_clients`]. Bridges the rex-server
+/// `ClientRegistry` port (u128 ids) to the observability probes without
+/// a rex-server dependency.
 #[derive(Debug, Clone)]
-pub struct ClientSnapshot {
-    pub id: u64,
+pub struct ClientSummary {
+    pub id: u128,
     pub transport: String,
     pub titles: Vec<String>,
     pub connected_secs: u64,

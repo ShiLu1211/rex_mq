@@ -11,6 +11,7 @@ rex-core.workspace = true
 rex-sender.workspace = true
 rex-persistence.workspace = true
 rex-cluster.workspace = true
+rex-observability.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 serde.workspace = true

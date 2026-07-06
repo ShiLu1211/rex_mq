@@ -17,7 +17,14 @@ use crate::{
 pub struct RexClientInner {
     id: u128,
     local_addr: SocketAddr,
-    titles: RwLock<Vec<String>>,
+    subscribed_titles: RwLock<Vec<String>>,
+    /// Lowercased transport name (e.g. "tcp", "quic", "websocket"). Set by
+    /// the transport during the connection-accept path; read by the admin
+    /// snapshot. `None` until the transport sets it.
+    transport_label: RwLock<Option<String>>,
+    /// Unix-epoch seconds captured at construction. Used by the admin
+    /// snapshot to report `connected_secs`.
+    connected_at: u64,
     sender: Arc<dyn RexSenderTrait>,
 
     last_recv: AtomicU64,
@@ -34,13 +41,15 @@ impl RexClientInner {
         RexClientInner {
             id,
             local_addr,
-            titles: RwLock::new(
+            subscribed_titles: RwLock::new(
                 title
                     .split(';')
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string())
                     .collect(),
             ),
+            transport_label: RwLock::new(None),
+            connected_at: now_secs(),
             sender,
             last_recv: AtomicU64::new(now_secs()),
         }
@@ -51,13 +60,15 @@ impl RexClientInner {
         RexClientInner {
             id: new_uuid(),
             local_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
-            titles: RwLock::new(
+            subscribed_titles: RwLock::new(
                 title
                     .split(';')
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string())
                     .collect(),
             ),
+            transport_label: RwLock::new(None),
+            connected_at: now_secs(),
             sender,
             last_recv: AtomicU64::new(now_secs()),
         }
@@ -93,21 +104,48 @@ impl RexClientInner {
         force_set_value(&self.sender, sender);
     }
 
+    /// Record the transport that owns this client. Called once during the
+    /// connection-accept path. The label is the lowercased protocol name
+    /// (e.g. "tcp", "quic", "websocket").
+    pub fn set_transport_label(&self, label: impl Into<String>) {
+        *self.transport_label.write() = Some(label.into().to_lowercase());
+    }
+
+    /// Transport label set at construction / connection-accept. Falls back
+    /// to "unknown" if the transport hasn't recorded one yet.
+    pub fn transport_label(&self) -> String {
+        self.transport_label
+            .read()
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    /// Read-only view of the client's currently subscribed titles.
+    /// Returns a fresh `Vec` so callers can own / mutate it freely.
+    pub fn subscribed_titles(&self) -> Vec<String> {
+        self.subscribed_titles.read().clone()
+    }
+
+    /// Unix-epoch seconds at which this client was constructed.
+    pub fn connected_at(&self) -> u64 {
+        self.connected_at
+    }
+
     #[inline]
     pub fn title_iter(&self) -> Vec<String> {
-        self.titles.read().clone()
+        self.subscribed_titles.read().clone()
     }
 
     #[inline]
     pub fn title_str(&self) -> String {
-        let titles = self.titles.read();
+        let titles = self.subscribed_titles.read();
         titles.join(";")
     }
 
     /// 多个title用;分隔
     #[inline]
     pub fn insert_title(&self, title: &str) {
-        let mut titles = self.titles.write();
+        let mut titles = self.subscribed_titles.write();
         for t in title.split(';') {
             if t.is_empty() {
                 continue;
@@ -120,13 +158,13 @@ impl RexClientInner {
 
     #[inline]
     pub fn remove_title(&self, title: &str) {
-        let mut titles = self.titles.write();
+        let mut titles = self.subscribed_titles.write();
         titles.retain(|x| x != title);
     }
 
     #[inline(always)]
     pub fn has_title(&self, title: &str) -> bool {
-        self.titles.read().iter().any(|x| x == title)
+        self.subscribed_titles.read().iter().any(|x| x == title)
     }
 
     #[inline(always)]

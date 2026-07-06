@@ -111,6 +111,7 @@ impl QuicServer {
         };
 
         let peer = Arc::new(RexClientInner::new(new_uuid(), peer_addr, "", sender));
+        peer.set_transport_label("quic");
 
         let permit = match self.base.acquire_connection_permit().await {
             Ok(permit) => permit,

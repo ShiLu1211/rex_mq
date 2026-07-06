@@ -80,6 +80,7 @@ impl TcpServer {
         let (reader, writer) = stream.into_split();
         let sender = Arc::new(TcpSender::new(writer));
         let peer = Arc::new(RexClientInner::new(new_uuid(), peer_addr, "", sender));
+        peer.set_transport_label("tcp");
 
         let permit = match self.base.acquire_connection_permit().await {
             Ok(permit) => permit,

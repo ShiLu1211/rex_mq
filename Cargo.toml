@@ -37,6 +37,7 @@ rex-client = { path = "crates/rex-client" }
 rex-server = { path = "crates/rex-server" }
 rex-persistence = { path = "crates/rex-persistence" }
 rex-cluster = { path = "crates/rex-cluster" }
+rex-observability = { path = "crates/rex-observability" }
 
 # --- Async Runtime & Concurrency ---
 tokio = { version = "1.49.0", features = ["full"] }
