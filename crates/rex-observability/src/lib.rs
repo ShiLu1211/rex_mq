@@ -2,6 +2,7 @@
 
 pub mod health;
 pub mod metrics;
+pub mod tracing_setup;
 
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
