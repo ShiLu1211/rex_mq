@@ -1,5 +1,6 @@
 //! Observability framework: metrics, tracing, health, admin.
 
+pub mod health;
 pub mod metrics;
 
 pub fn version() -> &'static str {
