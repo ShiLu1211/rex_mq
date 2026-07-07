@@ -125,6 +125,54 @@ Production [[Forwarder]] implementation. Holds a slot for the cluster's
 and the local registry.
 _Avoid_: RealForwarder, default forwarder
 
+## Observability
+
+The server exposes Prometheus metrics, structured tracing, health probes,
+and an admin HTTP surface on `:9090` via the `rex-observability` crate
+(2026-07-06). See
+[`docs/superpowers/specs/2026-07-06-observability-framework-design.md`](superpowers/specs/2026-07-06-observability-framework-design.md)
+for the full design.
+
+**ObservabilityHandle**:
+The handle `open_server` returns alongside the transports. It owns the
+admin HTTP server, the shared `HealthRegistry`, and the `Shutdown`
+integration; dropping it (or calling its `shutdown` method) stops the
+HTTP server.
+_Avoid_: admin server, metrics server
+
+**HealthRegistry**:
+Aggregator for `HealthProbe` adapters. Public routes are aggregated into
+`/readyz` with status 200 (Healthy/Degraded) or 503 (Unhealthy). Uses
+`parking_lot::Mutex<Vec<Arc<dyn HealthProbe>>>` so probes can be
+registered after construction.
+
+**RegistryObsAdapter / ClusterAdapter / PersistenceAdapter / ForwarderAdapter**:
+Production adapters that implement `rex-observability::probe::traits::*`,
+calling into the corresponding `Services` fields. The adapters are the
+bridge that lets `rex-observability` observe `rex-server` without depending
+on it.
+_Avoid_: probe adapter, default snapshot
+
+## 埋点守则
+
+**必埋的点**：
+- `handler/title.rs`、`cast.rs`、`group.rs` 进入 publish 路径时（counter + histogram）
+- 每条 `Forwarder::forward` 调用的结果（counter with reason label）
+- `transport/{tcp,quic,websocket}.rs` 每次 send / receive 完成（bytes counter）
+- `cluster/server_cluster.rs` 节点加入时（peer gauge）
+
+**Label 命名规范**：
+- `title` 允许（业务可控、基数有限）
+- `transport` 允许（值域 = {tcp, quic, websocket}）
+- `target` 允许（值域 = {local, remote}）
+- `reason` 允许（值域 = {unreachable, rejected, no_peer, parse, timeout}）
+- **`client_id` / `msg_id` 禁止作为 label**（爆 cardinality）
+- 自定义 label 必须先在 PR 描述里说明基数上界
+
+**直方图桶**：
+- 延迟类指标使用 `LATENCY_BUCKETS = [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]`
+- 任何修改桶的 PR 必须附 criterion bench 报告
+
 ## Anti-patterns recorded here
 
 - Treating one broadcast signal as the right shape — the C4 split moved cluster I/O
@@ -132,3 +180,11 @@ _Avoid_: RealForwarder, default forwarder
   Don't add wire-level methods back to [[ClusterPort]] "for convenience."
 - Returning `bool` from cross-node sends — that was the bug class the
   [[FwdResult]] enum was invented to fix. Always prefer the structured outcome.
+- Adding埋点 calls in hot paths without a `#[allow(dead_code)]` or test
+  to keep them in the call graph — observability that nobody reads is
+  worse than no observability, but observability that breaks the build
+  is worse than that. Either wire it to a real handler or remove it.
+- Creating a new `Box<dyn Trait>` in a hot path to satisfy a port's
+  `Send + Sync` bound without checking whether a reference works — the
+  `AssertUnwindSafe` pattern from [[health.rs|HealthRegistry::check_all]]
+  shows how to opt out of `UnwindSafe` cleanly.
