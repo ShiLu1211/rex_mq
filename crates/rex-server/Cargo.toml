@@ -20,6 +20,7 @@ async-trait.workspace = true
 rand.workspace = true
 dashmap.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 bytes.workspace = true
 quinn.workspace = true
 rustls.workspace = true

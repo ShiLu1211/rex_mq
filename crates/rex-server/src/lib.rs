@@ -97,7 +97,15 @@ pub async fn build_services(
     );
 
     Services::new(
-        registry, acks, offline, cluster, router, forwarder, shutdown, config,
+        registry,
+        acks,
+        offline,
+        cluster,
+        router,
+        forwarder,
+        shutdown,
+        config,
+        Arc::new(dashmap::DashMap::new()),
     )
 }
 

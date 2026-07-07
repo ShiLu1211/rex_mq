@@ -171,5 +171,6 @@ pub fn make_services(ack_enabled: bool) -> Arc<Services> {
         forwarder,
         shutdown,
         config,
+        Arc::new(DashMap::new()),
     )
 }

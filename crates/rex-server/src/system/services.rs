@@ -14,8 +14,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use bytes::Bytes;
+use dashmap::DashMap;
 use rex_core::RexClientInner;
 use rex_persistence::OfflineMessage;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::RexSystemConfig;
@@ -59,6 +61,10 @@ pub struct Services {
     /// etc.) and the handler gate checks can read it without a separate
     /// `RexSystem` reference.
     pub config: RexSystemConfig,
+
+    /// Per-client cancellation signals. Created in `add_client`,
+    /// cancelled by admin disconnect, awaited by the transport loop.
+    pub client_shutdowns: Arc<DashMap<u128, CancellationToken>>,
 }
 
 impl Services {
@@ -72,6 +78,7 @@ impl Services {
         forwarder: Arc<dyn Forwarder>,
         shutdown: Arc<Shutdown>,
         config: RexSystemConfig,
+        client_shutdowns: Arc<DashMap<u128, CancellationToken>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             registry,
@@ -82,7 +89,35 @@ impl Services {
             forwarder,
             shutdown,
             config,
+            client_shutdowns,
         })
+    }
+
+    /* ---------------- per-client shutdown tokens ---------------- */
+
+    /// Register a new per-client cancellation token. The caller (transport
+    /// loop) receives the token; admin disconnect will cancel it.
+    pub fn register_client_shutdown(&self, id: u128) -> CancellationToken {
+        let token = CancellationToken::new();
+        self.client_shutdowns.insert(id, token.clone());
+        token
+    }
+
+    /// Remove a per-client token (call when the transport loop has exited).
+    pub fn unregister_client_shutdown(&self, id: u128) {
+        self.client_shutdowns.remove(&id);
+    }
+
+    /// Admin-triggered disconnect: cancel the token if present. Returns
+    /// true if a token was found.
+    pub fn cancel_client(&self, id: u128) -> bool {
+        match self.client_shutdowns.get(&id) {
+            Some(t) => {
+                t.cancel();
+                true
+            }
+            None => false,
+        }
     }
 
     /* ---------------- composite ops (multi-port) ---------------- */
@@ -200,5 +235,77 @@ impl Services {
         rex_data.set_retcode(retcode);
         sender.send_buf(rex_data.pack_ref()).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::system::ack::AckTrackerImpl;
+    use crate::system::client_registry::ClientRegistryImpl;
+    use crate::system::forwarder::NetworkForwarder;
+    use crate::system::offline::NoopOfflineBuffer;
+    use crate::system::router::ClusterRouter;
+
+    /// Build a `Services` bundle with real implementations / no-op stubs.
+    /// Uses the same `TestClusterPort` / `ClientRegistryImpl` /
+    /// `AckTrackerImpl` / `NoopOfflineBuffer` / `ClusterRouter` /
+    /// `NetworkForwarder` that `handler::test_util::make_services`
+    /// uses, but inlines the wiring so this test module does not
+    /// depend on the handler test helper itself (which calls
+    /// `Services::new`).
+    fn make_services() -> Arc<Services> {
+        let registry = ClientRegistryImpl::new();
+        let cluster: Arc<dyn ClusterPort> =
+            Arc::new(crate::handler::test_util::TestClusterPort::new());
+        let acks: Arc<dyn AckTracker> = AckTrackerImpl::new(60);
+        let offline: Arc<dyn OfflineBuffer> = Arc::new(NoopOfflineBuffer);
+        let router: Arc<dyn Router> = ClusterRouter::new(registry.clone(), cluster.clone());
+        let forwarder: Arc<dyn Forwarder> = NetworkForwarder::new(
+            Arc::new(arc_swap::ArcSwap::from_pointee(None)),
+            Arc::new(arc_swap::ArcSwap::from_pointee(None)),
+            rex_cluster::types::NodeId::new("test-node"),
+            registry.clone(),
+        );
+        let shutdown = Shutdown::new();
+        let config = RexSystemConfig::from_id("test");
+        let client_shutdowns: Arc<DashMap<u128, CancellationToken>> = Arc::new(DashMap::new());
+        Services::new(
+            registry,
+            acks,
+            offline,
+            cluster,
+            router,
+            forwarder,
+            shutdown,
+            config,
+            client_shutdowns,
+        )
+    }
+
+    #[tokio::test]
+    async fn cancel_client_propagates() {
+        let s = make_services();
+        let token = s.register_client_shutdown(0xCAFE);
+        assert!(!token.is_cancelled());
+        assert!(s.cancel_client(0xCAFE));
+        // Yield once so the cancel propagates through any internal channels.
+        tokio::task::yield_now().await;
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn cancel_unknown_client_returns_false() {
+        let s = make_services();
+        assert!(!s.cancel_client(0xDEAD));
+    }
+
+    #[tokio::test]
+    async fn unregister_removes_token() {
+        let s = make_services();
+        let _t = s.register_client_shutdown(0xBEEF);
+        assert!(s.cancel_client(0xBEEF));
+        s.unregister_client_shutdown(0xBEEF);
+        assert!(!s.cancel_client(0xBEEF));
     }
 }
