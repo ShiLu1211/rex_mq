@@ -1,5 +1,6 @@
 pub(crate) mod base;
 pub(crate) mod driver;
+mod metrics_sender;
 mod quic;
 mod tcp;
 mod websocket;
@@ -9,3 +10,4 @@ pub use tcp::TcpServer;
 pub use websocket::WebSocketServer;
 
 pub(crate) use base::parse_and_handle_buffer;
+pub(crate) use metrics_sender::MetricsSender;

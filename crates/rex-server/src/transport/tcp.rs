@@ -6,6 +6,7 @@ use rex_sender::TcpSender;
 use tokio::net::{TcpListener, TcpStream, tcp::OwnedReadHalf};
 use tracing::{info, warn};
 
+use super::MetricsSender;
 use super::base::ServerBase;
 use super::driver::{ConnectionDriver, TcpByteSource};
 use crate::{RexServerConfig, RexServerTrait, Services};
@@ -78,7 +79,8 @@ impl TcpServer {
         }
 
         let (reader, writer) = stream.into_split();
-        let sender = Arc::new(TcpSender::new(writer));
+        let raw_sender: Arc<dyn rex_core::RexSenderTrait> = Arc::new(TcpSender::new(writer));
+        let sender = MetricsSender::new(raw_sender, "tcp");
         let peer = Arc::new(RexClientInner::new(new_uuid(), peer_addr, "", sender));
         peer.set_transport_label("tcp");
 
@@ -118,6 +120,7 @@ impl TcpServer {
             &self.base.services,
             &peer,
             "TCP",
+            "tcp",
             self.base.config.max_buffer_size,
         );
         let source = TcpByteSource {

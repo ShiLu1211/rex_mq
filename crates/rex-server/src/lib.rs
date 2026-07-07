@@ -27,6 +27,7 @@ use tracing::{info, warn};
 use rex_cluster::ClusterConfig as RexClusterConfig;
 use rex_cluster::types::ClusterMessage;
 use rex_core::Protocol;
+use rex_observability::metrics::set_cluster_peers;
 use rex_observability::probe::traits::{ClusterSnapshot, ForwarderSnapshot, PersistenceSnapshot};
 use rex_observability::probe::{
     ClusterHealthProbe, ForwarderHealthProbe, PersistenceHealthProbe, RegistryHealthProbe,
@@ -170,7 +171,7 @@ pub async fn build_services(
         registry.clone(),
     );
 
-    Services::new(
+    let services = Services::new(
         registry,
         acks,
         offline,
@@ -182,7 +183,13 @@ pub async fn build_services(
         Arc::new(dashmap::DashMap::new()),
         Arc::new(rex_observability::health::HealthRegistry::new()),
         Arc::new(parking_lot::Mutex::new(None::<SocketAddr>)),
-    )
+    );
+
+    // Touch the gauge so it appears in /metrics even when cluster is
+    // disabled — the live value is updated by ServerClusterManager as
+    // nodes join / leave.
+    set_cluster_peers(0);
+    services
 }
 
 /// Start the cluster manager and wire it into Services.

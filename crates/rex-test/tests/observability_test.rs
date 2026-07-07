@@ -130,4 +130,36 @@ mod tests {
         sleep(Duration::from_millis(200)).await;
         Ok(())
     }
+
+    /// The `rex_cluster_peers` gauge must show up in `/metrics` even
+    /// when cluster is disabled. `build_services` initialises the
+    /// gauge to 0 so the metric is registered at scrape time; the
+    /// `ServerClusterManager` then updates it as nodes join/leave.
+    #[tokio::test]
+    async fn cluster_peers_gauge_appears_in_scrape() -> Result<()> {
+        let mut ss = TestEnv::new().await;
+        let _server = ss.start_server(Protocol::Tcp).await?;
+
+        // Give the admin server a moment to bind and the gauge to be
+        // initialised.
+        sleep(Duration::from_millis(200)).await;
+
+        let admin_addr = ss.admin_addr().expect("admin addr");
+        let body = reqwest::get(format!("http://{}/metrics", admin_addr))
+            .await
+            .expect("scrape /metrics")
+            .text()
+            .await
+            .expect("scrape body");
+
+        assert!(
+            body.contains("rex_cluster_peers"),
+            "metrics body missing `rex_cluster_peers`: {}",
+            body
+        );
+
+        ss.shutdown().await;
+        sleep(Duration::from_millis(200)).await;
+        Ok(())
+    }
 }

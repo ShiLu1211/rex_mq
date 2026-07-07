@@ -8,6 +8,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::accept_async;
 use tracing::{info, warn};
 
+use super::MetricsSender;
 use super::base::ServerBase;
 use super::driver::{ConnectionDriver, WebSocketByteSource};
 use crate::{RexServerConfig, RexServerTrait, Services};
@@ -85,7 +86,9 @@ impl WebSocketServer {
         };
 
         let (sink, mut stream) = ws_stream.split();
-        let sender = Arc::new(WebSocketSender::new_server(sink));
+        let raw_sender: Arc<dyn rex_core::RexSenderTrait> =
+            Arc::new(WebSocketSender::new_server(sink));
+        let sender = MetricsSender::new(raw_sender, "websocket");
         let peer = Arc::new(RexClientInner::new(new_uuid(), peer_addr, "", sender));
         peer.set_transport_label("websocket");
 
@@ -129,6 +132,7 @@ impl WebSocketServer {
             &self.base.services,
             &peer,
             "WebSocket",
+            "websocket",
             self.base.config.max_buffer_size,
         );
         let source = WebSocketByteSource {

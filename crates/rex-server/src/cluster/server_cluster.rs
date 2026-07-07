@@ -9,6 +9,7 @@ use parking_lot::RwLock;
 use rex_cluster::node::NodeManager;
 use rex_cluster::route_table::GlobalRouteTable;
 use rex_cluster::types::{ClusterConfig as RexClusterConfig, ClusterMessage, NodeId, NodeInfo};
+use rex_observability::metrics::set_cluster_peers;
 use tokio::sync::mpsc;
 
 use crate::{ClusterPort, Services};
@@ -70,6 +71,10 @@ impl ServerClusterManager {
         let local_addr = config.listen_addr.to_string();
         self.route_table
             .add_node(local_node_id_str.clone(), local_addr);
+        // Observability: track the local node in the peer gauge. The
+        // gauge is "peers including self"; subtracting the local
+        // node is the caller's job if they want peers-only.
+        set_cluster_peers(self.get_nodes().len() as i64);
         tracing::info!("Added local node {} to route table", local_node_id_str);
 
         let (tx, rx) = mpsc::unbounded_channel::<ClusterMessage>();
@@ -126,6 +131,7 @@ impl ServerClusterManager {
                     let node_id = node_info.node_id.to_string();
                     if node_id != local_node_id.as_str() {
                         route_table.add_node(node_id.clone(), node_info.listen_addr.to_string());
+                        set_cluster_peers(self.get_nodes().len() as i64);
                         tracing::info!("Node {} joined the cluster via gossip", node_id);
 
                         // Send back our node info so the joining node knows about us
@@ -155,6 +161,7 @@ impl ServerClusterManager {
                         tracing::debug!("Processing node {} from NodeList", node_id);
                         if node_id != local_node_id.as_str() {
                             route_table.add_node(node_id.clone(), listen_addr.to_string());
+                            set_cluster_peers(self.get_nodes().len() as i64);
                             tracing::info!("Added node {} from NodeList", node_id);
 
                             // Connect to the node if not already connected

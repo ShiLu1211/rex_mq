@@ -9,6 +9,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::io::AsyncReadExt;
 use tracing::{info, warn};
 
+use super::MetricsSender;
 use super::base::ServerBase;
 use super::driver::{ByteSource, ConnectionDriver};
 use crate::{RexServerConfig, RexServerTrait, Services};
@@ -102,13 +103,14 @@ impl QuicServer {
         info!("Handling QUIC connection from {}", peer_addr);
 
         // 打开第一个单向流用于发送
-        let sender = match connection.open_uni().await {
+        let raw_sender = match connection.open_uni().await {
             Ok(stream) => Arc::new(QuicSender::new(stream)),
             Err(e) => {
                 warn!("Failed to open initial stream for {}: {}", peer_addr, e);
                 return;
             }
         };
+        let sender = MetricsSender::new(raw_sender, "quic");
 
         let peer = Arc::new(RexClientInner::new(new_uuid(), peer_addr, "", sender));
         peer.set_transport_label("quic");
@@ -179,6 +181,7 @@ impl QuicServer {
             &self.base.services,
             &peer,
             "QUIC",
+            "quic",
             self.base.config.max_buffer_size,
         );
         let source = QuicByteSource { recv_stream };

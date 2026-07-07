@@ -21,6 +21,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::{Services, transport::parse_and_handle_buffer};
+use rex_observability::metrics::inc_bytes_in;
 
 /// Abstraction over a source of byte chunks. The driver polls this and
 /// accumulates into a `BytesMut` for `parse_and_handle_buffer`.
@@ -44,6 +45,10 @@ pub struct ConnectionDriver<'a> {
     services: &'a Arc<Services>,
     peer: &'a Arc<RexClientInner>,
     peer_label: &'a str,
+    /// Lowercased transport name (e.g. "tcp", "quic", "websocket") used
+    /// as the label for the `rex_bytes_in_total` counter. Distinct from
+    /// `peer_label` which is the display form used in logs.
+    transport_label: &'a str,
     max_buffer_size: usize,
     shutdown: broadcast::Receiver<()>,
     client_token: CancellationToken,
@@ -54,6 +59,7 @@ impl<'a> ConnectionDriver<'a> {
         services: &'a Arc<Services>,
         peer: &'a Arc<RexClientInner>,
         peer_label: &'a str,
+        transport_label: &'a str,
         max_buffer_size: usize,
     ) -> Self {
         let shutdown = services.shutdown.subscribe();
@@ -62,6 +68,7 @@ impl<'a> ConnectionDriver<'a> {
             services,
             peer,
             peer_label,
+            transport_label,
             max_buffer_size,
             shutdown,
             client_token,
@@ -81,6 +88,10 @@ impl<'a> ConnectionDriver<'a> {
                 result = source.poll_read() => {
                     match result {
                         Ok(Some(bytes)) => {
+                            // Observability: record bytes received on this
+                            // transport. Counter is registered lazily on first
+                            // call.
+                            inc_bytes_in(self.transport_label, bytes.len() as u64);
                             buffer.extend_from_slice(&bytes);
                             debug!(
                                 "{} received {} bytes (buf now {})",
