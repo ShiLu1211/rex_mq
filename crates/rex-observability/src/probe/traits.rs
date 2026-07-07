@@ -36,9 +36,11 @@ pub struct ClientSummary {
 
 /// Hook used by `/admin/clients/:id/disconnect` (Task 10). Implementing
 /// adapters call the live client's cancel signal. `None` causes the
-/// endpoint to return 503.
+/// endpoint to return 503. Returning `false` from `cancel` indicates the
+/// id was unknown — the endpoint then replies 404.
 pub trait ClientCancel: Send + Sync {
-    fn cancel(&self, client_id: u64);
+    /// Cancel the per-client token. Return true iff a token was found.
+    fn cancel(&self, id: u128) -> bool;
 }
 
 pub trait ClusterSnapshot: Send + Sync {

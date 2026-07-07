@@ -8,7 +8,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
 };
 use prometheus::{Encoder, TextEncoder};
 use serde::Serialize;
@@ -44,6 +44,7 @@ pub fn build_router_with_state(state: AdminState) -> Router {
 
     let protected = Router::new()
         .route("/admin/clients", get(list_clients_handler))
+        .route("/admin/clients/:id/disconnect", post(disconnect_handler))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_admin_token,
@@ -172,4 +173,28 @@ async fn list_clients_handler(State(state): State<AdminState>) -> impl IntoRespo
         })
         .collect();
     (StatusCode::OK, Json(body))
+}
+
+/// `POST /admin/clients/:id/disconnect` — admin-triggered per-client
+/// disconnect. Returns 202 on success, 404 when the id is unknown, 503
+/// when the cancel hook isn't wired (e.g. older rex-server adapter not
+/// present), 400 on a malformed id.
+async fn disconnect_handler(
+    State(state): State<AdminState>,
+    axum::extract::Path(id_hex): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let id = match u128::from_str_radix(&id_hex, 16) {
+        Ok(n) => n,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid id").into_response(),
+    };
+    match state.client_cancel.as_ref() {
+        Some(c) => {
+            if c.cancel(id) {
+                (StatusCode::ACCEPTED, "disconnect scheduled").into_response()
+            } else {
+                (StatusCode::NOT_FOUND, "client not found").into_response()
+            }
+        }
+        None => (StatusCode::SERVICE_UNAVAILABLE, "cancel not wired").into_response(),
+    }
 }

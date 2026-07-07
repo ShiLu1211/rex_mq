@@ -21,7 +21,7 @@ pub use config::RexSystemConfig;
 #[allow(unused_imports)]
 pub use forwarder::{DeliveryOutcome, Forwarder, FwdResult, NetworkForwarder};
 pub use janitor::Janitor;
-pub use mod_adapters::RegistryObsAdapter;
+pub use mod_adapters::{ClientCancelAdapter, RegistryObsAdapter};
 pub use offline::{NoopOfflineBuffer, OfflineBuffer, SledOfflineBuffer};
 pub use router::{ClusterRouter, RoutePlan, Router};
 pub use services::Services;

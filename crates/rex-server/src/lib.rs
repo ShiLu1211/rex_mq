@@ -10,10 +10,10 @@ pub use crate::config::{ClusterConfig, RexServerConfig};
 pub use crate::transport::{QuicServer, TcpServer, WebSocketServer};
 pub use server::RexServerTrait;
 pub use system::{
-    AckTracker, AckTrackerImpl, ClientRegistry, ClientRegistryImpl, ClientSnapshot, ClusterPort,
-    ClusterRouter, DeliveryOutcome, Forwarder, FwdResult, Janitor, NetworkForwarder,
-    NoopOfflineBuffer, OfflineBuffer, PendingAckInfo, RegistryObsAdapter, RexSystemConfig,
-    RoutePlan, Router, Services, Shutdown, SledOfflineBuffer,
+    AckTracker, AckTrackerImpl, ClientCancelAdapter, ClientRegistry, ClientRegistryImpl,
+    ClientSnapshot, ClusterPort, ClusterRouter, DeliveryOutcome, Forwarder, FwdResult, Janitor,
+    NetworkForwarder, NoopOfflineBuffer, OfflineBuffer, PendingAckInfo, RegistryObsAdapter,
+    RexSystemConfig, RoutePlan, Router, Services, Shutdown, SledOfflineBuffer,
 };
 
 use std::sync::Arc;

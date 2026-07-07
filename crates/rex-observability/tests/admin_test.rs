@@ -1,12 +1,17 @@
 //! Integration tests for the admin HTTP server.
 
+#![allow(clippy::unwrap_used)]
+
+use std::sync::Mutex;
 use std::{net::SocketAddr, sync::Arc};
 
 use rex_observability::{
     admin::{AdminConfig, AdminState, build_router, build_router_with_state},
     health::{HealthProbe, HealthRegistry, ProbeResult},
     http::serve,
+    probe::traits::ClientCancel,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::time::{Duration, sleep};
 
 #[allow(clippy::unwrap_used)]
@@ -153,6 +158,82 @@ async fn admin_clients_rejects_wrong_token() {
         .await
         .expect("request");
     assert_eq!(resp.status().as_u16(), 401);
+    handle.shutdown();
+    sleep(Duration::from_millis(100)).await;
+}
+
+/// Records whether `cancel` was invoked and which id it received.
+struct FakeCancel {
+    flag: AtomicBool,
+    last_id: Mutex<Option<u128>>,
+}
+
+impl ClientCancel for FakeCancel {
+    fn cancel(&self, id: u128) -> bool {
+        self.flag.store(true, Ordering::SeqCst);
+        *self.last_id.lock().unwrap() = Some(id);
+        true
+    }
+}
+
+#[tokio::test]
+async fn disconnect_returns_202() {
+    let reg = std::sync::Arc::new(HealthRegistry::new());
+    let cancel = std::sync::Arc::new(FakeCancel {
+        flag: AtomicBool::new(false),
+        last_id: Mutex::new(None),
+    });
+    let state = AdminState {
+        health: reg,
+        admin: AdminConfig {
+            token: Some("tok".into()),
+        },
+        registry: None,
+        client_cancel: Some(cancel.clone()),
+    };
+    let router = build_router_with_state(state);
+    let handle = serve(router, free_port()).await.expect("bind");
+    let url = format!("http://{}/admin/clients/00CAFE/disconnect", handle.addr);
+
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header("authorization", "Bearer tok")
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(resp.status().as_u16(), 202);
+    assert!(cancel.flag.load(Ordering::SeqCst));
+    assert_eq!(*cancel.last_id.lock().unwrap(), Some(0xCAFE));
+    handle.shutdown();
+    sleep(Duration::from_millis(100)).await;
+}
+
+#[tokio::test]
+async fn disconnect_without_auth_returns_401() {
+    let reg = std::sync::Arc::new(HealthRegistry::new());
+    let cancel = std::sync::Arc::new(FakeCancel {
+        flag: AtomicBool::new(false),
+        last_id: Mutex::new(None),
+    });
+    let state = AdminState {
+        health: reg,
+        admin: AdminConfig {
+            token: Some("tok".into()),
+        },
+        registry: None,
+        client_cancel: Some(cancel.clone()),
+    };
+    let router = build_router_with_state(state);
+    let handle = serve(router, free_port()).await.expect("bind");
+    let url = format!("http://{}/admin/clients/00CAFE/disconnect", handle.addr);
+
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(resp.status().as_u16(), 401);
+    assert!(!cancel.flag.load(Ordering::SeqCst));
     handle.shutdown();
     sleep(Duration::from_millis(100)).await;
 }

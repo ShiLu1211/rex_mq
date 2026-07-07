@@ -8,9 +8,12 @@
 
 use std::sync::Arc;
 
-use rex_observability::probe::traits::{ClientSummary, RegistrySnapshot as ObsRegistrySnapshot};
+use rex_observability::probe::traits::{
+    ClientCancel as ObsClientCancel, ClientSummary, RegistrySnapshot as ObsRegistrySnapshot,
+};
 
 use crate::system::client_registry::{ClientRegistry, ClientRegistryImpl};
+use crate::system::services::Services;
 
 /// Bridge from the rex-server [`ClientRegistryImpl`] to the
 /// rex-observability [`ObsRegistrySnapshot`] trait.
@@ -46,6 +49,18 @@ impl ObsRegistrySnapshot for RegistryObsAdapter {
                 connected_secs: s.connected_secs,
             })
             .collect()
+    }
+}
+
+/// Bridge from the observability `ClientCancel` trait to
+/// `Services::cancel_client`. Wraps a shared `Services` so the admin
+/// router can invoke per-client cancellation without depending on
+/// rex-server directly.
+pub struct ClientCancelAdapter(pub Arc<Services>);
+
+impl ObsClientCancel for ClientCancelAdapter {
+    fn cancel(&self, id: u128) -> bool {
+        self.0.cancel_client(id)
     }
 }
 

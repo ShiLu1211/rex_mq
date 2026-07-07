@@ -17,6 +17,7 @@ use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
 use rex_core::RexClientInner;
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::{Services, transport::parse_and_handle_buffer};
@@ -37,13 +38,15 @@ pub trait ByteSource: Unpin + Send {
 }
 
 /// Drives a single connection: reads chunks via `R: ByteSource`, calls
-/// `parse_and_handle_buffer`, exits on EOF or shutdown.
+/// `parse_and_handle_buffer`, exits on EOF, server shutdown, or
+/// per-client cancel.
 pub struct ConnectionDriver<'a> {
     services: &'a Arc<Services>,
     peer: &'a Arc<RexClientInner>,
     peer_label: &'a str,
     max_buffer_size: usize,
     shutdown: broadcast::Receiver<()>,
+    client_token: CancellationToken,
 }
 
 impl<'a> ConnectionDriver<'a> {
@@ -54,18 +57,22 @@ impl<'a> ConnectionDriver<'a> {
         max_buffer_size: usize,
     ) -> Self {
         let shutdown = services.shutdown.subscribe();
+        let client_token = services.register_client_shutdown(peer.id());
         Self {
             services,
             peer,
             peer_label,
             max_buffer_size,
             shutdown,
+            client_token,
         }
     }
 
-    /// Drive the connection until EOF or shutdown. Any error from the
-    /// `ByteSource` ends the loop. The shutdown signal is consulted
-    /// concurrently via `tokio::select!`.
+    /// Drive the connection until EOF, server shutdown, or admin-triggered
+    /// per-client cancel. Any error from the `ByteSource` ends the loop.
+    /// The shutdown signal and per-client token are consulted concurrently
+    /// via `tokio::select!`. Either termination path unregisters the
+    /// per-client token so the admin map does not leak entries.
     pub async fn drive<R: ByteSource>(mut self, mut source: R) {
         let mut buffer = BytesMut::with_capacity(self.max_buffer_size);
 
@@ -109,6 +116,12 @@ impl<'a> ConnectionDriver<'a> {
                         "{} shutting down due to server shutdown",
                         self.peer_label
                     );
+                    self.services.unregister_client_shutdown(self.peer.id());
+                    break;
+                }
+                _ = self.client_token.cancelled() => {
+                    debug!("{} admin-triggered disconnect", self.peer_label);
+                    self.services.unregister_client_shutdown(self.peer.id());
                     break;
                 }
             }
