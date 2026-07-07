@@ -16,6 +16,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use dashmap::DashMap;
 use rex_core::RexClientInner;
+use rex_observability::health::HealthRegistry;
 use rex_persistence::OfflineMessage;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -65,6 +66,11 @@ pub struct Services {
     /// Per-client cancellation signals. Created in `add_client`,
     /// cancelled by admin disconnect, awaited by the transport loop.
     pub client_shutdowns: Arc<DashMap<u128, CancellationToken>>,
+
+    /// Health-probe registry. Probes are registered after construction
+    /// in `lib.rs::open_server`. Shared with the observability admin
+    /// server so `/readyz` can read the same registry the handlers see.
+    pub health: Arc<HealthRegistry>,
 }
 
 impl Services {
@@ -79,6 +85,7 @@ impl Services {
         shutdown: Arc<Shutdown>,
         config: RexSystemConfig,
         client_shutdowns: Arc<DashMap<u128, CancellationToken>>,
+        health: Arc<HealthRegistry>,
     ) -> Arc<Self> {
         Arc::new(Self {
             registry,
@@ -90,6 +97,7 @@ impl Services {
             shutdown,
             config,
             client_shutdowns,
+            health,
         })
     }
 
@@ -280,6 +288,7 @@ mod tests {
             shutdown,
             config,
             client_shutdowns,
+            Arc::new(HealthRegistry::new()),
         )
     }
 

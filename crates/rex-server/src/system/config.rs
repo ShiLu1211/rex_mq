@@ -23,6 +23,12 @@ pub struct RexSystemConfig {
     pub ack_timeout: u64,
     #[serde(default = "default_ack_retries")]
     pub ack_retries: u32,
+    /// Observability stack configuration (admin addr, auth token,
+    /// tracing format, single-node tolerance). Defaults to the
+    /// `ObservabilityConfig::default()` shape so existing call sites
+    /// that don't touch this field keep working unchanged.
+    #[serde(default, skip)]
+    pub observability: rex_observability::ObservabilityConfig,
 }
 
 fn default_check_interval() -> u64 {
@@ -54,6 +60,7 @@ fn default_ack_retries() -> u32 {
 }
 
 impl RexSystemConfig {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         server_id: String,
         check_interval: u64,
@@ -77,6 +84,7 @@ impl RexSystemConfig {
             ack_enabled,
             ack_timeout,
             ack_retries,
+            observability: rex_observability::ObservabilityConfig::default(),
         }
     }
 
@@ -92,6 +100,7 @@ impl RexSystemConfig {
             ack_enabled: false,
             ack_timeout: 5000,
             ack_retries: 3,
+            observability: rex_observability::ObservabilityConfig::default(),
         }
     }
 }

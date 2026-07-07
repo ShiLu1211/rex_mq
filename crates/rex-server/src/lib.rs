@@ -26,6 +26,10 @@ use tracing::{info, warn};
 use rex_cluster::ClusterConfig as RexClusterConfig;
 use rex_cluster::types::ClusterMessage;
 use rex_core::Protocol;
+use rex_observability::probe::traits::{ClusterSnapshot, ForwarderSnapshot, PersistenceSnapshot};
+use rex_observability::probe::{
+    ClusterHealthProbe, ForwarderHealthProbe, PersistenceHealthProbe, RegistryHealthProbe,
+};
 
 pub async fn open_server(
     services: Arc<Services>,
@@ -44,6 +48,72 @@ pub async fn open_server(
     let janitor = Janitor::new(services.clone());
     tokio::spawn(async move {
         janitor.run(check_interval, client_timeout).await;
+    });
+
+    // Start observability (admin HTTP + tracing) and register the four
+    // production probes into the shared HealthRegistry. Built from the
+    // narrow observability-side traits so rex-observability stays
+    // free of rex-server dependencies. Probes are registered after
+    // `start` so they can run against the *live* Services fields
+    // (registry, cluster, offline buffer, forwarder).
+    let obs_cfg = services.config.observability.clone();
+    let registry_adapter: Arc<dyn rex_observability::probe::traits::RegistrySnapshot> =
+        Arc::new(RegistryObsAdapter(services.registry.clone()));
+    let cancel_adapter: Arc<dyn rex_observability::probe::traits::ClientCancel> =
+        Arc::new(ClientCancelAdapter(services.clone()));
+    let obs = rex_observability::ObservabilityHandle::start(
+        &obs_cfg,
+        services.health.clone(),
+        Some(registry_adapter.clone()),
+        Some(cancel_adapter.clone()),
+    )?;
+
+    struct ClusterAdapter(Arc<dyn ClusterPort>);
+    impl ClusterSnapshot for ClusterAdapter {
+        fn peer_count(&self) -> usize {
+            self.0.get_nodes().len().saturating_sub(1)
+        }
+        fn local_node_present(&self) -> bool {
+            self.0.get_local_node_id().is_some()
+        }
+    }
+    struct PersistenceAdapter(Arc<dyn OfflineBuffer>);
+    impl PersistenceSnapshot for PersistenceAdapter {
+        fn last_error(&self) -> Option<String> {
+            self.0.last_error()
+        }
+    }
+    struct ForwarderAdapter(Arc<dyn Forwarder>);
+    impl ForwarderSnapshot for ForwarderAdapter {
+        fn node_manager_ready(&self) -> bool {
+            self.0.is_cluster_started()
+        }
+    }
+
+    obs.health
+        .register(Arc::new(RegistryHealthProbe::new(registry_adapter)));
+    obs.health.register(Arc::new(ClusterHealthProbe::new(
+        Arc::new(ClusterAdapter(services.cluster.clone())),
+        obs_cfg.single_node_cluster_ok,
+    )));
+    obs.health
+        .register(Arc::new(PersistenceHealthProbe::new(Arc::new(
+            PersistenceAdapter(services.offline.clone()),
+        ))));
+    obs.health
+        .register(Arc::new(ForwarderHealthProbe::new(Arc::new(
+            ForwarderAdapter(services.forwarder.clone()),
+        ))));
+
+    // The handle is intentionally leaked into the admin HTTP task —
+    // it lives as long as the server. When `open_server` returns,
+    // the handle is moved into a tokio task that drops it on shutdown.
+    let mut shutdown_rx = services.shutdown.subscribe();
+    tokio::spawn(async move {
+        // Hold until the shutdown signal fires; on drop the HTTP
+        // server's shutdown_tx is sent.
+        let _ = shutdown_rx.recv().await;
+        obs.shutdown();
     });
 
     match server_config.protocol {
@@ -106,6 +176,7 @@ pub async fn build_services(
         shutdown,
         config,
         Arc::new(dashmap::DashMap::new()),
+        Arc::new(rex_observability::health::HealthRegistry::new()),
     )
 }
 

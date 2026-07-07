@@ -6,24 +6,25 @@
 //! So the trait surfaces it consumes are local mirrors declared in
 //! `probe::traits`, and rex-server provides the concrete impls.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use rex_observability::probe::traits::{
     ClientCancel as ObsClientCancel, ClientSummary, RegistrySnapshot as ObsRegistrySnapshot,
 };
 
-use crate::system::client_registry::{ClientRegistry, ClientRegistryImpl};
+use crate::system::client_registry::ClientRegistry;
 use crate::system::services::Services;
 
-/// Bridge from the rex-server [`ClientRegistryImpl`] to the
+/// Bridge from the rex-server [`ClientRegistry`] port to the
 /// rex-observability [`ObsRegistrySnapshot`] trait.
 ///
-/// The constructor takes the concrete `ClientRegistryImpl` (not a
-/// `dyn ClientRegistry`) so the adapter can read `title_count()` and
-/// `list_snapshots()` cheaply. The adapter itself is wrapped in an
-/// `Arc<dyn ObsRegistrySnapshot>` at the call site (see
-/// `open_server` for the wiring — that step is Task 11).
-pub struct RegistryObsAdapter(pub Arc<ClientRegistryImpl>);
+/// Takes the trait object (`Arc<dyn ClientRegistry>`) so it can be
+/// wired straight from `Services::registry` in `open_server`. Title
+/// count is derived from `list_snapshots()` — slightly more
+/// expensive than reading `ClientRegistryImpl::title_count()` but
+/// keeps the adapter free of concrete-type plumbing.
+pub struct RegistryObsAdapter(pub Arc<dyn ClientRegistry>);
 
 impl ObsRegistrySnapshot for RegistryObsAdapter {
     fn client_count(&self) -> usize {
@@ -31,7 +32,13 @@ impl ObsRegistrySnapshot for RegistryObsAdapter {
     }
 
     fn title_count(&self) -> usize {
-        self.0.title_count()
+        let mut titles = HashSet::new();
+        for snap in self.0.list_snapshots() {
+            for t in snap.titles {
+                titles.insert(t);
+            }
+        }
+        titles.len()
     }
 
     fn max_clients(&self) -> usize {
@@ -68,6 +75,7 @@ impl ObsClientCancel for ClientCancelAdapter {
 mod tests {
     use super::*;
     use crate::handler::test_util::dummy_client_with_id;
+    use crate::system::client_registry::ClientRegistryImpl;
 
     fn make_adapter() -> (Arc<ClientRegistryImpl>, RegistryObsAdapter) {
         let reg = ClientRegistryImpl::new();

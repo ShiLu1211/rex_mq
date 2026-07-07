@@ -104,6 +104,14 @@ pub trait Forwarder: Send + Sync {
     /// Returns the number of sends the transport accepted (best-effort,
     /// may be `0` if the cluster is not started).
     async fn broadcast(&self, msg: &ClusterMessage) -> usize;
+
+    /// True iff the cluster is started (the `NodeManager` slot is
+    /// populated). Used by the observability `/readyz` forwarder probe.
+    /// Default returns `false` so older / mock implementations stay
+    /// compatible.
+    fn is_cluster_started(&self) -> bool {
+        false
+    }
 }
 
 /// Production [`Forwarder`] implementation.
@@ -341,6 +349,13 @@ impl Forwarder for NetworkForwarder {
             }
         }
         count
+    }
+
+    fn is_cluster_started(&self) -> bool {
+        // `ArcSwap::load` returns `Arc<Option<Arc<NodeManager>>>`;
+        // `is_some` only checks the Option — the inner `Arc` is just
+        // a wrapper around the populated slot.
+        self.node_manager.load().is_some()
     }
 }
 

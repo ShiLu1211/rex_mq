@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use parking_lot::Mutex;
 use rex_core::RexClientInner;
 use rex_persistence::{OfflineMessage, PersistenceStore, StoreConfig};
 use tracing::warn;
@@ -47,12 +48,21 @@ pub trait OfflineBuffer: Send + Sync {
 
     /// Flush + close the underlying store. Idempotent.
     async fn close(&self);
+
+    /// Returns the last error the buffer observed (e.g. a `sled`
+    /// write failure). `None` when no error has happened since process
+    /// start. Surfaced to the observability `/readyz` probe.
+    fn last_error(&self) -> Option<String>;
 }
 
 /// Sled-backed production implementation. Owns its `PersistenceStore`.
 #[allow(dead_code)] // Port added in commit 5; consumed in commit 7+.
 pub struct SledOfflineBuffer {
     store: Arc<PersistenceStore>,
+    /// Last error observed by any write/read. `None` when no error has
+    /// happened since process start. Read by the observability
+    /// `/readyz` persistence probe.
+    last_error: Arc<Mutex<Option<String>>>,
 }
 
 impl SledOfflineBuffer {
@@ -66,6 +76,7 @@ impl SledOfflineBuffer {
         let store = PersistenceStore::open(config).await?;
         Ok(Arc::new(Self {
             store: Arc::new(store),
+            last_error: Arc::new(Mutex::new(None)),
         }))
     }
 }
@@ -78,45 +89,83 @@ impl OfflineBuffer for SledOfflineBuffer {
             client.title_iter(),
             client.local_addr().to_string(),
         );
-        if let Err(e) = self.store.save_client(&state).await {
-            warn!("Failed to save client state: {}", e);
+        match self.store.save_client(&state).await {
+            Ok(()) => *self.last_error.lock() = None,
+            Err(e) => {
+                warn!("Failed to save client state: {}", e);
+                *self.last_error.lock() = Some(e.to_string());
+            }
         }
     }
 
     async fn remove_client(&self, client_id: u128) {
-        if let Err(e) = self.store.remove_client(client_id).await {
-            warn!("Failed to remove client state: {}", e);
+        match self.store.remove_client(client_id).await {
+            Ok(()) => *self.last_error.lock() = None,
+            Err(e) => {
+                warn!("Failed to remove client state: {}", e);
+                *self.last_error.lock() = Some(e.to_string());
+            }
         }
     }
 
     async fn queue_offline_message(&self, target_client_id: u128, title: &str, payload: Bytes) {
         let msg = OfflineMessage::new(target_client_id, title.to_string(), payload);
-        if let Err(e) = self.store.add_offline_message(&msg).await {
-            warn!("Failed to queue offline message: {}", e);
+        match self.store.add_offline_message(&msg).await {
+            Ok(()) => *self.last_error.lock() = None,
+            Err(e) => {
+                warn!("Failed to queue offline message: {}", e);
+                *self.last_error.lock() = Some(e.to_string());
+            }
         }
     }
 
     async fn get_offline_messages(&self, client_id: u128) -> Vec<OfflineMessage> {
-        self.store
-            .get_offline_messages(client_id)
-            .await
-            .unwrap_or_default()
+        match self.store.get_offline_messages(client_id).await {
+            Ok(v) => {
+                *self.last_error.lock() = None;
+                v
+            }
+            Err(e) => {
+                warn!("Failed to read offline messages: {}", e);
+                *self.last_error.lock() = Some(e.to_string());
+                Vec::new()
+            }
+        }
     }
 
     async fn clear_offline_messages(&self, client_id: u128) {
-        if let Err(e) = self.store.clear_offline_messages(client_id).await {
-            warn!("Failed to clear offline messages: {}", e);
+        match self.store.clear_offline_messages(client_id).await {
+            Ok(()) => *self.last_error.lock() = None,
+            Err(e) => {
+                warn!("Failed to clear offline messages: {}", e);
+                *self.last_error.lock() = Some(e.to_string());
+            }
         }
     }
 
     async fn get_offline_count(&self, client_id: u128) -> usize {
-        self.store.get_offline_count(client_id).await.unwrap_or(0)
+        match self.store.get_offline_count(client_id).await {
+            Ok(n) => {
+                *self.last_error.lock() = None;
+                n
+            }
+            Err(e) => {
+                warn!("Failed to read offline count: {}", e);
+                *self.last_error.lock() = Some(e.to_string());
+                0
+            }
+        }
     }
 
     async fn close(&self) {
         if let Err(e) = self.store.close().await {
             warn!("Error closing persistence store: {}", e);
+            *self.last_error.lock() = Some(e.to_string());
         }
+    }
+
+    fn last_error(&self) -> Option<String> {
+        self.last_error.lock().clone()
     }
 }
 
@@ -141,6 +190,9 @@ impl OfflineBuffer for NoopOfflineBuffer {
         0
     }
     async fn close(&self) {}
+    fn last_error(&self) -> Option<String> {
+        None
+    }
 }
 
 #[cfg(test)]

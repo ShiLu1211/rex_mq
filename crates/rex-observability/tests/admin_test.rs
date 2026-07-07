@@ -80,9 +80,8 @@ impl HealthProbe for Up {
 
 #[tokio::test]
 async fn readyz_aggregates_probes() {
-    let mut reg = HealthRegistry::new();
+    let reg = Arc::new(HealthRegistry::new());
     reg.register(Arc::new(Up));
-    let reg = Arc::new(reg);
     let state = AdminState {
         health: reg,
         admin: AdminConfig::default(),

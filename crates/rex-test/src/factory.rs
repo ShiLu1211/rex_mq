@@ -10,6 +10,7 @@ use rex_client::{
     ConnectionState, RexClientConfig, RexClientHandlerTrait, RexClientTrait, open_client,
 };
 use rex_core::{Protocol, RexClientInner, RexCommand, RexData};
+use rex_observability::ObservabilityConfig;
 use rex_server::{
     ClusterConfig, RexServerConfig, RexServerTrait, RexSystemConfig, Services, Shutdown,
     build_services, open_server,
@@ -166,9 +167,17 @@ impl TestEnv {
         // Use random base port to avoid conflicts between parallel tests
         let base_port = 28800 + (rand::random::<u16>() % 1000);
         let cluster_port = 38800 + (rand::random::<u16>() % 1000);
+        // Ask the kernel for an ephemeral observability port (port 0)
+        // so parallel tests never collide on 9090.
         let shutdown = Shutdown::new();
-        let services =
-            build_services(RexSystemConfig::from_id("test-system"), shutdown, None).await;
+        let mut config = RexSystemConfig::from_id("test-system");
+        config.observability = ObservabilityConfig {
+            admin_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            admin_token: None,
+            tracing_format: rex_observability::tracing_setup::TracingFormat::Pretty,
+            single_node_cluster_ok: true,
+        };
+        let services = build_services(config, shutdown, None).await;
         Self {
             services,
             servers: HashMap::new(),
@@ -189,6 +198,14 @@ impl TestEnv {
         // Use random base port to avoid conflicts between parallel tests
         let base_port = 28800 + (rand::random::<u16>() % 1000);
         let cluster_port = 38800 + (rand::random::<u16>() % 1000);
+        // Ask the kernel for an ephemeral observability port (port 0)
+        // so parallel tests never collide on 9090.
+        config.observability = ObservabilityConfig {
+            admin_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            admin_token: None,
+            tracing_format: rex_observability::tracing_setup::TracingFormat::Pretty,
+            single_node_cluster_ok: true,
+        };
         let shutdown = Shutdown::new();
         let services = build_services(config, shutdown, None).await;
         Self {

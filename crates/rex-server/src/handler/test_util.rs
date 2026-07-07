@@ -17,6 +17,7 @@ use crate::{
     AckTracker, ClusterPort, ClusterRouter, ForwardRequest, NetworkForwarder, NoopOfflineBuffer,
     OfflineBuffer, PendingAckInfo, RexSystemConfig, Services, Shutdown,
 };
+use rex_observability::health::HealthRegistry;
 
 // ---- AckTracker mock -----------------------------------------------------
 
@@ -172,5 +173,6 @@ pub fn make_services(ack_enabled: bool) -> Arc<Services> {
         shutdown,
         config,
         Arc::new(DashMap::new()),
+        Arc::new(HealthRegistry::new()),
     )
 }
