@@ -189,7 +189,7 @@ mod tests {
         let metric_families = reg.gather();
         let names: Vec<String> = metric_families
             .iter()
-            .map(|m| m.get_name().to_string())
+            .map(|m| m.name().to_string())
             .collect();
         for expected in [
             "rex_messages_published_total",

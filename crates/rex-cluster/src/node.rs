@@ -282,32 +282,39 @@ impl NodeManager {
 
     /// Handle vote request
     async fn handle_request_vote(&self, vote_req: crate::types::RequestVoteMessage) -> Result<()> {
-        let mut term = self.term.write();
-        let mut role = self.role.write();
-        let mut voted_for = self.voted_for.write();
+        // Compute the vote decision while holding the locks, then drop the
+        // guards BEFORE any `.await` — parking_lot's sync RwLock guards
+        // must not span await points (clippy::await_holding_lock).
+        let (term_value, vote_granted) = {
+            let mut term = self.term.write();
+            let mut role = self.role.write();
+            let mut voted_for = self.voted_for.write();
 
-        let mut vote_granted = false;
+            let mut vote_granted = false;
 
-        // Vote for candidate if:
-        // 1. Candidate's term >= our term
-        // 2. We haven't voted for anyone, or we've voted for this candidate
-        // 3. Candidate's log is at least as up-to-date as ours
-        if vote_req.term >= *term {
-            if voted_for.is_none() || voted_for.as_ref() == Some(&vote_req.candidate_id) {
-                vote_granted = true;
-                *voted_for = Some(vote_req.candidate_id.clone());
+            // Vote for candidate if:
+            // 1. Candidate's term >= our term
+            // 2. We haven't voted for anyone, or we've voted for this candidate
+            // 3. Candidate's log is at least as up-to-date as ours
+            if vote_req.term >= *term {
+                if voted_for.is_none() || voted_for.as_ref() == Some(&vote_req.candidate_id) {
+                    vote_granted = true;
+                    *voted_for = Some(vote_req.candidate_id.clone());
+                }
+
+                // Update our term
+                *term = vote_req.term;
+
+                // Become follower
+                *role = ClusterRole::Follower;
             }
 
-            // Update our term
-            *term = vote_req.term;
-
-            // Become follower
-            *role = ClusterRole::Follower;
-        }
+            (*term, vote_granted)
+        };
 
         // Send vote response
         let vote_resp = crate::types::VoteResponseMessage {
-            term: *term,
+            term: term_value,
             vote_granted,
             voter_id: self.config.node_id.clone(),
         };

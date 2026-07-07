@@ -24,9 +24,16 @@ pub struct ClientBase {
     pub pending_acks: DashMap<u64, PendingAckInfo>,
 }
 
-/// Information about a pending ACK
+/// Information about a pending ACK.
+///
+/// `timestamp` / `title` are reserved for future diagnostics (retransmit
+/// tracking, age-based eviction, per-title metrics). They are currently
+/// populated on insert but not yet read; suppress the dead-code lint
+/// until the planned consumers land.
 pub struct PendingAckInfo {
+    #[allow(dead_code)]
     pub timestamp: u64,
+    #[allow(dead_code)]
     pub title: String,
 }
 

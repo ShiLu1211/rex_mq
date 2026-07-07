@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used)]
-#![allow(clippy::unwrap_used)]
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use rex_core::{RexCommand, RexData};
 use std::hint::black_box;
