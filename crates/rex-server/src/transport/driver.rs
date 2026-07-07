@@ -78,8 +78,9 @@ impl<'a> ConnectionDriver<'a> {
     /// Drive the connection until EOF, server shutdown, or admin-triggered
     /// per-client cancel. Any error from the `ByteSource` ends the loop.
     /// The shutdown signal and per-client token are consulted concurrently
-    /// via `tokio::select!`. Either termination path unregisters the
-    /// per-client token so the admin map does not leak entries.
+    /// via `tokio::select!`. The per-client token is unregistered once,
+    /// after the loop exits, so every termination path (EOF, read error,
+    /// server shutdown, per-client cancel) cleans up the admin map.
     pub async fn drive<R: ByteSource>(mut self, mut source: R) {
         let mut buffer = BytesMut::with_capacity(self.max_buffer_size);
 
@@ -127,16 +128,21 @@ impl<'a> ConnectionDriver<'a> {
                         "{} shutting down due to server shutdown",
                         self.peer_label
                     );
-                    self.services.unregister_client_shutdown(self.peer.id());
                     break;
                 }
                 _ = self.client_token.cancelled() => {
                     debug!("{} admin-triggered disconnect", self.peer_label);
-                    self.services.unregister_client_shutdown(self.peer.id());
                     break;
                 }
             }
         }
+
+        // Single unregister point: covers every loop-exit branch
+        // (clean EOF, read error, server shutdown, per-client cancel).
+        // Previously the two cancel arms called this themselves, while
+        // the EOF / Err arms leaked the token entry in
+        // `Services::client_shutdowns`.
+        self.services.unregister_client_shutdown(self.peer.id());
     }
 }
 

@@ -68,7 +68,8 @@ pub async fn open_server(
         services.health.clone(),
         Some(registry_adapter.clone()),
         Some(cancel_adapter.clone()),
-    )?;
+    )
+    .await?;
     // Expose the resolved observability address so tests (and tooling)
     // can scrape `/metrics` even when the config supplied port `0`.
     *services.admin_addr.lock() = Some(obs.http.addr);

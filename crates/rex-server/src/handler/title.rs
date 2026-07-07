@@ -4,7 +4,8 @@ use std::time::Instant;
 use anyhow::Result;
 use rex_core::{RetCode, RexClientInner, RexCommand, RexData};
 use rex_observability::metrics::{
-    inc_forward_failures, inc_messages_delivered, inc_messages_published, observe_publish_latency,
+    inc_forward_failures, inc_messages_delivered, inc_messages_published, observe_deliver_latency,
+    observe_publish_latency,
 };
 use scopeguard::guard;
 use tracing::{debug, info, warn};
@@ -51,6 +52,10 @@ impl CommandHandler for TitleHandler {
                 success = deliver_message(services, source_client, rex_data, &target).await;
                 if success {
                     inc_messages_delivered(&title_for_metric, "local");
+                    // Observability: publish→subscriber enqueue latency
+                    // (local case only — remote is bounded by the
+                    // forward call, not by our local enqueue).
+                    observe_deliver_latency(&title_for_metric, started.elapsed().as_secs_f64());
                 }
             }
             RoutePlan::Remote(node) => {

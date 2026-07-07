@@ -16,7 +16,6 @@ axum = "0.7"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
 parking_lot = "0.12"
 futures = "0.3"
-futures-executor = "0.3"
 anyhow = "1"
 
 [dev-dependencies]

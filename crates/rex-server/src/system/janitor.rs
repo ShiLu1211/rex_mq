@@ -74,7 +74,7 @@ impl Janitor {
         }
         let now = now_secs();
 
-        for (msg_id, source_client_id) in self.services.acks.take_expired(now) {
+        for (msg_id, source_client_id) in self.services.take_expired_acks(now) {
             let Some(sender) = self.services.registry.find_some_by_id(source_client_id) else {
                 continue;
             };

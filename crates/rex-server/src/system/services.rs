@@ -19,6 +19,7 @@ use dashmap::DashMap;
 use parking_lot::Mutex;
 use rex_core::RexClientInner;
 use rex_observability::health::HealthRegistry;
+use rex_observability::metrics::{set_clients_connected, set_pending_acks, set_titles_active};
 use rex_persistence::OfflineMessage;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -148,6 +149,10 @@ impl Services {
         self.registry.add_client(client.clone());
         self.cluster.register_client(id);
         self.offline.save_client(&client).await;
+        // Observability: refresh the live gauges so `/metrics` reflects
+        // the post-add state immediately (not lazily on next scrape).
+        set_clients_connected(self.registry.client_count() as i64);
+        set_titles_active(self.registry.title_count() as i64);
     }
 
     /// Remove a client. Returns the removed client so the caller can do
@@ -162,6 +167,9 @@ impl Services {
             tracing::info!("client [{:032X}] removed", client_id);
         }
         self.offline.remove_client(client_id).await;
+        // Observability: same as `add_client` — publish post-remove counts.
+        set_clients_connected(self.registry.client_count() as i64);
+        set_titles_active(self.registry.title_count() as i64);
         Some(client)
     }
 
@@ -178,10 +186,23 @@ impl Services {
         }
         self.acks
             .register(message_id, source_client_id, title, is_group);
+        set_pending_acks(self.acks.pending_count() as i64);
     }
 
     pub fn take_pending_ack(&self, message_id: u64) -> Option<crate::system::ack::PendingAckInfo> {
-        self.acks.take(message_id)
+        let info = self.acks.take(message_id);
+        set_pending_acks(self.acks.pending_count() as i64);
+        info
+    }
+
+    /// Run the ACK-tracker's expiry sweep and refresh the
+    /// `rex_pending_acks` gauge. The Janitor uses this composite so
+    /// observability stays wired into the same code path as the
+    /// tracker-side effects.
+    pub fn take_expired_acks(&self, now: u64) -> Vec<(u64, u128)> {
+        let expired = self.acks.take_expired(now);
+        set_pending_acks(self.acks.pending_count() as i64);
+        expired
     }
 
     pub fn get_pending_ack(&self, message_id: u64) -> Option<crate::system::ack::PendingAckInfo> {

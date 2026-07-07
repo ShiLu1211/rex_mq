@@ -39,7 +39,13 @@ impl ObservabilityHandle {
     /// `async fn` returns of `anyhow::Result`. The brief originally
     /// specified `Box<dyn Error>` but that doesn't satisfy the
     /// `Send + Sync + 'static` bounds `anyhow` requires for `?`.
-    pub fn start(
+    ///
+    /// This is `async` (not sync) so the inner `serve` future is awaited
+    /// on the same runtime the caller is on. The previous sync
+    /// implementation called `futures_executor::block_on` while a tokio
+    /// runtime was already on the stack — that blocks a worker thread
+    /// and deadlocks on a single-threaded runtime.
+    pub async fn start(
         cfg: &ObservabilityConfig,
         health: Arc<HealthRegistry>,
         registry: Option<Arc<dyn probe::traits::RegistrySnapshot>>,
@@ -55,7 +61,7 @@ impl ObservabilityHandle {
             client_cancel,
         };
         let router = admin::build_router_with_state(admin_state);
-        let http = futures_executor::block_on(serve(router, cfg.admin_addr))?;
+        let http = serve(router, cfg.admin_addr).await?;
         Ok(Self { http, health })
     }
 

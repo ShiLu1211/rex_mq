@@ -81,6 +81,16 @@ pub trait ClientRegistry: Send + Sync {
     /// Snapshot of a single client, or `None` if no client with that id is
     /// currently connected.
     fn get_snapshot(&self, id: u128) -> Option<ClientSnapshot>;
+
+    /// Number of currently connected clients. O(1). Used by the
+    /// observability layer to publish the `rex_clients_connected`
+    /// gauge after add/remove.
+    fn client_count(&self) -> usize;
+
+    /// Number of distinct titles with at least one subscriber. O(1).
+    /// Used by the observability layer to publish the `rex_titles_active`
+    /// gauge.
+    fn title_count(&self) -> usize;
 }
 
 /// DashMap-backed production implementation.
@@ -223,6 +233,14 @@ impl ClientRegistry for ClientRegistryImpl {
                 }
             })
             .collect()
+    }
+
+    fn client_count(&self) -> usize {
+        self.id2client.len()
+    }
+
+    fn title_count(&self) -> usize {
+        self.title2clients.len()
     }
 
     fn get_snapshot(&self, id: u128) -> Option<ClientSnapshot> {

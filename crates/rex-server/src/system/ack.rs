@@ -49,6 +49,10 @@ pub trait AckTracker: Send + Sync {
     /// Returns `(message_id, source_client_id)` pairs for each removed entry
     /// so the caller can deliver timeout packets.
     fn take_expired(&self, now: u64) -> Vec<(u64, u128)>;
+
+    /// Number of currently pending ACK entries. O(1). Used by the
+    /// observability layer to publish the `rex_pending_acks` gauge.
+    fn pending_count(&self) -> usize;
 }
 
 /// DashMap-backed production implementation. Owns its `timeout_secs` config.
@@ -102,6 +106,10 @@ impl AckTracker for AckTrackerImpl {
             }
         }
         result
+    }
+
+    fn pending_count(&self) -> usize {
+        self.pending_acks.len()
     }
 }
 

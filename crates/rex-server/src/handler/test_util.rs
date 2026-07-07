@@ -57,6 +57,10 @@ impl AckTracker for TestAckTracker {
     fn take_expired(&self, _now: u64) -> Vec<(u64, u128)> {
         Vec::new()
     }
+
+    fn pending_count(&self) -> usize {
+        self.pending.len()
+    }
 }
 
 // ---- ClusterPort mock ----------------------------------------------------

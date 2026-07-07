@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use bytes::BytesMut;
 use rex_core::{RexClientInner, RexData};
+use rex_observability::metrics::inc_messages_failed;
 use tokio::sync::{Semaphore, broadcast, watch};
 use tracing::{debug, warn};
 
@@ -95,6 +96,11 @@ pub async fn parse_and_handle_buffer(
                 );
 
                 if let Err(e) = handle(services, peer, &mut rex_data).await {
+                    // Observability: handler error path. Bucketed by
+                    // "handler" so the metric reflects business-rule
+                    // failures (auth, validation, etc.) distinctly from
+                    // wire-level parse errors.
+                    inc_messages_failed("handler");
                     warn!("Error handling data from {}: {}", peer_addr, e);
                 }
 
@@ -104,6 +110,8 @@ pub async fn parse_and_handle_buffer(
                 break;
             }
             Err(e) => {
+                // Observability: wire-level deserialisation failure.
+                inc_messages_failed("parse");
                 warn!(
                     "Error parsing data from {}: {}, clearing buffer",
                     peer_addr, e
@@ -115,6 +123,9 @@ pub async fn parse_and_handle_buffer(
     }
 
     if buffer.len() > max_buffer_size {
+        // Observability: buffer overflow / rejected frame. Counted as
+        // a failure even though we drop rather than fail-forward.
+        inc_messages_failed("rejected");
         warn!(
             "Buffer too large for connection {} ({}KB), clearing",
             peer_addr,
