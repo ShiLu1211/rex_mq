@@ -2,23 +2,30 @@
 //! observability framework.
 //!
 //! Compares publish-path latency on a fully-instrumented server (current state)
-//! against a hypothetical "observability disabled" baseline. The
-//! `rex-observability` calls are unconditional, so this bench uses a control
-//! loop that calls `cargo bench` once with the framework enabled (the current
-//! state) and re-runs after temporarily no-op-ing the埋点 to compute the delta.
+//! against the README's pre-instrumentation baseline of 30μs @ 50k TPS. The
+//! `rex-observability` calls are unconditional, so the framework cannot be
+//! toggled in a single binary. The "before" measurement is the README's
+//! claimed baseline; the "after" measurement is this bench's output.
 //!
-//! For a single-shot verification, run:
+//! ## Run
+//!
 //!     cargo bench -p rex-test --bench observability_overhead
 //!
-//! and read the p99 numbers from the criterion report under
-//! `target/criterion/`. The `passes_budget` assertion at the bottom is
-//! informational only; the real budget gate is run separately by the
-//! implementer reading the report.
+//! Open `target/criterion/publish_overhead/with_observability/report/index.html`
+//! for the p99 reading. Compute `(p99_after - p99_before) / p99_before` and
+//! verify it's < 0.05.
+//!
+//! ## Status
+//!
+//! This bench compiles and runs. The p99 number has not been measured yet
+//! (token plan quota exhausted at the time of writing). The user must run
+//! the command above and inspect the report before declaring the
+//! observability framework production-ready on the perf axis.
 
 use std::time::Duration;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-
+use criterion::{Criterion, criterion_group, criterion_main};
+use rex_core::Protocol;
 use rex_test::factory::TestEnv;
 
 fn bench_publish(c: &mut Criterion) {
@@ -27,37 +34,28 @@ fn bench_publish(c: &mut Criterion) {
         .build()
         .unwrap();
 
-    let server = rt.block_on(async {
+    let mut env = rt.block_on(async {
         let mut env = TestEnv::new().await;
-        env.start_server(rex_core::Protocol::Tcp).await.unwrap();
+        env.start_server(Protocol::Tcp).await.unwrap();
         env
     });
+
+    // One client is enough to measure the publish path; the hot path is
+    // server-side, not client→server wire time.
+    let client = rt.block_on(async { env.create_client(Protocol::Tcp, "bench").await.unwrap() });
 
     let mut group = c.benchmark_group("publish_overhead");
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(200);
 
-    // The "with_observability" arm is the current state — calls always go
-    // through the埋点. We can't toggle observability on/off in a single
-    // process (the global metric registry is static), so this bench is a
-    // measurement of the post-instrumentation latency; the pre-instrumentation
-    // baseline is captured by the README's "30μs @ 50k TPS" number.
-    group.bench_with_input(
-        BenchmarkId::from_parameter("with_observability"),
-        &(),
-        |b, _| {
-            b.to_async(&rt).iter(|| async {
-                let client = rex_test::factory::TestClient::new(
-                    *server.server_addrs.get(&rex_core::Protocol::Tcp).unwrap(),
-                )
-                .await;
-                client
-                    .send(rex_core::RexCommand::Title, "bench", b"payload")
-                    .await
-                    .unwrap();
-            });
-        },
-    );
+    group.bench_function("with_observability", |b| {
+        b.to_async(&rt).iter(|| async {
+            client
+                .send(rex_core::RexCommand::Title, "bench", b"payload")
+                .await
+                .unwrap();
+        });
+    });
 
     group.finish();
 }
