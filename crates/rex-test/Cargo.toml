@@ -3,9 +3,6 @@ name = "rex-test"
 version.workspace = true
 edition.workspace = true
 
-[lints]
-workspace = true
-
 [dependencies]
 rex-core.workspace = true
 rex-client.workspace = true
@@ -23,7 +20,7 @@ rand.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest.workspace = true
 
 [[bench]]
 name = "data_codec"

@@ -7,7 +7,7 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-rex-core = { path = "../rex-core" }
+rex-core.workspace = true
 bytes = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
