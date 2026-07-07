@@ -162,6 +162,15 @@ pub struct TestEnv {
 }
 
 impl TestEnv {
+    /// Resolved observability admin address (e.g. `/metrics`).
+    /// Returns `None` if no server has been started yet — the bind
+    /// happens lazily inside `open_server`.
+    pub fn admin_addr(&self) -> Option<SocketAddr> {
+        *self.services.admin_addr.lock()
+    }
+}
+
+impl TestEnv {
     pub async fn new() -> Self {
         let _ = tracing_subscriber::fmt::try_init();
         // Use random base port to avoid conflicts between parallel tests

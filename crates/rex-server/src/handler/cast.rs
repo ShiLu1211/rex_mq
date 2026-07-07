@@ -1,8 +1,13 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Result;
 use futures::{StreamExt, stream::FuturesUnordered};
 use rex_core::{RetCode, RexClientInner, RexCommand, RexData};
+use rex_observability::metrics::{
+    inc_messages_delivered, inc_messages_published, observe_publish_latency,
+};
+use scopeguard::guard;
 use tracing::{debug, warn};
 
 use crate::Services;
@@ -20,6 +25,16 @@ impl CommandHandler for CastHandler {
         let title = rex_data.title();
         debug!("Received cast message: {}", title);
         let client_id = rex_data.source();
+
+        // --- Observability: count + time every accepted publish ---
+        // Cast fans out to N subscribers, so we record the publish once
+        // (per inbound command) and per-subscriber delivery on success.
+        let started = Instant::now();
+        let title_for_metric = title.to_string();
+        inc_messages_published(&title_for_metric);
+        let _metric_guard = guard((), |_| {
+            observe_publish_latency(&title_for_metric, started.elapsed().as_secs_f64());
+        });
 
         let matching_clients = services.registry.find_all_by_title(title, Some(client_id));
 
@@ -75,6 +90,12 @@ impl CommandHandler for CastHandler {
             success_count,
             failed_clients.len()
         );
+
+        // At least one subscriber received the message — count it as
+        // delivered. Failures are scrubbed via `remove_client` below.
+        if success_count > 0 {
+            inc_messages_delivered(&title_for_metric, "local");
+        }
 
         // 清理发送失败的客户端
         for failed_client_id in failed_clients {

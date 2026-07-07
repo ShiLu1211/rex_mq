@@ -32,3 +32,4 @@ futures.workspace = true
 fastrand = "2.3"
 parking_lot = "0.12"
 arc-swap.workspace = true
+scopeguard.workspace = true

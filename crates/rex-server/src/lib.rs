@@ -16,6 +16,7 @@ pub use system::{
     RexSystemConfig, RoutePlan, Router, Services, Shutdown, SledOfflineBuffer,
 };
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -67,6 +68,9 @@ pub async fn open_server(
         Some(registry_adapter.clone()),
         Some(cancel_adapter.clone()),
     )?;
+    // Expose the resolved observability address so tests (and tooling)
+    // can scrape `/metrics` even when the config supplied port `0`.
+    *services.admin_addr.lock() = Some(obs.http.addr);
 
     struct ClusterAdapter(Arc<dyn ClusterPort>);
     impl ClusterSnapshot for ClusterAdapter {
@@ -177,6 +181,7 @@ pub async fn build_services(
         config,
         Arc::new(dashmap::DashMap::new()),
         Arc::new(rex_observability::health::HealthRegistry::new()),
+        Arc::new(parking_lot::Mutex::new(None::<SocketAddr>)),
     )
 }
 

@@ -174,5 +174,6 @@ pub fn make_services(ack_enabled: bool) -> Arc<Services> {
         config,
         Arc::new(DashMap::new()),
         Arc::new(HealthRegistry::new()),
+        Arc::new(parking_lot::Mutex::new(None)),
     )
 }

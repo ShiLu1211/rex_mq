@@ -1,7 +1,12 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Result;
 use rex_core::{RetCode, RexClientInner, RexCommand, RexData};
+use rex_observability::metrics::{
+    inc_forward_failures, inc_messages_delivered, inc_messages_published, observe_publish_latency,
+};
+use scopeguard::guard;
 use tracing::{debug, info, warn};
 
 use crate::handler::port::CommandHandler;
@@ -21,6 +26,19 @@ impl CommandHandler for TitleHandler {
         debug!("Received title message: {}", title);
         let client_id: u128 = rex_data.source();
 
+        // --- Observability: count + time every accepted publish ---
+        // Snapshot the title and start time up front so the RAII guard
+        // can record latency on every return path (success, no-target,
+        // remote-forward, error). `title_for_metric` is borrowed by the
+        // closure so cloning it here avoids a `String` move out of the
+        // match arms (which already take `title` by value on remote).
+        let started = Instant::now();
+        let title_for_metric = title.clone();
+        inc_messages_published(&title_for_metric);
+        let _metric_guard = guard((), |_| {
+            observe_publish_latency(&title_for_metric, started.elapsed().as_secs_f64());
+        });
+
         let mut success = false;
 
         match services.router.route(&title, Some(client_id)) {
@@ -31,6 +49,9 @@ impl CommandHandler for TitleHandler {
                     client_id, target_client_id, data_len
                 );
                 success = deliver_message(services, source_client, rex_data, &target).await;
+                if success {
+                    inc_messages_delivered(&title_for_metric, "local");
+                }
             }
             RoutePlan::Remote(node) => {
                 info!(
@@ -47,9 +68,9 @@ impl CommandHandler for TitleHandler {
                 };
 
                 success = services.cluster.forward_message(&node, request).await;
-
-                // Broadcast fallback: try all other known nodes.
                 if !success {
+                    inc_forward_failures("unreachable");
+                    // Broadcast fallback: try all other known nodes.
                     let local_id = services.cluster.get_local_node_id().unwrap_or_default();
                     for other in services.cluster.get_nodes() {
                         if other != node && other != local_id {
@@ -65,8 +86,13 @@ impl CommandHandler for TitleHandler {
                                 debug!("fallback forward to node {} succeeded", other);
                                 break;
                             }
+                            inc_forward_failures("unreachable");
                         }
                     }
+                }
+
+                if success {
+                    inc_messages_delivered(&title_for_metric, "remote");
                 }
             }
             RoutePlan::None => {

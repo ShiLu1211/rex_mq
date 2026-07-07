@@ -10,11 +10,13 @@
 //! together. Handlers call these instead of repeating the cluster-handshake
 //! + persistence dance in every site.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Result;
 use bytes::Bytes;
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use rex_core::RexClientInner;
 use rex_observability::health::HealthRegistry;
 use rex_persistence::OfflineMessage;
@@ -71,6 +73,13 @@ pub struct Services {
     /// in `lib.rs::open_server`. Shared with the observability admin
     /// server so `/readyz` can read the same registry the handlers see.
     pub health: Arc<HealthRegistry>,
+
+    /// Resolved observability admin address (e.g. `/metrics` listener).
+    /// Populated by `open_server` once the admin HTTP server has bound
+    /// the configured port. `None` until then. Tests use this to scrape
+    /// `/metrics` after publishing — the config-supplied address may
+    /// be port `0` (ephemeral) and only known post-bind.
+    pub admin_addr: Arc<Mutex<Option<SocketAddr>>>,
 }
 
 impl Services {
@@ -86,6 +95,7 @@ impl Services {
         config: RexSystemConfig,
         client_shutdowns: Arc<DashMap<u128, CancellationToken>>,
         health: Arc<HealthRegistry>,
+        admin_addr: Arc<Mutex<Option<SocketAddr>>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             registry,
@@ -98,6 +108,7 @@ impl Services {
             config,
             client_shutdowns,
             health,
+            admin_addr,
         })
     }
 
@@ -289,6 +300,7 @@ mod tests {
             config,
             client_shutdowns,
             Arc::new(HealthRegistry::new()),
+            Arc::new(Mutex::new(None)),
         )
     }
 

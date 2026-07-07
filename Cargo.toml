@@ -49,6 +49,7 @@ kanal = "0.1.1"
 parking_lot = "0.12.5"
 arc-swap = "1.8.2"
 once_cell = "1.21.3"
+scopeguard = "1.2.0"
 
 # --- Networking & Transport ---
 quinn = "0.11.9"
