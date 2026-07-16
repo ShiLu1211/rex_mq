@@ -14,8 +14,9 @@ use rex_cluster::types::ClusterMessage;
 use rex_core::RexClientInner;
 
 use crate::{
-    AckTracker, ClusterPort, ClusterRouter, ForwardRequest, NetworkForwarder, NoopOfflineBuffer,
-    OfflineBuffer, PendingAckInfo, RexSystemConfig, Services, Shutdown,
+    AckTracker, ClientStateStore, ClusterPort, ClusterRouter, ForwardRequest, NetworkForwarder,
+    NoopClientStateStore, NoopOfflineBuffer, OfflineBuffer, PendingAckInfo, RexSystemConfig,
+    Services, Shutdown,
 };
 use rex_observability::health::HealthRegistry;
 
@@ -155,6 +156,7 @@ pub fn make_services(ack_enabled: bool) -> Arc<Services> {
     let registry = crate::ClientRegistryImpl::new();
     let acks = Arc::new(TestAckTracker::new()) as Arc<dyn AckTracker>;
     let offline = Arc::new(NoopOfflineBuffer) as Arc<dyn OfflineBuffer>;
+    let state_store = Arc::new(NoopClientStateStore) as Arc<dyn ClientStateStore>;
     let cluster: Arc<dyn ClusterPort> = Arc::new(TestClusterPort::new());
     let shutdown = Shutdown::new();
     let mut config = RexSystemConfig::from_id("test");
@@ -174,6 +176,7 @@ pub fn make_services(ack_enabled: bool) -> Arc<Services> {
         cluster.clone(),
         ClusterRouter::new(registry.clone(), cluster.clone()),
         forwarder,
+        state_store,
         shutdown,
         config,
         Arc::new(DashMap::new()),

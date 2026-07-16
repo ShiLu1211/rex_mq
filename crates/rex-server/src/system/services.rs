@@ -28,6 +28,7 @@ use crate::RexSystemConfig;
 use crate::Shutdown;
 use crate::system::ack::AckTracker;
 use crate::system::client_registry::ClientRegistry;
+use crate::system::client_state_store::ClientStateStore;
 use crate::system::cluster_port::ClusterPort;
 use crate::system::forwarder::Forwarder;
 use crate::system::offline::OfflineBuffer;
@@ -57,6 +58,11 @@ pub struct Services {
     /// slots for `NodeManager` / `GlobalRouteTable` are filled by
     /// `ServerClusterManager::start`.
     pub forwarder: Arc<dyn Forwarder>,
+
+    /// Sled-backed (or no-op) persistent client-state store. Drives
+    /// restart restoration and ghost GC. Added per the C5 deepening.
+    #[allow(dead_code)] // Wired in Task 5; consumed by add/remove in Task 6.
+    pub state_store: Arc<dyn ClientStateStore>,
 
     /// Cross-cutting shutdown signal — held by every long-running task.
     pub shutdown: Arc<Shutdown>,
@@ -92,6 +98,7 @@ impl Services {
         cluster: Arc<dyn ClusterPort>,
         router: Arc<dyn Router>,
         forwarder: Arc<dyn Forwarder>,
+        state_store: Arc<dyn ClientStateStore>,
         shutdown: Arc<Shutdown>,
         config: RexSystemConfig,
         client_shutdowns: Arc<DashMap<u128, CancellationToken>>,
@@ -105,6 +112,7 @@ impl Services {
             cluster,
             router,
             forwarder,
+            state_store,
             shutdown,
             config,
             client_shutdowns,
@@ -283,6 +291,7 @@ mod tests {
     use super::*;
     use crate::system::ack::AckTrackerImpl;
     use crate::system::client_registry::ClientRegistryImpl;
+    use crate::system::client_state_store::NoopClientStateStore;
     use crate::system::forwarder::NetworkForwarder;
     use crate::system::offline::NoopOfflineBuffer;
     use crate::system::router::ClusterRouter;
@@ -300,6 +309,7 @@ mod tests {
             Arc::new(crate::handler::test_util::TestClusterPort::new());
         let acks: Arc<dyn AckTracker> = AckTrackerImpl::new(60);
         let offline: Arc<dyn OfflineBuffer> = Arc::new(NoopOfflineBuffer);
+        let state_store: Arc<dyn ClientStateStore> = Arc::new(NoopClientStateStore);
         let router: Arc<dyn Router> = ClusterRouter::new(registry.clone(), cluster.clone());
         let forwarder: Arc<dyn Forwarder> = NetworkForwarder::new(
             Arc::new(arc_swap::ArcSwap::from_pointee(None)),
@@ -317,6 +327,7 @@ mod tests {
             cluster,
             router,
             forwarder,
+            state_store,
             shutdown,
             config,
             client_shutdowns,

@@ -11,9 +11,10 @@ pub use crate::transport::{QuicServer, TcpServer, WebSocketServer};
 pub use server::RexServerTrait;
 pub use system::{
     AckTracker, AckTrackerImpl, ClientCancelAdapter, ClientRegistry, ClientRegistryImpl,
-    ClientSnapshot, ClusterPort, ClusterRouter, DeliveryOutcome, Forwarder, FwdResult, Janitor,
-    NetworkForwarder, NoopOfflineBuffer, OfflineBuffer, PendingAckInfo, RegistryObsAdapter,
-    RexSystemConfig, RoutePlan, Router, Services, Shutdown, SledOfflineBuffer,
+    ClientSnapshot, ClientStateStore, ClusterPort, ClusterRouter, DeliveryOutcome, Forwarder,
+    FwdResult, Janitor, NetworkForwarder, NoopClientStateStore, NoopOfflineBuffer, OfflineBuffer,
+    PendingAckInfo, RegistryObsAdapter, RexSystemConfig, RoutePlan, Router, Services, Shutdown,
+    SledClientStateStore, SledOfflineBuffer,
 };
 
 use std::net::SocketAddr;
@@ -152,6 +153,21 @@ pub async fn build_services(
         Arc::new(NoopOfflineBuffer)
     };
 
+    let state_store: Arc<dyn ClientStateStore> = if config.persistence_enabled {
+        match SledClientStateStore::open(&config.persistence_path).await {
+            Ok(store) => store,
+            Err(e) => {
+                warn!(
+                    "Failed to open client-state store at {}: {}, continuing without it",
+                    config.persistence_path, e
+                );
+                Arc::new(NoopClientStateStore)
+            }
+        }
+    } else {
+        Arc::new(NoopClientStateStore)
+    };
+
     let registry: Arc<dyn ClientRegistry> = ClientRegistryImpl::new();
     let acks: Arc<dyn AckTracker> = AckTrackerImpl::new(config.ack_timeout);
     let cluster: Arc<dyn ClusterPort> =
@@ -179,6 +195,7 @@ pub async fn build_services(
         cluster,
         router,
         forwarder,
+        state_store,
         shutdown,
         config,
         Arc::new(dashmap::DashMap::new()),
