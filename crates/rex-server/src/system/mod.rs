@@ -2,6 +2,7 @@
 
 mod ack;
 mod client_registry;
+pub mod client_state_store;
 mod cluster_port;
 mod config;
 mod forwarder;
@@ -14,6 +15,9 @@ mod shutdown;
 
 pub use ack::{AckTracker, AckTrackerImpl, PendingAckInfo};
 pub use client_registry::{ClientRegistry, ClientRegistryImpl, ClientSnapshot};
+// ClientStateStore is consumed by Services in the next integration task.
+#[allow(unused_imports)]
+pub use client_state_store::*;
 pub use cluster_port::ClusterPort;
 pub use config::RexSystemConfig;
 // Forwarder lives in the system bag so commit 2 can wire it into
