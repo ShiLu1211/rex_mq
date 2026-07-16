@@ -130,6 +130,17 @@ pub async fn open_server(
     }
 }
 
+/// Open the shared sled `Db` used by both the offline buffer and the
+/// client-state store. sled takes an exclusive file lock per path, so
+/// opening the same path twice in the same process fails; we open it
+/// once here and hand clones of the `Arc` to each adapter.
+async fn open_shared_sled_db(path: &str) -> anyhow::Result<Arc<sled::Db>> {
+    use anyhow::Context;
+    std::fs::create_dir_all(path).context("create persistence dir")?;
+    let db = sled::open(path).context("open sled")?;
+    Ok(Arc::new(db))
+}
+
 /// Build a `Services` bundle. This is the canonical construction site.
 /// Takes an optional cluster port — when `None`, a `NoopClusterPort` is
 /// used (behaves as if the local node owns everything).
@@ -138,34 +149,31 @@ pub async fn build_services(
     shutdown: Arc<Shutdown>,
     cluster: Option<Arc<dyn ClusterPort>>,
 ) -> Arc<Services> {
-    let offline: Arc<dyn OfflineBuffer> = if config.persistence_enabled {
-        match SledOfflineBuffer::open(config.persistence_path.clone()).await {
-            Ok(buf) => buf,
+    // Open sled once and share it across the two persistence adapters
+    // so they don't contend on sled's exclusive file lock.
+    let shared_db: Option<Arc<sled::Db>> = if config.persistence_enabled {
+        match open_shared_sled_db(&config.persistence_path).await {
+            Ok(db) => Some(db),
             Err(e) => {
                 warn!(
-                    "Failed to open persistence store: {}, continuing without persistence",
-                    e
-                );
-                Arc::new(NoopOfflineBuffer)
-            }
-        }
-    } else {
-        Arc::new(NoopOfflineBuffer)
-    };
-
-    let state_store: Arc<dyn ClientStateStore> = if config.persistence_enabled {
-        match SledClientStateStore::open(&config.persistence_path).await {
-            Ok(store) => store,
-            Err(e) => {
-                warn!(
-                    "Failed to open client-state store at {}: {}, continuing without it",
+                    "Failed to open persistence store at {}: {}, continuing without persistence",
                     config.persistence_path, e
                 );
-                Arc::new(NoopClientStateStore)
+                None
             }
         }
     } else {
-        Arc::new(NoopClientStateStore)
+        None
+    };
+
+    let offline: Arc<dyn OfflineBuffer> = match &shared_db {
+        Some(db) => SledOfflineBuffer::with_db(db.clone()),
+        None => Arc::new(NoopOfflineBuffer),
+    };
+
+    let state_store: Arc<dyn ClientStateStore> = match &shared_db {
+        Some(db) => SledClientStateStore::with_db(db.clone()),
+        None => Arc::new(NoopClientStateStore),
     };
 
     let registry: Arc<dyn ClientRegistry> = ClientRegistryImpl::new();

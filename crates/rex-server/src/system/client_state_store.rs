@@ -93,6 +93,18 @@ impl SledClientStateStore {
             last_error: Arc::new(Mutex::new(None)),
         }))
     }
+
+    /// Construct from an already-opened sled `Db`. Used when the
+    /// caller wants to share one `sled::Db` across multiple adapters
+    /// (offline buffer + this `SledClientStateStore`) to avoid the
+    /// sled file-lock contention that happens with multiple
+    /// `sled::open` calls on the same path.
+    pub fn with_db(db: Arc<sled::Db>) -> Arc<Self> {
+        Arc::new(Self {
+            repo: Mutex::new(Some(Arc::new(ClientStateRepo::new((*db).clone())))),
+            last_error: Arc::new(Mutex::new(None)),
+        })
+    }
 }
 
 #[async_trait]

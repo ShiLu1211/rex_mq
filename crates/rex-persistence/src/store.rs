@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use tracing::{info, warn};
 
@@ -10,7 +11,12 @@ use crate::{
 
 /// 持久化存储主模块
 pub struct PersistenceStore {
-    db: sled::Db,
+    // `Arc` so the underlying `sled::Db` can be shared with other
+    // adapters (e.g. `SledClientStateStore`) opened against the same
+    // path. sled itself uses an exclusive file lock, so opening the
+    // same path twice from the same process fails — callers must
+    // share a single `Arc<sled::Db>` instead.
+    db: Arc<sled::Db>,
     config: StoreConfig,
     offline_config: OfflineQueueConfig,
 }
@@ -62,10 +68,35 @@ impl PersistenceStore {
         info!("Persistence store opened at: {}", config.path);
 
         Ok(Self {
-            db,
+            db: Arc::new(db),
             config,
             offline_config: OfflineQueueConfig::default(),
         })
+    }
+
+    /// Construct from an already-opened sled `Db`. Used when the caller
+    /// wants to share one `sled::Db` across multiple adapters
+    /// (e.g. offline buffer + client-state store) to avoid the sled
+    /// file-lock contention that happens with multiple `sled::open`
+    /// calls on the same path.
+    ///
+    /// The caller owns the `Arc<sled::Db>` and is responsible for the
+    /// Db's lifecycle (we hold a clone of the `Arc`). Both
+    /// `StoreConfig` and `OfflineQueueConfig` default to their
+    /// standard production values — `persistence_path` is implicit in
+    /// the Db we received and the `enable_*` toggles are no longer
+    /// needed because the wiring decision is made per-adapter at the
+    /// caller (which adapter exists, not whether persistence is on).
+    pub fn with_db(db: Arc<sled::Db>) -> Self {
+        // Touch the trees we own so they exist on disk before any op.
+        // (T_CLIENTS is owned by `ClientStateRepo`, not us.)
+        let _ = db.open_tree(T_OFFLINE_QUEUE);
+        let _ = db.open_tree(T_OFFLINE_INDEX);
+        Self {
+            db,
+            config: StoreConfig::default(),
+            offline_config: OfflineQueueConfig::default(),
+        }
     }
 
     /// 同步到磁盘
