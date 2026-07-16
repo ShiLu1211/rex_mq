@@ -32,6 +32,18 @@ pub struct ClientSnapshot {
     pub connected_secs: u64,
 }
 
+/// Returned by [`ClientRegistry::add_ghost`] when a live client OR
+/// ghost with the same id is already registered.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum DuplicateClient {
+    /// A live client with this id is already registered.
+    #[error("a live client with this id is already registered")]
+    Live,
+    /// A ghost with this id already exists.
+    #[error("a ghost entry with this id already exists")]
+    Ghost,
+}
+
 /// Tracks which clients are connected, and which titles each is subscribed to.
 ///
 /// `remove_client` returns the removed client so the caller can close its
@@ -91,6 +103,30 @@ pub trait ClientRegistry: Send + Sync {
     /// Used by the observability layer to publish the `rex_titles_active`
     /// gauge.
     fn title_count(&self) -> usize;
+
+    /// Add a ghost entry. Fails with `DuplicateClient::Live` if a live
+    /// client with the same id is registered, or `DuplicateClient::Ghost`
+    /// if a ghost already exists.
+    fn add_ghost(
+        &self,
+        client_id: u128,
+        titles: Vec<String>,
+        ghost_until: u64,
+    ) -> Result<(), DuplicateClient>;
+
+    /// Drop a ghost entry if present. Returns true if a ghost was dropped.
+    /// Does NOT affect a live client with the same id.
+    fn claim_ghost(&self, client_id: u128) -> bool;
+
+    /// Drop a ghost entry. Returns true if a ghost was dropped.
+    fn remove_ghost(&self, client_id: u128) -> bool;
+
+    /// Number of currently registered ghost entries.
+    fn ghost_count(&self) -> usize;
+
+    /// Return the titles registered for a ghost entry, or `None` if no
+    /// ghost with that id exists.
+    fn ghost_titles(&self, client_id: u128) -> Option<Vec<String>>;
 }
 
 /// DashMap-backed production implementation.
@@ -98,6 +134,7 @@ pub trait ClientRegistry: Send + Sync {
 pub struct ClientRegistryImpl {
     id2client: DashMap<u128, Arc<RexClientInner>, RandomState>,
     title2clients: DashMap<String, Vec<Arc<RexClientInner>>, RandomState>,
+    ghosts: DashMap<u128, (Vec<String>, u64), RandomState>,
 }
 
 impl ClientRegistryImpl {
@@ -106,6 +143,7 @@ impl ClientRegistryImpl {
         Arc::new(Self {
             id2client: DashMap::with_hasher(RandomState::new()),
             title2clients: DashMap::with_hasher(RandomState::new()),
+            ghosts: DashMap::with_hasher(RandomState::new()),
         })
     }
 
@@ -253,6 +291,38 @@ impl ClientRegistry for ClientRegistryImpl {
             titles: c.subscribed_titles(),
             connected_secs: now.saturating_sub(c.connected_at()),
         })
+    }
+
+    fn add_ghost(
+        &self,
+        client_id: u128,
+        titles: Vec<String>,
+        ghost_until: u64,
+    ) -> Result<(), DuplicateClient> {
+        if self.id2client.contains_key(&client_id) {
+            return Err(DuplicateClient::Live);
+        }
+        if self.ghosts.contains_key(&client_id) {
+            return Err(DuplicateClient::Ghost);
+        }
+        self.ghosts.insert(client_id, (titles, ghost_until));
+        Ok(())
+    }
+
+    fn claim_ghost(&self, client_id: u128) -> bool {
+        self.ghosts.remove(&client_id).is_some()
+    }
+
+    fn remove_ghost(&self, client_id: u128) -> bool {
+        self.ghosts.remove(&client_id).is_some()
+    }
+
+    fn ghost_count(&self) -> usize {
+        self.ghosts.len()
+    }
+
+    fn ghost_titles(&self, client_id: u128) -> Option<Vec<String>> {
+        self.ghosts.get(&client_id).map(|e| e.value().0.clone())
     }
 }
 
@@ -455,6 +525,63 @@ mod tests {
             "",
             Arc::new(NoopSender) as Arc<dyn RexSenderTrait>,
         ))
+    }
+
+    #[test]
+    fn add_ghost_then_ghost_count_returns_one() {
+        let reg = ClientRegistryImpl::new();
+        reg.add_ghost(0xCAFE, vec!["news".to_string()], u64::MAX)
+            .unwrap();
+        assert_eq!(reg.ghost_count(), 1);
+        assert_eq!(reg.ghost_titles(0xCAFE), Some(vec!["news".to_string()]));
+    }
+
+    #[test]
+    fn add_ghost_with_existing_live_id_returns_live_error() {
+        let reg = ClientRegistryImpl::new();
+        let c = dummy_client();
+        let id = c.id();
+        reg.add_client(c);
+        let err = reg.add_ghost(id, vec![], u64::MAX).unwrap_err();
+        assert_eq!(err, DuplicateClient::Live);
+    }
+
+    #[test]
+    fn add_ghost_with_existing_ghost_id_returns_ghost_error() {
+        let reg = ClientRegistryImpl::new();
+        reg.add_ghost(0xCAFE, vec![], u64::MAX).unwrap();
+        let err = reg.add_ghost(0xCAFE, vec![], u64::MAX).unwrap_err();
+        assert_eq!(err, DuplicateClient::Ghost);
+    }
+
+    #[test]
+    fn claim_ghost_returns_true_and_drops_entry() {
+        let reg = ClientRegistryImpl::new();
+        reg.add_ghost(0xCAFE, vec!["a".to_string()], u64::MAX)
+            .unwrap();
+        assert!(reg.claim_ghost(0xCAFE));
+        assert_eq!(reg.ghost_count(), 0);
+        assert!(!reg.claim_ghost(0xCAFE));
+    }
+
+    #[test]
+    fn remove_ghost_returns_true_when_present() {
+        let reg = ClientRegistryImpl::new();
+        reg.add_ghost(0xCAFE, vec![], u64::MAX).unwrap();
+        assert!(reg.remove_ghost(0xCAFE));
+        assert_eq!(reg.ghost_count(), 0);
+        assert!(!reg.remove_ghost(0xCAFE));
+    }
+
+    #[test]
+    fn add_ghost_does_not_affect_title_map_for_live_clients() {
+        // Ghost titles are stored separately; title_count should not
+        // be incremented by add_ghost.
+        let reg = ClientRegistryImpl::new();
+        reg.add_ghost(0xCAFE, vec!["news".to_string()], u64::MAX)
+            .unwrap();
+        assert_eq!(reg.title_count(), 0);
+        assert!(reg.find_one_by_title("news", None).is_none());
     }
 
     #[test]
