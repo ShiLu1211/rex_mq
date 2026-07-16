@@ -68,6 +68,9 @@ pub trait ClientStateStore: Send + Sync {
 }
 
 /// Sled-backed production implementation. Owns a `ClientStateRepo`.
+///
+/// The repo is held in `Mutex<Option<...>>` so `close()` can release the
+/// sled handle and a subsequent `open()` can re-acquire it on the same path.
 #[allow(dead_code)] // Adapter opened by Services in the next integration task.
 pub struct SledClientStateStore {
     repo: Mutex<Option<Arc<ClientStateRepo>>>,
@@ -108,7 +111,10 @@ impl ClientStateStore for SledClientStateStore {
                 warn!("Failed to save client state: {}", e);
                 *self.last_error.lock() = Some(e.to_string());
             }
-            None => {}
+            None => {
+                warn!("ClientStateStore::save called after close");
+                *self.last_error.lock() = Some("store closed".into());
+            }
         }
     }
 
@@ -120,7 +126,13 @@ impl ClientStateStore for SledClientStateStore {
                 warn!("Failed to remove client state: {}", e);
                 *self.last_error.lock() = Some(e.to_string());
             }
-            None => {}
+            None => {
+                warn!(
+                    "ClientStateStore::remove called for client {:032X} after close",
+                    client_id
+                );
+                *self.last_error.lock() = Some("store closed".into());
+            }
         }
     }
 
@@ -136,7 +148,11 @@ impl ClientStateStore for SledClientStateStore {
                 *self.last_error.lock() = Some(e.to_string());
                 Vec::new()
             }
-            None => Vec::new(),
+            None => {
+                warn!("ClientStateStore::load_all called after close");
+                *self.last_error.lock() = Some("store closed".into());
+                Vec::new()
+            }
         }
     }
 
@@ -156,7 +172,11 @@ impl ClientStateStore for SledClientStateStore {
                 *self.last_error.lock() = Some(e.to_string());
                 Vec::new()
             }
-            None => Vec::new(),
+            None => {
+                warn!("ClientStateStore::take_expired_ghosts called after close");
+                *self.last_error.lock() = Some("store closed".into());
+                Vec::new()
+            }
         }
     }
 
@@ -263,19 +283,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sled_save_error_sets_last_error() {
-        // To force a save error without depending on sled internals, we use a
-        // path under a file that already exists (sled can't open a file as
-        // a directory). This makes `sled::open` fail.
-        let path = std::env::temp_dir().join(format!(
-            "rex-sled-block-{}-{}",
-            std::process::id(),
-            SLED_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::write(&path, b"not a directory").unwrap();
-
-        let s = SledClientStateStore::open(path.to_string_lossy().as_ref()).await;
-        assert!(s.is_err(), "open against a file should fail");
-        let _ = std::fs::remove_file(path);
+    async fn save_after_close_sets_last_error() {
+        let path = fresh_sled_path();
+        let s = SledClientStateStore::open(&path).await.expect("open");
+        s.close().await;
+        // After close, save should hit the None arm and set last_error.
+        s.save(1, &["x".to_string()], 0, 100).await;
+        assert!(
+            s.last_error().is_some(),
+            "save after close should set last_error"
+        );
+        let _ = std::fs::remove_dir_all(&path);
     }
 }
