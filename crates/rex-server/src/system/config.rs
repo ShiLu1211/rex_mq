@@ -23,6 +23,11 @@ pub struct RexSystemConfig {
     pub ack_timeout: u64,
     #[serde(default = "default_ack_retries")]
     pub ack_retries: u32,
+    /// TTL (seconds) for restored ghost entries on restart. A live client
+    /// saved with `ghost_until = now + ghost_ttl_secs` becomes a ghost with
+    /// the same TTL on the next restart. Default 86400s (24h).
+    #[serde(default = "default_ghost_ttl_secs")]
+    pub ghost_ttl_secs: u64,
     /// Observability stack configuration (admin addr, auth token,
     /// tracing format, single-node tolerance). Defaults to the
     /// `ObservabilityConfig::default()` shape so existing call sites
@@ -58,6 +63,9 @@ fn default_ack_timeout() -> u64 {
 fn default_ack_retries() -> u32 {
     3
 }
+fn default_ghost_ttl_secs() -> u64 {
+    86400
+}
 
 impl RexSystemConfig {
     #[allow(clippy::too_many_arguments)]
@@ -72,6 +80,7 @@ impl RexSystemConfig {
         ack_enabled: bool,
         ack_timeout: u64,
         ack_retries: u32,
+        ghost_ttl_secs: u64,
     ) -> Self {
         Self {
             server_id,
@@ -84,6 +93,7 @@ impl RexSystemConfig {
             ack_enabled,
             ack_timeout,
             ack_retries,
+            ghost_ttl_secs,
             observability: rex_observability::ObservabilityConfig::default(),
         }
     }
@@ -100,6 +110,7 @@ impl RexSystemConfig {
             ack_enabled: false,
             ack_timeout: 5000,
             ack_retries: 3,
+            ghost_ttl_secs: 86400,
             observability: rex_observability::ObservabilityConfig::default(),
         }
     }
