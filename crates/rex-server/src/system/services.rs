@@ -19,7 +19,9 @@ use dashmap::DashMap;
 use parking_lot::Mutex;
 use rex_core::RexClientInner;
 use rex_observability::health::HealthRegistry;
-use rex_observability::metrics::{set_clients_connected, set_pending_acks, set_titles_active};
+use rex_observability::metrics::{
+    observe_client_state_save_latency, set_clients_connected, set_pending_acks, set_titles_active,
+};
 use rex_persistence::OfflineMessage;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -165,7 +167,9 @@ impl Services {
         let now = rex_core::utils::now_secs();
         let titles: Vec<String> = client.title_iter();
         let ghost_until = now.saturating_add(self.config.ghost_ttl_secs);
+        let _t = std::time::Instant::now();
         self.state_store.save(id, &titles, now, ghost_until).await;
+        observe_client_state_save_latency(_t.elapsed().as_secs_f64());
 
         // Observability: refresh the live gauges so `/metrics` reflects
         // the post-add state immediately (not lazily on next scrape).

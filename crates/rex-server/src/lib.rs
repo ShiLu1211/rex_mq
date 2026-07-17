@@ -63,9 +63,11 @@ pub async fn open_server(
                     entry.client_id,
                     e
                 );
+                rex_observability::metrics::inc_client_state_restore("skip");
                 continue;
             }
             services.cluster.register_client(entry.client_id);
+            rex_observability::metrics::inc_client_state_restore("ok");
             tracing::debug!(
                 "Restored ghost for client {:032X} ({} titles, ttl={})",
                 entry.client_id,
@@ -73,6 +75,9 @@ pub async fn open_server(
                 entry.ghost_until
             );
         }
+        rex_observability::metrics::set_client_state_ghosts_current(
+            services.registry.ghost_count() as i64,
+        );
     }
 
     // Spawn the Janitor for periodic cleanup.
@@ -120,6 +125,12 @@ pub async fn open_server(
             self.0.last_error()
         }
     }
+    struct ClientStateStoreAdapter(Arc<dyn crate::ClientStateStore>);
+    impl PersistenceSnapshot for ClientStateStoreAdapter {
+        fn last_error(&self) -> Option<String> {
+            self.0.last_error()
+        }
+    }
     struct ForwarderAdapter(Arc<dyn Forwarder>);
     impl ForwarderSnapshot for ForwarderAdapter {
         fn node_manager_ready(&self) -> bool {
@@ -136,6 +147,10 @@ pub async fn open_server(
     obs.health
         .register(Arc::new(PersistenceHealthProbe::new(Arc::new(
             PersistenceAdapter(services.offline.clone()),
+        ))));
+    obs.health
+        .register(Arc::new(PersistenceHealthProbe::new(Arc::new(
+            ClientStateStoreAdapter(services.state_store.clone()),
         ))));
     obs.health
         .register(Arc::new(ForwarderHealthProbe::new(Arc::new(

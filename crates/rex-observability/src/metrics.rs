@@ -165,6 +165,34 @@ pub fn set_cluster_peers(n: i64) {
     lazy_gauge!("rex_cluster_peers", "Known cluster peers (excludes self)",).set(n);
 }
 
+pub fn inc_client_state_restore(result: &str) {
+    lazy_counter_vec!(
+        "rex_client_state_restore_total",
+        "ClientStateStore restore operations at startup, labelled by outcome",
+        &["result"],
+    )
+    .with_label_values(&[result])
+    .inc();
+}
+
+pub fn set_client_state_ghosts_current(n: i64) {
+    lazy_gauge!(
+        "rex_client_state_ghosts_current",
+        "Number of ghost entries currently in the registry",
+    )
+    .set(n);
+}
+
+pub fn observe_client_state_save_latency(secs: f64) {
+    lazy_histogram_vec!(
+        "rex_client_state_save_latency_seconds",
+        "Latency of ClientStateStore::save calls",
+        &["op"],
+    )
+    .with_label_values(&["save"])
+        .observe(secs);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
