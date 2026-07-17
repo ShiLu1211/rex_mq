@@ -4,6 +4,8 @@
 //! and the strict validator. `rex-server` and `rex-cli` depend on this crate;
 //! `rex-config` does not depend on `rex-server`.
 
+pub mod root;
+
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
