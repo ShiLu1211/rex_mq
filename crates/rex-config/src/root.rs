@@ -12,9 +12,13 @@ pub use rex_observability::ObservabilityConfig;
 pub struct RexConfig {
     pub server: ServerSection,
     pub endpoints: Vec<EndpointConfig>,
+    #[serde(default)]
     pub cluster: ClusterSection,
+    #[serde(default)]
     pub persistence: PersistenceSection,
+    #[serde(default)]
     pub ack: AckSection,
+    #[serde(default)]
     pub observability: ObservabilityConfig,
 }
 
@@ -63,10 +67,10 @@ fn default_max_concurrent_handlers() -> usize {
     1000
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClusterSection {
-    #[serde(default)]
+    #[serde(default = "default_cluster_enabled")]
     pub enabled: bool,
     #[serde(default)]
     pub cluster_addr: Option<SocketAddr>,
@@ -79,6 +83,9 @@ pub struct ClusterSection {
 fn default_node_id() -> String {
     "auto".to_string()
 }
+fn default_cluster_enabled() -> bool {
+    false
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -87,8 +94,18 @@ pub struct PersistenceSection {
     pub enabled: bool,
     #[serde(default = "default_persistence_path")]
     pub path: String,
-    #[serde(default)]
+    #[serde(default = "default_offline_section")]
     pub offline: OfflineSection,
+}
+
+impl Default for PersistenceSection {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            path: "./.rex_sled".to_string(),
+            offline: default_offline_section(),
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -97,8 +114,15 @@ fn default_true() -> bool {
 fn default_persistence_path() -> String {
     "./.rex_sled".to_string()
 }
+fn default_offline_section() -> OfflineSection {
+    OfflineSection {
+        enabled: true,
+        ttl_secs: 7 * 86_400,
+        ghost_ttl_secs: 86_400,
+    }
+}
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OfflineSection {
     #[serde(default = "default_true")]
@@ -116,10 +140,10 @@ fn default_ghost_ttl() -> u64 {
     86_400
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AckSection {
-    #[serde(default)]
+    #[serde(default = "default_ack_enabled")]
     pub enabled: bool,
     #[serde(default = "default_ack_timeout")]
     pub timeout_ms: u64,
@@ -132,6 +156,9 @@ fn default_ack_timeout() -> u64 {
 }
 fn default_ack_retries() -> u32 {
     3
+}
+fn default_ack_enabled() -> bool {
+    false
 }
 
 #[cfg(test)]
