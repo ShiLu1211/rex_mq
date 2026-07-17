@@ -630,4 +630,142 @@ mod tests {
         assert_eq!(o.failed, 0);
         assert!(!o.acked_back);
     }
+
+    // ---------- Helpers for started-cluster tests ----------
+    //
+    // The `Forwarder::forward` contract requires a populated cluster
+    // (`node_manager` + `route_table`). Spinning up real cluster
+    // servers would be overkill for unit tests, so we wire a real
+    // `NodeManager` + `ClusterTransport` against a local TCP listener
+    // that just drains incoming bytes. The listener accepts the TCP
+    // connection; `ClusterTransport::connect` inserts the sender into
+    // its connection map before the wire handshake completes, so
+    // `is_connected` returns true and `send_to` writes through the
+    // local channel regardless of what the listener does.
+
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
+
+    /// Bind a TCP listener on `127.0.0.1:0` and accept connections in
+    /// the background, draining incoming bytes until the peer closes.
+    /// Returns the bound address and a handle for abort on drop.
+    async fn drain_listener() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind drain listener");
+        let addr = listener.local_addr().expect("listener local_addr");
+        let handle = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = match listener.accept().await {
+                    Ok(pair) => pair,
+                    Err(_) => break,
+                };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    loop {
+                        match stream.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => continue,
+                        }
+                    }
+                });
+            }
+        });
+        (addr, handle)
+    }
+
+    /// Build a started `NetworkForwarder` with a real
+    /// `NodeManager` + `ClusterTransport` + `GlobalRouteTable`. The
+    /// caller supplies a list of `(peer_id, peer_addr, should_connect)`
+    /// tuples. Each peer is registered in the route table; only the
+    /// peers with `should_connect = true` are wired into the transport
+    /// connection map. Returns the populated forwarder.
+    async fn started_forwarder(
+        local_id: &str,
+        peers: &[(&str, SocketAddr, bool)],
+    ) -> Arc<NetworkForwarder> {
+        let nm_slot = Arc::new(ArcSwap::from_pointee(None));
+        let rt_slot = Arc::new(ArcSwap::from_pointee(None));
+        let registry: Arc<dyn ClientRegistry> = ClientRegistryImpl::new();
+        let forwarder = NetworkForwarder::new(
+            nm_slot.clone(),
+            rt_slot.clone(),
+            rex_cluster::types::NodeId::new(local_id),
+            registry,
+        );
+
+        // NodeManager requires a ClusterMessage channel for inbound
+        // forward; the receiver is dropped immediately so any incoming
+        // bytes are silently discarded (matches the unit-test pattern
+        // used elsewhere in this module).
+        let (message_tx, _message_rx) =
+            tokio::sync::mpsc::unbounded_channel::<rex_cluster::types::ClusterMessage>();
+        let config = rex_cluster::types::ClusterConfig::new(
+            rex_cluster::types::NodeId::new(local_id),
+            "127.0.0.1:0".parse().expect("parse local listen addr"),
+        );
+        let nm = Arc::new(rex_cluster::node::NodeManager::new(config, message_tx));
+        let transport = nm.get_transport();
+
+        let route_table = rex_cluster::route_table::GlobalRouteTable::with_local_node(
+            rex_cluster::types::NodeId::new(local_id),
+        );
+        for (id, addr, should_connect) in peers {
+            route_table.add_node((*id).to_string(), addr.to_string());
+            if *should_connect {
+                transport
+                    .connect(rex_cluster::types::NodeId::new(*id), *addr)
+                    .await
+                    .expect("transport.connect");
+            }
+        }
+
+        forwarder.set_node_manager(Some(nm));
+        forwarder.set_route_table(Some(Arc::new(route_table)));
+        forwarder
+    }
+
+    // ---------- forward() direct-send + fallback tests ----------
+
+    /// Direct send to a known peer whose address is in the route
+    /// table. The transport accepts the message, so `forward` returns
+    /// `Delivered` without walking the fallback list. Guards against
+    /// regressing the fallback loop (e.g. by triggering it on every
+    /// successful send).
+    #[tokio::test]
+    async fn forward_to_known_target_accepted_does_not_fallback() {
+        let (peer_addr, _listener) = drain_listener().await;
+        let fwd = started_forwarder("local-node", &[("node-b", peer_addr, true)]).await;
+        let req = sample_forward_request("news");
+
+        let r = fwd.forward("node-b", &req).await;
+        assert!(matches!(r, FwdResult::Delivered), "got {r:?}");
+    }
+
+    /// When the targeted peer is registered in the route table but
+    /// has no live transport connection, the direct path fails and
+    /// `forward` must walk the other connected peers. Today `title.rs`
+    /// hand-rolls this loop; this test guards `Forwarder::forward`
+    /// from regressing without it.
+    #[tokio::test]
+    async fn forward_target_refused_falls_back_to_other_peer() {
+        // node-b is registered in the route table but NEVER connected
+        // (so `is_connected("node-b")` is false and the direct send
+        // fails). node-c is connected and accepts the message; the
+        // fallback walk should land on it.
+        let (peer_c_addr, _listener_c) = drain_listener().await;
+        let unreachable: SocketAddr = "127.0.0.1:1".parse().expect("parse unreachable");
+        let fwd = started_forwarder(
+            "local-node",
+            &[
+                ("node-b", unreachable, false),
+                ("node-c", peer_c_addr, true),
+            ],
+        )
+        .await;
+        let req = sample_forward_request("news");
+
+        let r = fwd.forward("node-b", &req).await;
+        assert!(matches!(r, FwdResult::Delivered), "got {r:?}");
+    }
 }
