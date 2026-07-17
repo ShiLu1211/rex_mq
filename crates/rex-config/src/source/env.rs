@@ -12,7 +12,10 @@ pub fn apply_env(mut cfg: RexConfig) -> (RexConfig, Vec<String>) {
             continue;
         };
         let mut parts = rest.split("__");
-        let section = parts.next().unwrap().to_lowercase();
+        let Some(section) = parts.next() else {
+            continue;
+        };
+        let section = section.to_lowercase();
         let key = match parts.next() {
             Some(k) => k.to_lowercase(),
             None => continue,

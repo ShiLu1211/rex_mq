@@ -9,6 +9,13 @@ use crate::root::{
 use rex_core::Protocol;
 use rex_observability::ObservabilityConfig;
 
+fn default_cluster_addr() -> SocketAddr {
+    SocketAddr::new(
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+        19_882,
+    )
+}
+
 pub fn default_endpoint(protocol: Protocol, port: u16) -> EndpointConfig {
     EndpointConfig {
         protocol,
@@ -38,7 +45,7 @@ impl Default for RexConfig {
             ],
             cluster: ClusterSection {
                 enabled: false,
-                cluster_addr: Some("0.0.0.0:19882".parse().expect("static addr")),
+                cluster_addr: Some(default_cluster_addr()),
                 node_id: "auto".to_string(),
                 seed_nodes: vec![],
             },
