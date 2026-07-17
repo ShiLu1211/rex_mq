@@ -9,6 +9,7 @@ members = [
   "crates/rex-server",
   "crates/rex-test",
   "crates/rex-observability",
+  "crates/rex-config",
   "bindings/rex4p",
   "bindings/rex4j",
 ]
@@ -87,6 +88,7 @@ fastrand = "2.4"
 # --- 错误处理与工具 ---
 anyhow = "1.0.103"
 thiserror = "2.0.18"
+regex = "1"
 itertools = "0.14.0"
 
 # --- 可观测性 (日志 / 指标 / 链路) ---
@@ -105,6 +107,12 @@ criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
 # --- 语言绑定 (JNI / PyO3) ---
 jni = "0.22.4"
 pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
+
+# --- test utilities ---
+tempfile = "3"
+temp-env = "0.3"
+assert_cmd = "2"
+predicates = "3"
 
 # =====================
 # Build Profiles
