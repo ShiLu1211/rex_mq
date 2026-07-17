@@ -14,7 +14,7 @@ use hdrhistogram::Histogram;
 use rand::{RngExt, distr::Alphanumeric, rng};
 use rex_client::{RexClientConfig, RexClientHandlerTrait, open_client};
 use rex_core::{Protocol, RexClientInner, RexCommand, RexData, utils::now_micros};
-use rex_server::{RexServerConfig, RexSystemConfig, open_server};
+use rex_server::{ClusterConfig, RexServerConfig, RexSystemConfig, open_server};
 
 #[derive(clap::Parser)]
 #[command(
@@ -25,6 +25,18 @@ use rex_server::{RexServerConfig, RexSystemConfig, open_server};
 )]
 #[command(propagate_version = true)]
 pub struct Cli {
+    /// Path to TOML config file (overrides REX_CONFIG and built-in search)
+    #[arg(long, global = true, value_name = "PATH")]
+    pub config: Option<std::path::PathBuf>,
+
+    /// Print merged effective config as TOML and exit 0
+    #[arg(long, global = true)]
+    pub print_effective_config: bool,
+
+    /// Print default config (with all defaults applied) as TOML and exit 0
+    #[arg(long, global = true)]
+    pub print_default_config: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -41,13 +53,13 @@ pub enum Commands {
 pub struct ServerArgs {
     /// ip:port
     #[arg(short, long)]
-    address: String,
+    address: Option<String>,
     /// 监听协议
-    #[arg(short, long, value_parser=["tcp", "quic", "websocket"], default_value = "tcp")]
-    protocol: String,
+    #[arg(short, long, value_parser=["tcp", "quic", "websocket"])]
+    protocol: Option<String>,
     /// 服务端id
-    #[arg(short, long, default_value = "rexd")]
-    server_id: String,
+    #[arg(short, long)]
+    server_id: Option<String>,
     #[arg(long, default_value_t = false)]
     persist: bool,
     /// Enable cluster mode
@@ -104,50 +116,38 @@ pub struct BenchArgs {
     bench: bool,
 }
 
-pub async fn start_server(args: ServerArgs) -> Result<()> {
-    let address = args.address.parse::<SocketAddr>()?;
-    let protocol = Protocol::from(args.protocol.as_str())
-        .ok_or_else(|| anyhow!("invalid protocol: {}", args.protocol))?;
+pub async fn start_server(config_path: Option<std::path::PathBuf>, args: ServerArgs) -> Result<()> {
+    // Build CliOverrides from legacy flags
+    let mut overrides = rex_config::CliOverrides::default();
+    overrides.server_id = args.server_id.clone();
+    overrides.persist = Some(args.persist);
+    overrides.cluster_enabled = args.cluster;
+    overrides.cluster_addr = args.cluster_addr.clone();
+    overrides.seeds = args.seeds.clone();
 
-    let mut config = RexServerConfig::new(protocol, address);
+    // Load config through the 4-layer pipeline
+    let root_cfg = rex_config::Loader::new()
+        .with_config_path_opt(config_path)
+        .with_cli_overrides(overrides)
+        .load()
+        .map_err(|e| anyhow!("{e}"))?;
 
-    // Enable cluster mode if requested
-    if args.cluster {
-        let cluster_addr = if let Some(addr) = args.cluster_addr {
-            addr.parse::<SocketAddr>()?
-        } else {
-            // Default: use address port + 10000
-            let port = address.port() + 10000;
-            SocketAddr::new(address.ip(), port)
-        };
+    // Extract subsystem configs
+    let system_config = RexSystemConfig::from(&root_cfg);
+    let endpoints: Vec<RexServerConfig> = rex_server::config::endpoints_from_config(&root_cfg);
+    let cluster_cfg: Option<ClusterConfig> = rex_server::config::cluster_from_config(&root_cfg);
 
-        config = config
-            .enable_cluster(cluster_addr)
-            .set_node_id(args.server_id.clone());
+    // Merge cluster into the first endpoint for legacy transport start
+    let mut server_config = if endpoints.is_empty() {
+        RexServerConfig::new(Protocol::Tcp, "127.0.0.1:8881".parse()?)
+    } else {
+        endpoints[0].clone()
+    };
+    server_config.cluster = cluster_cfg;
 
-        // Add seed nodes
-        let seeds_info = args.seeds.clone();
-        if let Some(ref seeds_str) = args.seeds {
-            for seed in seeds_str.split(',') {
-                let seed_addr = seed
-                    .trim()
-                    .parse::<SocketAddr>()
-                    .map_err(|e| anyhow!("invalid seed address '{}': {}", seed, e))?;
-                config = config.add_seed_node(seed_addr);
-            }
-        }
-
-        println!("Cluster mode enabled on {}", cluster_addr);
-        if let Some(ref seeds) = seeds_info {
-            println!("Seed nodes: {}", seeds);
-        }
-    }
-
-    let mut system_config = RexSystemConfig::from_id(&args.server_id);
-    system_config.persistence_enabled = args.persist;
     let services =
         rex_server::build_services(system_config, rex_server::Shutdown::new(), None).await;
-    let _server = open_server(services, config).await?;
+    let _server = open_server(services, server_config).await?;
 
     loop {
         tokio::time::sleep(Duration::from_millis(1000)).await;
@@ -224,9 +224,36 @@ async fn main() {
     }
     let cli = Cli::parse();
 
+    if cli.print_default_config {
+        match toml::to_string_pretty(&rex_config::RexConfig::default()) {
+            Ok(s) => println!("{}", s),
+            Err(e) => eprintln!("{}", e),
+        }
+        return;
+    }
+
+    if cli.print_effective_config {
+        let cfg = match rex_config::Loader::new()
+            .with_config_path_opt(cli.config.clone())
+            .load()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(78);
+            }
+        };
+        match toml::to_string_pretty(&cfg) {
+            Ok(s) => println!("{}", s),
+            Err(e) => eprintln!("{}", e),
+        }
+        return;
+    }
+
+    let config_path = cli.config.clone();
     if let Some(subcommand) = cli.command {
         let result = match subcommand {
-            Commands::Server(args) => start_server(args).await,
+            Commands::Server(args) => start_server(config_path, args).await,
             Commands::Recv(args) => start_recv(args).await,
             Commands::Bench(args) => start_bench(args).await,
         };

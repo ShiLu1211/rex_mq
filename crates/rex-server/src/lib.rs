@@ -1,5 +1,5 @@
 mod cluster;
-mod config;
+pub mod config;
 pub mod handler;
 mod server;
 mod system;
