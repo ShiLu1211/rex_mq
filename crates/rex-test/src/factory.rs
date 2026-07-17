@@ -185,6 +185,7 @@ impl TestEnv {
             admin_token: None,
             tracing_format: rex_observability::tracing_setup::TracingFormat::Pretty,
             single_node_cluster_ok: true,
+            admin_metrics_token: None,
         };
         let services = build_services(config, shutdown, None).await;
         Self {
@@ -214,6 +215,7 @@ impl TestEnv {
             admin_token: None,
             tracing_format: rex_observability::tracing_setup::TracingFormat::Pretty,
             single_node_cluster_ok: true,
+            admin_metrics_token: None,
         };
         let shutdown = Shutdown::new();
         let services = build_services(config, shutdown, None).await;
