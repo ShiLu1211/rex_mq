@@ -9,6 +9,7 @@ pub mod error;
 pub mod loader;
 pub mod root;
 pub mod source;
+pub mod validate;
 
 pub use error::ConfigError;
 pub use loader::Loader;

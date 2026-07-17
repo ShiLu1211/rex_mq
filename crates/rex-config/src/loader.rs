@@ -34,13 +34,35 @@ impl Loader {
         self
     }
 
-    /// Public entry. Each step is implemented in a later task; this
-    /// version only wires the skeleton + file-discovery cascade so we
-    /// can test the discovery path in isolation. Full pipeline lands
-    /// at end of Task 10.
+    /// Full 4-layer pipeline: defaults → TOML → env → CLI → validate.
     pub fn load(&self) -> Result<RexConfig, ConfigError> {
-        let _path = self.resolve_path()?;
-        let cfg = RexConfig::default();
+        // Defaults
+        let mut cfg = RexConfig::default();
+        let mut warnings: Vec<String> = Vec::new();
+
+        // TOML (optional — None means "no file found, not an error")
+        if let Some(path) = self.resolve_path()? {
+            let (parsed, parsed_warnings) = crate::source::toml::parse_toml(&path)?;
+            cfg = parsed;
+            warnings.extend(parsed_warnings);
+        }
+
+        // Apply env (best-effort: malformed env-vars warn, never fail)
+        let (cfg2, env_warnings) = crate::source::env::apply_env(cfg);
+        cfg = cfg2;
+        warnings.extend(env_warnings);
+
+        // Apply CLI
+        let (cfg3, cli_warnings) = crate::source::cli::apply_cli(cfg, &self.cli_overrides);
+        cfg = cfg3;
+        warnings.extend(cli_warnings);
+
+        // Validate
+        cfg.validate()?;
+
+        for w in &warnings {
+            tracing::warn!("{}", w);
+        }
         Ok(cfg)
     }
 

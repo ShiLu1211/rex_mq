@@ -178,6 +178,12 @@ fn default_ack_enabled() -> bool {
     false
 }
 
+impl RexConfig {
+    pub fn validate(&self) -> Result<(), crate::error::ConfigError> {
+        crate::validate::validate(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

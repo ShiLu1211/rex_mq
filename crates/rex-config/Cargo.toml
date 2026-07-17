@@ -12,6 +12,7 @@ toml = { workspace = true }
 thiserror = { workspace = true }
 regex = { workspace = true }
 parking_lot = { workspace = true }
+tracing = { workspace = true }
 
 rex-core = { workspace = true }
 rex-observability = { workspace = true }
