@@ -118,12 +118,14 @@ pub struct BenchArgs {
 
 pub async fn start_server(config_path: Option<std::path::PathBuf>, args: ServerArgs) -> Result<()> {
     // Build CliOverrides from legacy flags
-    let mut overrides = rex_config::CliOverrides::default();
-    overrides.server_id = args.server_id.clone();
-    overrides.persist = Some(args.persist);
-    overrides.cluster_enabled = args.cluster;
-    overrides.cluster_addr = args.cluster_addr.clone();
-    overrides.seeds = args.seeds.clone();
+    let overrides = rex_config::CliOverrides {
+        server_id: args.server_id.clone(),
+        persist: Some(args.persist),
+        cluster_enabled: args.cluster,
+        cluster_addr: args.cluster_addr.clone(),
+        seeds: args.seeds.clone(),
+        ..Default::default()
+    };
 
     // Load config through the 4-layer pipeline
     let root_cfg = rex_config::Loader::new()

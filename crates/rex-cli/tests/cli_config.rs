@@ -4,6 +4,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 fn rex_cli() -> Command {
+    #[allow(clippy::unwrap_used)]
     Command::cargo_bin("rex-cli").unwrap()
 }
 
