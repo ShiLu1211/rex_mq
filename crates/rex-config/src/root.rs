@@ -12,11 +12,11 @@ pub use rex_observability::ObservabilityConfig;
 pub struct RexConfig {
     pub server: ServerSection,
     pub endpoints: Vec<EndpointConfig>,
-    #[serde(default)]
+    #[serde(default = "default_cluster_section")]
     pub cluster: ClusterSection,
     #[serde(default)]
     pub persistence: PersistenceSection,
-    #[serde(default)]
+    #[serde(default = "default_ack_section")]
     pub ack: AckSection,
     #[serde(default)]
     pub observability: ObservabilityConfig,
@@ -119,6 +119,23 @@ fn default_offline_section() -> OfflineSection {
         enabled: true,
         ttl_secs: 7 * 86_400,
         ghost_ttl_secs: 86_400,
+    }
+}
+
+fn default_cluster_section() -> ClusterSection {
+    ClusterSection {
+        enabled: false,
+        cluster_addr: None,
+        node_id: "auto".to_string(),
+        seed_nodes: Vec::new(),
+    }
+}
+
+fn default_ack_section() -> AckSection {
+    AckSection {
+        enabled: false,
+        timeout_ms: 5_000,
+        retries: 3,
     }
 }
 
