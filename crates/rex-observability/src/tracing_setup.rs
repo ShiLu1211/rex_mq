@@ -11,6 +11,7 @@ pub enum TracingFormat {
     Pretty,
 }
 
+// Display retained: callers in crate rex-observability use .to_string()
 impl fmt::Display for TracingFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
