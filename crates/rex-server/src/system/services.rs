@@ -151,12 +151,22 @@ impl Services {
     /* ---------------- composite ops (multi-port) ---------------- */
 
     /// Register a freshly-connected client. Updates the registry, notifies
-    /// the cluster route table, and persists client state.
+    /// the cluster route table, and persists client state via the
+    /// `ClientStateStore` port. Any ghost entry for this id is claimed
+    /// (dropped) before the live client is added; ghost titles are NOT
+    /// merged into the live client (see spec decision).
     pub async fn add_client(&self, client: Arc<RexClientInner>) {
         let id = client.id();
+        // Drop any ghost entry for this id before inserting live.
+        self.registry.claim_ghost(id);
         self.registry.add_client(client.clone());
         self.cluster.register_client(id);
-        self.offline.save_client(&client).await;
+
+        let now = rex_core::utils::now_secs();
+        let titles: Vec<String> = client.title_iter();
+        let ghost_until = now.saturating_add(self.config.ghost_ttl_secs);
+        self.state_store.save(id, &titles, now, ghost_until).await;
+
         // Observability: refresh the live gauges so `/metrics` reflects
         // the post-add state immediately (not lazily on next scrape).
         set_clients_connected(self.registry.client_count() as i64);
@@ -174,7 +184,7 @@ impl Services {
         } else {
             tracing::info!("client [{:032X}] removed", client_id);
         }
-        self.offline.remove_client(client_id).await;
+        self.state_store.remove(client_id).await;
         // Observability: same as `add_client` — publish post-remove counts.
         set_clients_connected(self.registry.client_count() as i64);
         set_titles_active(self.registry.title_count() as i64);
@@ -291,10 +301,21 @@ mod tests {
     use super::*;
     use crate::system::ack::AckTrackerImpl;
     use crate::system::client_registry::ClientRegistryImpl;
-    use crate::system::client_state_store::NoopClientStateStore;
+    use crate::system::client_state_store::{NoopClientStateStore, SledClientStateStore};
     use crate::system::forwarder::NetworkForwarder;
     use crate::system::offline::NoopOfflineBuffer;
     use crate::system::router::ClusterRouter;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SLED_COUNTER: AtomicU64 = AtomicU64::new(0);
+    fn fresh_sled_path() -> String {
+        let n = SLED_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        std::env::temp_dir()
+            .join(format!("rex-svc-test-{pid}-{n}"))
+            .to_string_lossy()
+            .to_string()
+    }
 
     /// Build a `Services` bundle with real implementations / no-op stubs.
     /// Uses the same `TestClusterPort` / `ClientRegistryImpl` /
@@ -304,12 +325,17 @@ mod tests {
     /// depend on the handler test helper itself (which calls
     /// `Services::new`).
     fn make_services() -> Arc<Services> {
+        make_services_with_state_store(Arc::new(NoopClientStateStore))
+    }
+
+    /// Variant that lets a test inject a specific state store
+    /// (e.g. a real `SledClientStateStore` for persistence assertions).
+    fn make_services_with_state_store(state_store: Arc<dyn ClientStateStore>) -> Arc<Services> {
         let registry = ClientRegistryImpl::new();
         let cluster: Arc<dyn ClusterPort> =
             Arc::new(crate::handler::test_util::TestClusterPort::new());
         let acks: Arc<dyn AckTracker> = AckTrackerImpl::new(60);
         let offline: Arc<dyn OfflineBuffer> = Arc::new(NoopOfflineBuffer);
-        let state_store: Arc<dyn ClientStateStore> = Arc::new(NoopClientStateStore);
         let router: Arc<dyn Router> = ClusterRouter::new(registry.clone(), cluster.clone());
         let forwarder: Arc<dyn Forwarder> = NetworkForwarder::new(
             Arc::new(arc_swap::ArcSwap::from_pointee(None)),
@@ -336,6 +362,12 @@ mod tests {
         )
     }
 
+    /// Convenience: build a SledClientStateStore over a fresh temp sled path.
+    async fn fresh_sled_state_store() -> Arc<dyn ClientStateStore> {
+        let path = fresh_sled_path();
+        SledClientStateStore::open(&path).await.expect("open sled")
+    }
+
     #[tokio::test]
     async fn cancel_client_propagates() {
         let s = make_services();
@@ -360,5 +392,55 @@ mod tests {
         assert!(s.cancel_client(0xBEEF));
         s.unregister_client_shutdown(0xBEEF);
         assert!(!s.cancel_client(0xBEEF));
+    }
+
+    #[tokio::test]
+    async fn add_client_claims_ghost_before_inserting_live() {
+        let s = make_services_with_state_store(fresh_sled_state_store().await);
+        let id = 0xCAFE_u128;
+        // Pre-register a ghost
+        s.registry
+            .add_ghost(id, vec!["ghost_title".to_string()], u64::MAX)
+            .unwrap();
+        assert_eq!(s.registry.ghost_count(), 1);
+
+        // Add a live client with the same id; ghost should be claimed
+        // before live is added.
+        let client = crate::handler::test_util::dummy_client_with_id(id);
+        s.add_client(client).await;
+
+        assert_eq!(s.registry.ghost_count(), 0, "ghost should be claimed");
+        assert!(
+            s.registry.find_some_by_id(id).is_some(),
+            "live should be present"
+        );
+        assert_eq!(s.state_store.last_error(), None);
+    }
+
+    #[tokio::test]
+    async fn add_client_persists_state_with_ttl() {
+        let s = make_services_with_state_store(fresh_sled_state_store().await);
+        let client = crate::handler::test_util::dummy_client_with_id(0xBEEF);
+        s.add_client(client).await;
+
+        let loaded = s.state_store.load_all().await;
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].client_id, 0xBEEF);
+        // ghost_until should be roughly now + ghost_ttl_secs
+        let now = rex_core::utils::now_secs();
+        let ttl = loaded[0].ghost_until;
+        assert!(ttl >= now + s.config.ghost_ttl_secs - 5);
+        assert!(ttl <= now + s.config.ghost_ttl_secs + 5);
+    }
+
+    #[tokio::test]
+    async fn remove_client_drops_state_store_entry() {
+        let s = make_services_with_state_store(fresh_sled_state_store().await);
+        let client = crate::handler::test_util::dummy_client_with_id(0xDEAD);
+        s.add_client(client.clone()).await;
+        assert_eq!(s.state_store.load_all().await.len(), 1);
+
+        s.remove_client(client.id()).await;
+        assert_eq!(s.state_store.load_all().await.len(), 0);
     }
 }
