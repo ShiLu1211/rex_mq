@@ -173,6 +173,22 @@ _Avoid_: probe adapter, default snapshot
 - 延迟类指标使用 `LATENCY_BUCKETS = [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]`
 - 任何修改桶的 PR 必须附 criterion bench 报告
 
+## Configuration
+
+**RexConfig**: Single root for the server's static configuration in `crates/rex-config`. Loaded by `rex_config::Loader` from a 4-layer cascade (defaults → TOML → env → CLI → validate). `RexSystemConfig` and `RexServerConfig` in `rex-server` are projections (`From<&RexConfig>`); they no longer own defaults.
+_Avoid_: secondary config types, per-subsystem defaults straying from `RexConfig::default()`.
+
+**Loader**: `rex_config::Loader::load() -> Result<RexConfig, ConfigError>`. Owns the file-discovery cascade (CLI `--config` → env `REX_CONFIG` → `./rex.toml` → `./config/rex.toml` → `/etc/rex/rex.toml`), the env parser (`REX__SECTION__KEY`), and the fail-fast validator. `ConfigError` carries section.key paths for grep-able boot failures.
+_Avoid_: silent fallback to defaults, `Option` defaults inside subsystems.
+
+**TOML section vocabulary**:
+- `[server]` — identity + cross-cutting lifecycle
+- `[[endpoints]]` — per-listener transport
+- `[cluster]` — top-level cluster membership
+- `[persistence]` / `[persistence.offline]` — sled + offline queue
+- `[ack]` — application-level acknowledgement
+- `[observability]` — admin HTTP + tracing
+
 ## Anti-patterns recorded here
 
 - Treating one broadcast signal as the right shape — the C4 split moved cluster I/O
@@ -188,3 +204,11 @@ _Avoid_: probe adapter, default snapshot
   `Send + Sync` bound without checking whether a reference works — the
   `AssertUnwindSafe` pattern from [[health.rs|HealthRegistry::check_all]]
   shows how to opt out of `UnwindSafe` cleanly.
+- Constructing `RexSystemConfig::new(...11 args)` directly — deprecated;
+  use `RexSystemConfig::from(&RexConfig::default())` or load from TOML.
+- Hardcoding a duplicate default in a subsystem — one source of truth:
+  `RexConfig::default()`. Mirroring it elsewhere invites drift.
+- Using `unwrap()` / `expect()` in config loading paths — workspace
+  lints deny them; the loader uses `ConfigError` and explicit match arms.
+  `#[allow(clippy::unwrap_used)]` on binary crates is a deliberate
+  exception for test-only paths and static-address constructors.
