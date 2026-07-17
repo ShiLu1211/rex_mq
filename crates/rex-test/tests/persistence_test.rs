@@ -44,11 +44,11 @@ mod tests {
     }
 
     // Note: the previous `persistence_client_state` test was removed in Task 10
-// when `PersistenceStore::save_client` / `load_all_clients` / `remove_client`
-// / `clear_clients` were deleted and the `ClientState` type was retired.
-// Equivalent coverage now lives in `rex-persistence::client_state_repo`
-// unit tests, which exercise `ClientStateRepo::save` / `load_all` /
-// `remove` / `take_expired_ghosts` directly.
+    // when `PersistenceStore::save_client` / `load_all_clients` / `remove_client`
+    // / `clear_clients` were deleted and the `ClientState` type was retired.
+    // Equivalent coverage now lives in `rex-persistence::client_state_repo`
+    // unit tests, which exercise `ClientStateRepo::save` / `load_all` /
+    // `remove` / `take_expired_ghosts` directly.
 
     #[tokio::test]
     async fn persistence_offline_message() -> Result<()> {

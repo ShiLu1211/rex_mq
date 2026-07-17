@@ -54,10 +54,11 @@ pub async fn open_server(
             restored.len()
         );
         for entry in restored {
-            if let Err(e) = services
-                .registry
-                .add_ghost(entry.client_id, entry.titles.clone(), entry.ghost_until)
-            {
+            if let Err(e) = services.registry.add_ghost(
+                entry.client_id,
+                entry.titles.clone(),
+                entry.ghost_until,
+            ) {
                 tracing::warn!(
                     "Failed to restore ghost for client {:032X}: {:?}",
                     entry.client_id,

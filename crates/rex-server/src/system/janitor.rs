@@ -50,11 +50,11 @@ impl Janitor {
         for client_id in expired {
             self.services.registry.remove_ghost(client_id);
             self.services.cluster.unregister_client(client_id);
-            self.services.offline.clear_offline_messages(client_id).await;
-            tracing::info!(
-                "Ghost for client {:032X} expired, removed",
-                client_id
-            );
+            self.services
+                .offline
+                .clear_offline_messages(client_id)
+                .await;
+            tracing::info!("Ghost for client {:032X} expired, removed", client_id);
         }
     }
 
@@ -112,13 +112,13 @@ impl Janitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::handler::test_util::TestClusterPort;
     use crate::system::ack::AckTrackerImpl;
     use crate::system::client_registry::ClientRegistryImpl;
     use crate::system::client_state_store::{ClientStateStore, SledClientStateStore};
     use crate::system::forwarder::NetworkForwarder;
     use crate::system::offline::{OfflineBuffer, SledOfflineBuffer};
     use crate::system::router::ClusterRouter;
-    use crate::handler::test_util::TestClusterPort;
     use dashmap::DashMap;
     use parking_lot::Mutex;
     use rex_observability::health::HealthRegistry;
@@ -139,8 +139,7 @@ mod tests {
     /// SledOfflineBuffer (sharing one sled::Db) so the Janitor's cleanup
     /// paths can actually persist and read back. Returns the typed
     /// `TestClusterPort` handle so the test can assert unregister calls.
-    async fn make_services_with_shared_sled()
-        -> (Arc<crate::Services>, Arc<TestClusterPort>, String)
+    async fn make_services_with_shared_sled() -> (Arc<crate::Services>, Arc<TestClusterPort>, String)
     {
         let path = fresh_sled_path();
         std::fs::create_dir_all(&path).unwrap();
@@ -186,14 +185,18 @@ mod tests {
         let (s, test_cluster, path) = make_services_with_shared_sled().await;
 
         // Seed three persisted ghost rows with differing expiries.
-        s.state_store.save(1, &[], 0, 0).await;                              // expired
-        s.state_store.save(2, &[], 0, u64::MAX).await;                       // never
-        s.state_store.save(3, &[], 0, rex_core::utils::now_secs() + 3600).await; // fresh
+        s.state_store.save(1, &[], 0, 0).await; // expired
+        s.state_store.save(2, &[], 0, u64::MAX).await; // never
+        s.state_store
+            .save(3, &[], 0, rex_core::utils::now_secs() + 3600)
+            .await; // fresh
 
         // Mirror the ghost rows in the registry (so remove_ghost has work).
         s.registry.add_ghost(1, vec![], 0).unwrap();
         s.registry.add_ghost(2, vec![], u64::MAX).unwrap();
-        s.registry.add_ghost(3, vec![], rex_core::utils::now_secs() + 3600).unwrap();
+        s.registry
+            .add_ghost(3, vec![], rex_core::utils::now_secs() + 3600)
+            .unwrap();
         s.cluster.register_client(1);
         s.cluster.register_client(2);
         s.cluster.register_client(3);
@@ -204,7 +207,9 @@ mod tests {
             .await;
 
         let janitor = Janitor::new(s.clone());
-        janitor.cleanup_expired_ghosts(rex_core::utils::now_secs()).await;
+        janitor
+            .cleanup_expired_ghosts(rex_core::utils::now_secs())
+            .await;
 
         // Expired ghost gone; fresh ones still present.
         assert_eq!(s.registry.ghost_count(), 2);

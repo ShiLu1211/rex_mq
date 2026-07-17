@@ -18,9 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use rex_core::{Protocol, RexClientInner, RexSenderTrait};
-use rex_server::{
-    RexServerConfig, RexSystemConfig, Shutdown, build_services, open_server,
-};
+use rex_server::{RexServerConfig, RexSystemConfig, Shutdown, build_services, open_server};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 

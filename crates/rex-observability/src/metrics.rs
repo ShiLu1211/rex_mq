@@ -190,7 +190,7 @@ pub fn observe_client_state_save_latency(secs: f64) {
         &["op"],
     )
     .with_label_values(&["save"])
-        .observe(secs);
+    .observe(secs);
 }
 
 #[cfg(test)]
