@@ -8,7 +8,9 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use rex_cluster::node::NodeManager;
 use rex_cluster::route_table::GlobalRouteTable;
-use rex_cluster::types::{ClusterConfig as RexClusterConfig, ClusterMessage, NodeId, NodeInfo};
+use rex_cluster::types::{
+    ClusterConfig as RexClusterConfig, ClusterMessage, ForwardAckMessage, NodeId, NodeInfo,
+};
 use rex_observability::metrics::set_cluster_peers;
 use tokio::sync::mpsc;
 
@@ -193,12 +195,28 @@ impl ServerClusterManager {
                         lock.as_ref().map(Arc::clone)
                     };
                     if let Some(services) = services {
-                        crate::cluster::forward_relay::deliver_forward_message(
-                            &services,
-                            forward,
-                            self.local_node_id.as_str(),
-                        )
-                        .await;
+                        let outcome = services.forwarder.deliver(&forward).await;
+                        if forward.require_ack && outcome.acked_back {
+                            let success = outcome.delivered_to > 0 && outcome.failed == 0;
+                            let error = if success {
+                                None
+                            } else if outcome.failed > 0 {
+                                Some(format!(
+                                    "Failed to deliver to {} local subscriber(s)",
+                                    outcome.failed
+                                ))
+                            } else {
+                                Some("No local subscriber".to_string())
+                            };
+                            let ack = ForwardAckMessage {
+                                forward_id: forward.forward_id,
+                                from_node_id: self.local_node_id.to_string(),
+                                original_source: forward.original_source,
+                                success,
+                                error,
+                            };
+                            services.forwarder.announce_ack(&ack).await;
+                        }
                     }
                 }
                 ClusterMessage::TitleRegister(msg) => {

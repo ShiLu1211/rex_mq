@@ -35,7 +35,7 @@ use async_trait::async_trait;
 use bytes::BytesMut;
 use rex_cluster::node::NodeManager;
 use rex_cluster::route_table::GlobalRouteTable;
-use rex_cluster::types::{ClusterMessage, ForwardMessage};
+use rex_cluster::types::{ClusterMessage, ForwardAckMessage, ForwardMessage};
 use rex_core::RexData;
 use tracing::{debug, info, warn};
 
@@ -99,6 +99,12 @@ pub trait Forwarder: Send + Sync {
     /// dispatch loop in `ServerClusterManager::handle_messages`
     /// observes the returned `DeliveryOutcome` and decides.
     async fn deliver(&self, msg: &ForwardMessage) -> DeliveryOutcome;
+
+    /// Broadcast a `ForwardAck` to every connected peer. Used by
+    /// the dispatch loop after `Forwarder::deliver` returns
+    /// `acked_back: true` for a `require_ack` message. ADR-0003
+    /// records this is the only entry point for ack transmission.
+    async fn announce_ack(&self, ack: &ForwardAckMessage);
 
     /// Cluster-internal fan-out (e.g. `TitleRegister`).
     /// Returns the number of sends the transport accepted (best-effort,
@@ -330,6 +336,14 @@ impl Forwarder for NetworkForwarder {
         outcome
     }
 
+    async fn announce_ack(&self, ack: &ForwardAckMessage) {
+        if self.node_manager().is_none() {
+            return;
+        }
+        // Wire body lands in Task 6 when forward_relay.rs is deleted.
+        let _ = ack;
+    }
+
     async fn broadcast(&self, msg: &ClusterMessage) -> usize {
         let nm = match self.node_manager() {
             Some(nm) => nm,
@@ -492,6 +506,20 @@ mod tests {
             }))
             .await;
         assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn announce_ack_with_unstarted_cluster_returns_without_sending() {
+        let forwarder = empty_forwarder();
+        let ack = ForwardAckMessage {
+            forward_id: 1,
+            from_node_id: "local-node".into(),
+            original_source: 0xAAu128,
+            success: true,
+            error: None,
+        };
+
+        forwarder.announce_ack(&ack).await;
     }
 
     #[tokio::test]
