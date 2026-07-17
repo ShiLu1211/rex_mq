@@ -4,7 +4,6 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::{
-    client_state::ClientState,
     error::{PersistenceError, Result},
     offline::{OfflineMessage, OfflineQueueConfig},
 };
@@ -17,6 +16,7 @@ pub struct PersistenceStore {
     // same path twice from the same process fails — callers must
     // share a single `Arc<sled::Db>` instead.
     db: Arc<sled::Db>,
+    #[allow(dead_code)] // legacy: kept for API stability; not read after Task 10.
     config: StoreConfig,
     offline_config: OfflineQueueConfig,
 }
@@ -111,70 +111,6 @@ impl PersistenceStore {
     pub async fn close(&self) -> Result<()> {
         self.flush().await?;
         info!("Persistence store closed");
-        Ok(())
-    }
-}
-
-/* ==================== 客户端状态持久化 ==================== */
-
-impl PersistenceStore {
-    /// 保存客户端状态
-    pub async fn save_client(&self, state: &ClientState) -> Result<()> {
-        if !self.config.enable_client_persistence {
-            return Ok(());
-        }
-
-        let key = state.client_id.to_le_bytes();
-        let value = bincode::serialize(state).map_err(PersistenceError::Serialization)?;
-
-        self.db
-            .open_tree(T_CLIENTS)
-            .map_err(|e| PersistenceError::Db(e.to_string()))?
-            .insert(key, value)
-            .map_err(|e| PersistenceError::Db(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// 加载所有客户端状态
-    pub async fn load_all_clients(&self) -> Result<Vec<ClientState>> {
-        let tree = self
-            .db
-            .open_tree(T_CLIENTS)
-            .map_err(|e| PersistenceError::Db(e.to_string()))?;
-
-        let mut states = Vec::new();
-        for entry in tree.iter() {
-            let (_, value) = entry.map_err(|e| PersistenceError::Db(e.to_string()))?;
-            let state: ClientState =
-                bincode::deserialize(&value).map_err(PersistenceError::Serialization)?;
-            states.push(state);
-        }
-
-        Ok(states)
-    }
-
-    /// 删除客户端状态
-    pub async fn remove_client(&self, client_id: u128) -> Result<()> {
-        let key = client_id.to_le_bytes();
-
-        self.db
-            .open_tree(T_CLIENTS)
-            .map_err(|e| PersistenceError::Db(e.to_string()))?
-            .remove(key)
-            .map_err(|e| PersistenceError::Db(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// 清空所有客户端状态
-    pub async fn clear_clients(&self) -> Result<()> {
-        self.db
-            .open_tree(T_CLIENTS)
-            .map_err(|e| PersistenceError::Db(e.to_string()))?
-            .clear()
-            .map_err(|e| PersistenceError::Db(e.to_string()))?;
-
         Ok(())
     }
 }

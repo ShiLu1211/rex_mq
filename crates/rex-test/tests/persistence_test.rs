@@ -7,7 +7,7 @@ mod tests {
     use tokio::time::sleep;
 
     use rex_core::Protocol;
-    use rex_persistence::{ClientState, OfflineMessage, PersistenceStore, StoreConfig};
+    use rex_persistence::{OfflineMessage, PersistenceStore, StoreConfig};
     use rex_test::factory::TestEnv;
 
     /// 清理测试数据目录
@@ -43,58 +43,12 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn persistence_client_state() -> Result<()> {
-        let test_path = "/tmp/rex_test_persistence_1".to_string();
-        cleanup_test_dir(&test_path);
-
-        let config = StoreConfig {
-            path: test_path.clone(),
-            enable_offline_queue: true,
-            enable_client_persistence: true,
-            sync_interval: 100,
-        };
-
-        let store = PersistenceStore::open(config).await?;
-
-        // 保存客户端状态
-        let state = ClientState::new(
-            0x1234567890abcdefu128,
-            vec!["title1".to_string(), "title2".to_string()],
-            "127.0.0.1:12345".to_string(),
-        );
-        store.save_client(&state).await?;
-
-        // 加载所有客户端
-        let clients = store.load_all_clients().await?;
-        assert_eq!(clients.len(), 1);
-        assert_eq!(clients[0].client_id, state.client_id);
-        assert_eq!(clients[0].titles, state.titles);
-
-        // 再次保存相同ID（更新）
-        let mut state2 = state.clone();
-        state2.titles.push("title3".to_string());
-        store.save_client(&state2).await?;
-
-        let clients = store.load_all_clients().await?;
-        assert_eq!(clients.len(), 1);
-        assert_eq!(clients[0].titles.len(), 3);
-
-        // 删除客户端
-        store.remove_client(state.client_id).await?;
-        let clients = store.load_all_clients().await?;
-        assert_eq!(clients.len(), 0);
-
-        // 清空所有
-        store.save_client(&state).await?;
-        assert!(!store.load_all_clients().await?.is_empty());
-        store.clear_clients().await?;
-        assert_eq!(store.load_all_clients().await?.len(), 0);
-
-        store.close().await?;
-        cleanup_test_dir(&test_path);
-        Ok(())
-    }
+    // Note: the previous `persistence_client_state` test was removed in Task 10
+// when `PersistenceStore::save_client` / `load_all_clients` / `remove_client`
+// / `clear_clients` were deleted and the `ClientState` type was retired.
+// Equivalent coverage now lives in `rex-persistence::client_state_repo`
+// unit tests, which exercise `ClientStateRepo::save` / `load_all` /
+// `remove` / `take_expired_ghosts` directly.
 
     #[tokio::test]
     async fn persistence_offline_message() -> Result<()> {

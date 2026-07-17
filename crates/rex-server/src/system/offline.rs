@@ -20,7 +20,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::Mutex;
-use rex_core::RexClientInner;
 use rex_persistence::{OfflineMessage, PersistenceStore, StoreConfig};
 use tracing::warn;
 
@@ -30,12 +29,8 @@ use tracing::warn;
 /// logged at `warn` level and the operation is treated as a no-op. The
 /// port's contract is "best effort" — losing a queued message is preferable
 /// to taking the server down.
-#[allow(dead_code)] // Port added in commit 5; consumed in commit 7+.
 #[async_trait]
 pub trait OfflineBuffer: Send + Sync {
-    async fn save_client(&self, client: &Arc<RexClientInner>);
-    async fn remove_client(&self, client_id: u128);
-
     async fn queue_offline_message(&self, target_client_id: u128, title: &str, payload: Bytes);
 
     /// Returns messages queued for `client_id`. Order is FIFO by
@@ -95,31 +90,6 @@ impl SledOfflineBuffer {
 
 #[async_trait]
 impl OfflineBuffer for SledOfflineBuffer {
-    async fn save_client(&self, client: &Arc<RexClientInner>) {
-        let state = rex_persistence::ClientState::new(
-            client.id(),
-            client.title_iter(),
-            client.local_addr().to_string(),
-        );
-        match self.store.save_client(&state).await {
-            Ok(()) => *self.last_error.lock() = None,
-            Err(e) => {
-                warn!("Failed to save client state: {}", e);
-                *self.last_error.lock() = Some(e.to_string());
-            }
-        }
-    }
-
-    async fn remove_client(&self, client_id: u128) {
-        match self.store.remove_client(client_id).await {
-            Ok(()) => *self.last_error.lock() = None,
-            Err(e) => {
-                warn!("Failed to remove client state: {}", e);
-                *self.last_error.lock() = Some(e.to_string());
-            }
-        }
-    }
-
     async fn queue_offline_message(&self, target_client_id: u128, title: &str, payload: Bytes) {
         let msg = OfflineMessage::new(target_client_id, title.to_string(), payload);
         match self.store.add_offline_message(&msg).await {
@@ -188,9 +158,6 @@ pub struct NoopOfflineBuffer;
 
 #[async_trait]
 impl OfflineBuffer for NoopOfflineBuffer {
-    async fn save_client(&self, _client: &Arc<RexClientInner>) {}
-    async fn remove_client(&self, _client_id: u128) {}
-
     async fn queue_offline_message(&self, _target_client_id: u128, _title: &str, _payload: Bytes) {}
 
     async fn get_offline_messages(&self, _client_id: u128) -> Vec<OfflineMessage> {
@@ -210,8 +177,6 @@ impl OfflineBuffer for NoopOfflineBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rex_core::{RexSenderTrait, utils::new_uuid};
-    use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// Per-test unique sled path under the system temp dir. Avoids conflicts
@@ -225,35 +190,6 @@ mod tests {
             .join(format!("rex-server-offline-test-{pid}-{n}"))
             .to_string_lossy()
             .to_string()
-    }
-
-    struct NoopSender;
-
-    #[async_trait]
-    impl RexSenderTrait for NoopSender {
-        async fn send_buf(&self, _buf: &[u8]) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn close(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    fn dummy_client() -> Arc<RexClientInner> {
-        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
-        Arc::new(RexClientInner::new(
-            new_uuid(),
-            addr,
-            "",
-            Arc::new(NoopSender) as Arc<dyn RexSenderTrait>,
-        ))
-    }
-
-    #[tokio::test]
-    async fn noop_save_client_is_silent() {
-        let buf = NoopOfflineBuffer;
-        let c = dummy_client();
-        buf.save_client(&c).await;
     }
 
     #[tokio::test]
@@ -304,19 +240,6 @@ mod tests {
         buf.clear_offline_messages(target).await;
         assert_eq!(buf.get_offline_count(target).await, 0);
         assert!(buf.get_offline_messages(target).await.is_empty());
-
-        buf.close().await;
-    }
-
-    #[tokio::test]
-    async fn sled_save_and_remove_client() {
-        let path = fresh_sled_path();
-        let buf = SledOfflineBuffer::open(path).await.expect("open sled");
-
-        let c = dummy_client();
-        let id = c.id();
-        buf.save_client(&c).await;
-        buf.remove_client(id).await;
 
         buf.close().await;
     }
