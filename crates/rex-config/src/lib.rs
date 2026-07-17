@@ -5,7 +5,15 @@
 //! `rex-config` does not depend on `rex-server`.
 
 pub mod defaults;
+pub mod error;
+pub mod loader;
 pub mod root;
+pub mod source;
+
+pub use error::ConfigError;
+pub use loader::Loader;
+pub use root::RexConfig;
+pub use source::cli::CliOverrides;
 
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
