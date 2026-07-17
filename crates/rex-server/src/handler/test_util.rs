@@ -89,6 +89,11 @@ impl TestClusterPort {
             known_nodes: vec!["local".to_string()],
         }
     }
+
+    /// Snapshot of `unregister_client` calls, for Janitor test assertions.
+    pub fn unregister_calls_test(&self) -> Vec<u128> {
+        self.unregister_calls.lock().clone()
+    }
 }
 
 #[async_trait]
