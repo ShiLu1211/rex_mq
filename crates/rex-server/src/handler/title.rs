@@ -11,7 +11,7 @@ use scopeguard::guard;
 use tracing::{debug, info, warn};
 
 use crate::handler::port::CommandHandler;
-use crate::{RoutePlan, Services};
+use crate::{FwdResult, RoutePlan, Services};
 
 pub struct TitleHandler;
 
@@ -72,27 +72,41 @@ impl CommandHandler for TitleHandler {
                     msg_type: crate::ForwardType::Unicast,
                 };
 
-                success = services.cluster.forward_message(&node, request).await;
-                if !success {
-                    inc_forward_failures("unreachable");
-                    // Broadcast fallback: try all other known nodes.
-                    let local_id = services.cluster.get_local_node_id().unwrap_or_default();
-                    for other in services.cluster.get_nodes() {
-                        if other != node && other != local_id {
-                            let fallback = crate::ForwardRequest {
-                                source_client_id: client_id,
-                                target_client_id: 0,
-                                title: title.clone(),
-                                payload: rex_data.pack_ref().to_vec(),
-                                msg_type: crate::ForwardType::Unicast,
-                            };
-                            if services.cluster.forward_message(&other, fallback).await {
-                                success = true;
-                                debug!("fallback forward to node {} succeeded", other);
-                                break;
-                            }
-                            inc_forward_failures("unreachable");
-                        }
+                // Why this works: Forwarder::forward already does the
+                // direct send + fallback walk over other known peers
+                // (forwarder.rs:222-256) and returns the structured
+                // FwdResult. ADR-0003 records that this is the only
+                // entry point for cross-node wire I/O; the handler
+                // just maps the outcome to metrics + the no-target
+                // path below. This replaces the previous in-handler
+                // `for other in cluster.get_nodes()` loop, which
+                // duplicated that fallback logic and conflated every
+                // failure mode under a single "unreachable" label.
+                let outcome = services.forwarder.forward(&node, &request).await;
+                match outcome {
+                    FwdResult::Delivered => {
+                        success = true;
+                    }
+                    FwdResult::PeerUnreachable(reason) => {
+                        inc_forward_failures("unreachable");
+                        warn!("title '{}' forward to {} failed: {}", title, node, reason);
+                    }
+                    FwdResult::NoPeerForTitle => {
+                        // New in this rewrite: previously the inline
+                        // fallback walked peers but silently dropped
+                        // the message when no peers were known. This
+                        // surfaces that condition as its own metric
+                        // reason so ops can distinguish "no peers"
+                        // from "peer unreachable".
+                        inc_forward_failures("no_peer");
+                    }
+                    FwdResult::PeerRejected(reason) => {
+                        // Peer acknowledged but rejected the payload
+                        // (e.g. schema mismatch, payload too large).
+                        // Distinct from transport unreachability —
+                        // record it under its own label.
+                        inc_forward_failures("peer_rejected");
+                        warn!("title '{}' forward to {} rejected: {}", title, node, reason);
                     }
                 }
 
