@@ -45,6 +45,36 @@ pub async fn open_server(
         start_cluster_manager(&services, cluster_config).await?;
     }
 
+    // Restore persisted client state as ghost entries. Best-effort:
+    // a load_all failure is logged and the server still starts.
+    if services.config.persistence_enabled {
+        let restored = services.state_store.load_all().await;
+        tracing::info!(
+            "Restoring {} client entries from persistence",
+            restored.len()
+        );
+        for entry in restored {
+            if let Err(e) = services
+                .registry
+                .add_ghost(entry.client_id, entry.titles.clone(), entry.ghost_until)
+            {
+                tracing::warn!(
+                    "Failed to restore ghost for client {:032X}: {:?}",
+                    entry.client_id,
+                    e
+                );
+                continue;
+            }
+            services.cluster.register_client(entry.client_id);
+            tracing::debug!(
+                "Restored ghost for client {:032X} ({} titles, ttl={})",
+                entry.client_id,
+                entry.titles.len(),
+                entry.ghost_until
+            );
+        }
+    }
+
     // Spawn the Janitor for periodic cleanup.
     let check_interval = Duration::from_secs(services.config.check_interval);
     let client_timeout = services.config.client_timeout;
