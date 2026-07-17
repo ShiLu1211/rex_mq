@@ -7,6 +7,7 @@ edition.workspace = true
 rex-core.workspace = true
 rex-client.workspace = true
 rex-server.workspace = true
+rex-config.workspace = true
 rex-persistence.workspace = true
 rex-observability.workspace = true
 anyhow.workspace = true
@@ -21,6 +22,8 @@ rand.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 reqwest.workspace = true
+tempfile = "3"
+toml.workspace = true
 
 [[bench]]
 name = "data_codec"
