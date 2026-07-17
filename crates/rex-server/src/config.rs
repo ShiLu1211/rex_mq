@@ -94,3 +94,37 @@ impl RexServerConfig {
         self.cluster.as_ref()
     }
 }
+
+impl From<&rex_config::root::EndpointConfig> for RexServerConfig {
+    fn from(ep: &rex_config::root::EndpointConfig) -> Self {
+        let mut s = Self::new(ep.protocol, ep.address);
+        s.enabled = ep.enabled;
+        s.max_buffer_size = ep.max_buffer_size;
+        s.max_concurrent_handlers = ep.max_concurrent_handlers;
+        s
+    }
+}
+
+pub fn endpoints_from_config(r: &rex_config::RexConfig) -> Vec<RexServerConfig> {
+    r.endpoints.iter().map(RexServerConfig::from).collect()
+}
+
+fn default_cluster_addr() -> SocketAddr {
+    SocketAddr::new(
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+        19_882,
+    )
+}
+
+pub fn cluster_from_config(r: &rex_config::RexConfig) -> Option<ClusterConfig> {
+    Some(ClusterConfig {
+        enabled: r.cluster.enabled,
+        cluster_addr: r.cluster.cluster_addr.unwrap_or_else(default_cluster_addr),
+        seed_nodes: r.cluster.seed_nodes.clone(),
+        node_id: if r.cluster.node_id == "auto" {
+            None
+        } else {
+            Some(r.cluster.node_id.clone())
+        },
+    })
+}

@@ -40,6 +40,7 @@ rex-client = { path = "crates/rex-client" }
 rex-server = { path = "crates/rex-server" }
 rex-persistence = { path = "crates/rex-persistence" }
 rex-cluster = { path = "crates/rex-cluster" }
+rex-config = { path = "crates/rex-config" }
 rex-observability = { path = "crates/rex-observability" }
 
 # --- 异步运行时与并发原语 ---

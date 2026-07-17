@@ -115,3 +115,22 @@ impl RexSystemConfig {
         }
     }
 }
+
+impl From<&rex_config::RexConfig> for RexSystemConfig {
+    fn from(r: &rex_config::RexConfig) -> Self {
+        Self {
+            server_id: r.server.server_id.clone(),
+            check_interval: r.server.check_interval,
+            client_timeout: r.server.client_timeout,
+            persistence_enabled: r.persistence.enabled,
+            persistence_path: r.persistence.path.clone(),
+            offline_enabled: r.persistence.offline.enabled,
+            offline_ttl: r.persistence.offline.ttl_secs,
+            ack_enabled: r.ack.enabled,
+            ack_timeout: r.ack.timeout_ms,
+            ack_retries: r.ack.retries,
+            ghost_ttl_secs: r.persistence.offline.ghost_ttl_secs,
+            observability: r.observability.clone(),
+        }
+    }
+}
