@@ -1,13 +1,64 @@
 # RexMq
 
 ## example
+
 ``` bash
-cargo run (-r) server -p [tcp|quic|websocket] -a [127.0.0.1:8881]
+# start server with defaults (TCP:8881, QUIC:8882, WebSocket:8883)
+cargo run -- server
+
+# start server from a config file
+cargo run -- server --config ./rex.toml
+
+# print the default config (all defaults applied)
+cargo run -- --print-default-config
+
+# print effective config after merging TOML + env + CLI
+cargo run -- --config ./rex.toml --print-effective-config
 
 cargo run (-r) recv -p [tcp|quic|websocket] -a [127.0.0.1:8881] -t [one] (-b)
 
 cargo run (-r) bench -p [tcp|quic|websocket] -a [127.0.0.1:8881] -y [title] -t [one] -i [100] (-b)
 ```
+
+## configuration
+
+Server configuration uses a 4-layer cascade: **defaults → rex.toml → env → CLI**.
+
+``` bash
+# env-var override (12-factor)
+REX__SERVER__CHECK_INTERVAL=5 REX__OBSERVABILITY__TRACING_FORMAT=json \
+  cargo run -- server
+```
+
+An annotated `rex.toml`:
+
+``` toml
+[server]
+server_id       = "rex-prod"
+check_interval  = 30
+client_timeout  = 120
+
+[[endpoints]]
+protocol = "tcp"
+address  = "0.0.0.0:8881"
+
+[[endpoints]]
+protocol = "quic"
+address  = "0.0.0.0:8882"
+
+[persistence]
+enabled = true
+path    = "/var/lib/rex/rex_sled"
+
+[persistence.offline]
+ttl_secs = 604800
+
+[observability]
+admin_addr  = "127.0.0.1:9090"
+tracing_format = "json"
+```
+
+Unknown keys in TOML cause the server to exit with code 78 (`EX_CONFIG`) at boot — typos are surfaced, not silently ignored.
 
 ## tests
 ``` bash
