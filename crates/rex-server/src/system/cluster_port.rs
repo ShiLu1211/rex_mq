@@ -1,20 +1,17 @@
 //! Cluster port.
 //!
-//! Cross-cutting cluster-facing surface: route lookup, node handshake, and
-//! message forwarding. `ServerClusterManager` implements this trait.
+//! Cluster-facing membership surface: route lookup, node handshake, and
+//! client registration. Wire-level message delivery (forwarding and
+//! broadcasting `ClusterMessage`s) lives on the `Forwarder` port per
+//! ADR-0003. `ServerClusterManager` implements this trait.
 //!
 //! One wide port — split into `ClusterRegistry` (handshake) + `Router`
 //! (lookup) is the C4 candidate, deferred until a second consumer appears.
 
 use async_trait::async_trait;
 
-use rex_cluster::types::ClusterMessage;
-
-use crate::ForwardRequest;
-
-/// Cluster-facing operations. Mixed sync/async — most methods are sync
-/// state queries on the local route table; only `forward_message` and
-/// `broadcast` are async because they cross the wire to peer nodes.
+/// Cluster-facing membership operations. All methods are sync state
+/// queries on the local route table — wire I/O lives on `Forwarder`.
 #[allow(dead_code)] // Port added in commit 6; consumed in commit 7+.
 #[async_trait]
 pub trait ClusterPort: Send + Sync {
@@ -26,12 +23,4 @@ pub trait ClusterPort: Send + Sync {
 
     fn get_local_node_id(&self) -> Option<String>;
     fn get_nodes(&self) -> Vec<String>;
-
-    /// Forward a message to a peer node. Returns true on accepted-by-channel.
-    async fn forward_message(&self, target_node: &str, request: ForwardRequest) -> bool;
-
-    /// Broadcast a cluster message to all known peers. Returns the number
-    /// of sends accepted (best-effort). Added in commit 7 so handlers can
-    /// stay on the trait surface.
-    async fn broadcast(&self, message: ClusterMessage) -> usize;
 }

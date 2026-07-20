@@ -26,7 +26,6 @@ use arc_swap::ArcSwap;
 use tracing::{info, warn};
 
 use rex_cluster::ClusterConfig as RexClusterConfig;
-use rex_cluster::types::ClusterMessage;
 use rex_core::Protocol;
 use rex_observability::metrics::set_cluster_peers;
 use rex_observability::probe::traits::{ClusterSnapshot, ForwarderSnapshot, PersistenceSnapshot};
@@ -310,11 +309,5 @@ impl ClusterPort for NoopClusterPort {
     }
     fn get_nodes(&self) -> Vec<String> {
         vec!["local".to_string()]
-    }
-    async fn forward_message(&self, _target_node: &str, _request: ForwardRequest) -> bool {
-        false
-    }
-    async fn broadcast(&self, _message: ClusterMessage) -> usize {
-        0
     }
 }

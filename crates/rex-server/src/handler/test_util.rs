@@ -10,11 +10,10 @@ use ahash::RandomState;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use rex_cluster::types::ClusterMessage;
 use rex_core::RexClientInner;
 
 use crate::{
-    AckTracker, ClientStateStore, ClusterPort, ClusterRouter, ForwardRequest, NetworkForwarder,
+    AckTracker, ClientStateStore, ClusterPort, ClusterRouter, NetworkForwarder,
     NoopClientStateStore, NoopOfflineBuffer, OfflineBuffer, PendingAckInfo, RexSystemConfig,
     Services, Shutdown,
 };
@@ -70,8 +69,6 @@ impl AckTracker for TestAckTracker {
 pub struct TestClusterPort {
     pub register_calls: parking_lot::Mutex<Vec<u128>>,
     pub unregister_calls: parking_lot::Mutex<Vec<u128>>,
-    pub forward_calls: tokio::sync::Mutex<Vec<(String, ForwardRequest)>>,
-    pub broadcast_calls: tokio::sync::Mutex<Vec<ClusterMessage>>,
     pub find_node_for_title: Option<String>,
     pub local_node_id: String,
     pub known_nodes: Vec<String>,
@@ -82,8 +79,6 @@ impl TestClusterPort {
         Self {
             register_calls: parking_lot::Mutex::new(Vec::new()),
             unregister_calls: parking_lot::Mutex::new(Vec::new()),
-            forward_calls: tokio::sync::Mutex::new(Vec::new()),
-            broadcast_calls: tokio::sync::Mutex::new(Vec::new()),
             find_node_for_title: None,
             local_node_id: "local".to_string(),
             known_nodes: vec!["local".to_string()],
@@ -112,17 +107,6 @@ impl ClusterPort for TestClusterPort {
     }
     fn get_nodes(&self) -> Vec<String> {
         self.known_nodes.clone()
-    }
-    async fn forward_message(&self, target_node: &str, request: ForwardRequest) -> bool {
-        self.forward_calls
-            .lock()
-            .await
-            .push((target_node.to_string(), request));
-        true
-    }
-    async fn broadcast(&self, _message: ClusterMessage) -> usize {
-        self.broadcast_calls.lock().await.push(_message);
-        1
     }
 }
 
