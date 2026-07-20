@@ -337,11 +337,21 @@ impl Forwarder for NetworkForwarder {
     }
 
     async fn announce_ack(&self, ack: &ForwardAckMessage) {
-        if self.node_manager().is_none() {
+        let Some(nm) = self.node_manager() else {
             return;
+        };
+        let transport = nm.get_transport();
+        let local_id = self.local_node_id.to_string();
+        let message = ClusterMessage::ForwardAck(ack.clone());
+
+        for node_id in transport.connected_nodes() {
+            if node_id == local_id {
+                continue;
+            }
+            if let Err(e) = transport.send_to(&node_id, &message).await {
+                warn!("Failed to broadcast forward ack to node {}: {}", node_id, e);
+            }
         }
-        // Wire body lands in Task 6 when forward_relay.rs is deleted.
-        let _ = ack;
     }
 
     async fn broadcast(&self, msg: &ClusterMessage) -> usize {
@@ -509,8 +519,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn announce_ack_with_unstarted_cluster_returns_without_sending() {
-        let forwarder = empty_forwarder();
+    async fn announce_ack_with_transport_walks_connected_nodes() {
+        let (peer_a_addr, _listener_a, mut received_a) = recording_listener().await;
+        let (peer_b_addr, _listener_b, mut received_b) = recording_listener().await;
+        let forwarder = started_forwarder(
+            "local-node",
+            &[("node-a", peer_a_addr, true), ("node-b", peer_b_addr, true)],
+        )
+        .await;
         let ack = ForwardAckMessage {
             forward_id: 1,
             from_node_id: "local-node".into(),
@@ -520,6 +536,17 @@ mod tests {
         };
 
         forwarder.announce_ack(&ack).await;
+
+        let message_a = timeout(Duration::from_secs(1), received_a.recv())
+            .await
+            .expect("timed out waiting for node-a ack")
+            .expect("node-a listener closed before receiving ack");
+        let message_b = timeout(Duration::from_secs(1), received_b.recv())
+            .await
+            .expect("timed out waiting for node-b ack")
+            .expect("node-b listener closed before receiving ack");
+        assert!(message_a > 0, "node-a received an empty frame");
+        assert!(message_b > 0, "node-b received an empty frame");
     }
 
     #[tokio::test]
@@ -673,6 +700,7 @@ mod tests {
 
     use tokio::io::AsyncReadExt;
     use tokio::net::TcpListener;
+    use tokio::time::{Duration, timeout};
 
     /// Bind a TCP listener on `127.0.0.1:0` and accept connections in
     /// the background, draining incoming bytes until the peer closes.
@@ -700,6 +728,45 @@ mod tests {
             }
         });
         (addr, handle)
+    }
+
+    /// Bind a TCP listener that records each framed cluster message.
+    /// Used to verify that fan-out paths reach every connected peer.
+    async fn recording_listener() -> (
+        SocketAddr,
+        tokio::task::JoinHandle<()>,
+        tokio::sync::mpsc::UnboundedReceiver<usize>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind recording listener");
+        let addr = listener
+            .local_addr()
+            .expect("recording listener local_addr");
+        let (message_tx, message_rx) = tokio::sync::mpsc::unbounded_channel();
+        let handle = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = match listener.accept().await {
+                    Ok(pair) => pair,
+                    Err(_) => break,
+                };
+                let message_tx = message_tx.clone();
+                tokio::spawn(async move {
+                    loop {
+                        let mut length = [0u8; 4];
+                        if stream.read_exact(&mut length).await.is_err() {
+                            break;
+                        }
+                        let mut payload = vec![0u8; u32::from_be_bytes(length) as usize];
+                        if stream.read_exact(&mut payload).await.is_err() {
+                            break;
+                        }
+                        let _ = message_tx.send(payload.len());
+                    }
+                });
+            }
+        });
+        (addr, handle, message_rx)
     }
 
     /// Build a started `NetworkForwarder` with a real
