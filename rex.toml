@@ -1,30 +1,50 @@
-[system]
-server_id = "rex-server"
-check_interval = 15
-client_timeout = 45
+# RexMq server configuration
+# Schema: spec §3.4 — default values match `RexConfig::default()`.
+# Loader precedence: defaults → this file → env (REX__SECTION__KEY) → CLI.
+# Unknown keys cause boot to exit 78 (EX_CONFIG).
 
-# Persistence configuration
-persistence_enabled = true       # Enable client state persistence
-persistence_path = "./.rex_sled"  # Persistence database path
-offline_enabled = true           # Enable offline message queue
-offline_ttl = 604800             # Offline message TTL in seconds (7 days)
-
-# ACK configuration
-ack_enabled = false               # Enable message acknowledgment
-ack_timeout = 5000                # ACK timeout in milliseconds
-ack_retries = 3                   # Number of retries (reserved for future use)
+[server]
+server_id       = "rex-server"
+shutdown_grace  = 10
+check_interval  = 15
+client_timeout  = 45
 
 [[endpoints]]
 protocol = "tcp"
-address = "0.0.0.0:8881"
-enabled = true
+address  = "0.0.0.0:8881"
+enabled  = true
 
 [[endpoints]]
 protocol = "quic"
-address = "0.0.0.0:8882"
-enabled = true
+address  = "0.0.0.0:8882"
+enabled  = true
 
 [[endpoints]]
 protocol = "websocket"
-address = "0.0.0.0:8883"
+address  = "0.0.0.0:8883"
+enabled  = true
+
+[cluster]
+enabled     = false
+cluster_addr = "0.0.0.0:19882"
+node_id     = "auto"
+seed_nodes  = []
+
+[persistence]
 enabled = true
+path    = "./.rex_sled"
+
+[persistence.offline]
+enabled        = true
+ttl_secs       = 604800
+ghost_ttl_secs = 86400
+
+[ack]
+enabled    = false
+timeout_ms = 5000
+retries    = 3
+
+[observability]
+admin_addr               = "127.0.0.1:9090"
+tracing_format           = "pretty"
+single_node_cluster_ok   = true
