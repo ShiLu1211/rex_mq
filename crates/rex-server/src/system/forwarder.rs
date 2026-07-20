@@ -61,10 +61,6 @@ pub enum FwdResult {
     /// (the retry path was exhausted). The inner string is the
     /// failing node's id, so callers can skip it during fallback.
     PeerUnreachable(String),
-    /// Peer acknowledged it but rejected the request body (e.g.
-    /// payload too large, schema mismatch). Inner string is the
-    /// failing peer's id.
-    PeerRejected(String),
 }
 
 /// Counts and ack state for an inbound [`Forwarder::deliver`] call.
@@ -705,7 +701,6 @@ mod tests {
             FwdResult::Delivered,
             FwdResult::NoPeerForTitle,
             FwdResult::PeerUnreachable("a".into()),
-            FwdResult::PeerRejected("b".into()),
         ];
         for (i, a) in variants.iter().enumerate() {
             for (j, b) in variants.iter().enumerate() {

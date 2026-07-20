@@ -100,14 +100,6 @@ impl CommandHandler for TitleHandler {
                         // from "peer unreachable".
                         inc_forward_failures("no_peer");
                     }
-                    FwdResult::PeerRejected(reason) => {
-                        // Peer acknowledged but rejected the payload
-                        // (e.g. schema mismatch, payload too large).
-                        // Distinct from transport unreachability —
-                        // record it under its own label.
-                        inc_forward_failures("peer_rejected");
-                        warn!("title '{}' forward to {} rejected: {}", title, node, reason);
-                    }
                 }
 
                 if success {
