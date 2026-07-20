@@ -60,11 +60,12 @@ pub struct ServerArgs {
     /// 服务端id
     #[arg(short, long)]
     server_id: Option<String>,
-    #[arg(long, default_value_t = false)]
-    persist: bool,
-    /// Enable cluster mode
-    #[arg(long, default_value_t = false)]
-    cluster: bool,
+    /// Enable persistence (defaults to false; only overrides TOML when explicitly set)
+    #[arg(long)]
+    persist: Option<bool>,
+    /// Enable cluster mode (defaults to false; only overrides TOML when explicitly set)
+    #[arg(long)]
+    cluster: Option<bool>,
     /// Cluster listen address (for node-to-node communication)
     #[arg(long)]
     cluster_addr: Option<String>,
@@ -118,10 +119,13 @@ pub struct BenchArgs {
 
 pub async fn start_server(config_path: Option<std::path::PathBuf>, args: ServerArgs) -> Result<()> {
     // Build CliOverrides from legacy flags
+    // Only forward flag values the user actually set; clap's defaults
+    // would otherwise clobber TOML values (e.g. `persist=false` would
+    // override TOML's `enabled=true`).
     let overrides = rex_config::CliOverrides {
         server_id: args.server_id.clone(),
-        persist: Some(args.persist),
-        cluster_enabled: args.cluster,
+        persist: args.persist,
+        cluster_enabled: args.cluster.unwrap_or(false),
         cluster_addr: args.cluster_addr.clone(),
         seeds: args.seeds.clone(),
         ..Default::default()
