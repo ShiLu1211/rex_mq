@@ -58,9 +58,9 @@ _Avoid_: cluster I/O module, forward module, proxy, forwarder service
 
 **ClusterPort**:
 Membership state of the local node — which clients are registered here, what
-titles are owned by which node, which peers are known. After the C4 split,
-**ClusterPort** no longer carries wire I/O; those responsibilities moved to the
-[[Forwarder]] port.
+titles are owned by which node, which peers are known. Pure state about this
+node only; nothing here drives a wire send.
+"Cross-node wire I/O lives on [[Forwarder]]; this port is membership only — see ADR-0003."
 _Avoid_: cluster adapter (overloaded with the whole wiring), cluster manager
 
 **OfflineBuffer**:
@@ -191,6 +191,10 @@ _Avoid_: silent fallback to defaults, `Option` defaults inside subsystems.
 
 ## Anti-patterns recorded here
 
+- Adding wire-level methods (`forward_message`, `broadcast`, `send_to`, …) back to
+  `ClusterPort` or `ServerClusterManager`. Two earlier anti-patterns (ADR-0002,
+  ADR-0003) called this out; the third instance (recorded in PR 2 of the
+  2026-07 architecture review) is now deleted.
 - Treating one broadcast signal as the right shape — the C4 split moved cluster I/O
   away from [[ClusterPort]] specifically so [[Forwarder]] could own a single I/O seam.
   Don't add wire-level methods back to [[ClusterPort]] "for convenience."
