@@ -339,136 +339,6 @@ impl ServerClusterManager {
             }
         }
     }
-
-    /// Forward a message to another node
-    pub async fn forward_message(&self, target_node: &str, request: crate::ForwardRequest) -> bool {
-        // Get the target node's address from route table
-        let target_addr = match self.route_table.get_node_addr(target_node) {
-            Some(addr) => addr,
-            None => {
-                tracing::warn!("No address found for node {}", target_node);
-                return false;
-            }
-        };
-
-        // Get transport clone - need to clone inside the block to avoid holding lock across await
-        let transport = {
-            let node_manager = self.node_manager.read();
-            match node_manager.as_ref() {
-                Some(nm) => nm.get_transport().clone(),
-                None => {
-                    tracing::warn!("No node manager available for forwarding");
-                    return false;
-                }
-            }
-        };
-
-        // Create forward message
-        let forward_msg = rex_cluster::types::ForwardMessage {
-            forward_id: fastrand::u64(..),
-            original_source: request.source_client_id,
-            target_client_id: request.target_client_id,
-            title: request.title,
-            payload: request.payload,
-            is_group: matches!(request.msg_type, crate::ForwardType::Group),
-            is_broadcast: matches!(request.msg_type, crate::ForwardType::Broadcast),
-            require_ack: false,
-        };
-
-        let cluster_msg = ClusterMessage::Forward(forward_msg);
-
-        // Send via transport
-        match transport.send_to(target_node, &cluster_msg).await {
-            Ok(()) => {
-                tracing::debug!(
-                    "Forwarded message to node {} at {}",
-                    target_node,
-                    target_addr
-                );
-                true
-            }
-            Err(e) => {
-                tracing::warn!("Failed to forward message to {}: {}", target_node, e);
-                // Try to reconnect and retry once
-                if let Ok(addr) = target_addr.parse::<SocketAddr>()
-                    && self
-                        .try_reconnect_and_send(target_node, addr, &cluster_msg)
-                        .await
-                {
-                    tracing::info!(
-                        "Successfully reconnected and sent message to {}",
-                        target_node
-                    );
-                    return true;
-                }
-                false
-            }
-        }
-    }
-
-    /// Try to reconnect to a node and send message
-    async fn try_reconnect_and_send(
-        &self,
-        node_id: &str,
-        addr: SocketAddr,
-        msg: &ClusterMessage,
-    ) -> bool {
-        let transport = {
-            let node_manager = self.node_manager.read();
-            match node_manager.as_ref() {
-                Some(nm) => nm.get_transport().clone(),
-                None => return false,
-            }
-        };
-
-        tracing::info!("Attempting to reconnect to node {} at {}", node_id, addr);
-
-        // Remove old connection if exists
-        transport.remove_connection(node_id);
-
-        // Try to connect
-        match transport.connect(node_id.to_string().into(), addr).await {
-            Ok(()) => {
-                // Connection established, try to send
-                match transport.send_to(node_id, msg).await {
-                    Ok(()) => true,
-                    Err(e) => {
-                        tracing::warn!("Failed to send after reconnect to {}: {}", node_id, e);
-                        false
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Failed to reconnect to {}: {}", node_id, e);
-                false
-            }
-        }
-    }
-
-    /// Broadcast a message to all connected cluster nodes
-    pub async fn broadcast(&self, message: ClusterMessage) {
-        let transport = {
-            let node_manager_guard = self.node_manager.read();
-            match node_manager_guard.as_ref() {
-                Some(nm) => nm.get_transport().clone(),
-                None => {
-                    tracing::warn!("No node manager available for broadcast");
-                    return;
-                }
-            }
-        };
-
-        let connected_nodes = transport.connected_nodes();
-        let local_id = self.local_node_id.to_string();
-
-        for node_id in connected_nodes {
-            if node_id != local_id
-                && let Err(e) = transport.send_to(&node_id, &message).await
-            {
-                tracing::warn!("Failed to broadcast to node {}: {}", node_id, e);
-            }
-        }
-    }
 }
 
 /* ---------------- ClusterPort impl (commit 6) ---------------- */
@@ -503,8 +373,6 @@ impl ClusterPort for ServerClusterManager {
 mod tests {
     use super::*;
     use crate::ClusterPort;
-    use crate::ForwardRequest;
-    use crate::ForwardType;
 
     fn make_manager() -> Arc<ServerClusterManager> {
         let m = ServerClusterManager::new("test-node".to_string(), true);
@@ -569,18 +437,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cluster_port_forward_message_to_unknown_node_returns_false() {
-        // The manager's node_manager is None here (never started), so
-        // forward_message cannot reach the wire and must return false.
-        let m = make_manager();
-        let req = ForwardRequest {
-            source_client_id: 1,
-            target_client_id: 2,
-            title: "news".to_string(),
-            payload: vec![0u8; 8],
-            msg_type: ForwardType::Unicast,
-        };
-        let accepted = m.forward_message("peer-1", req).await;
-        assert!(!accepted, "forward to unknown node must return false");
+    async fn cluster_port_forward_message_moved_to_forwarder() {
+        // forward_message moved to Forwarder (PR 2 / task 8); coverage lives
+        // on the Forwarder trait / NetworkForwarder tests.
     }
 }

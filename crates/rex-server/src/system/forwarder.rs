@@ -385,9 +385,7 @@ impl Forwarder for NetworkForwarder {
 
 /// Send `req` over the cluster transport to `target_node` at `addr`.
 /// Returns `true` if the transport accepted the message. On failure,
-/// attempts a single reconnect-and-retry before giving up. Mirrors
-/// the original `ServerClusterManager::forward_message` wire-level
-/// logic.
+/// attempts a single reconnect-and-retry before giving up.
 async fn try_send(
     nm: &Arc<NodeManager>,
     target_node: &str,

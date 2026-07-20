@@ -88,7 +88,7 @@ impl CommandHandler for SessionMutator {
                     title: title.clone(),
                 }),
             };
-            let _ = services.cluster.broadcast(msg).await;
+            let _ = services.forwarder.broadcast(&msg).await;
 
             if let Err(e) = client
                 .send_buf(rex_data.set_command(mutation.return_command()).pack_ref())
