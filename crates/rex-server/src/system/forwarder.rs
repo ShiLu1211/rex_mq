@@ -858,14 +858,47 @@ mod tests {
     /// `Delivered` without walking the fallback list. Guards against
     /// regressing the fallback loop (e.g. by triggering it on every
     /// successful send).
+    ///
+    /// Two peers are wired so the fallback walk has at least one
+    /// candidate. The test asserts not only that the targeted peer
+    /// (node-b) receives a frame, but also that the other connected
+    /// peer (node-c) receives nothing — proving the fallback walk was
+    /// not entered at all. A single-peer wiring would pass even if the
+    /// fallback walk regressed, because the walk would have no
+    /// candidate to attempt.
     #[tokio::test]
-    async fn forward_to_known_target_accepted_does_not_fallback() {
-        let (peer_addr, _listener) = drain_listener().await;
-        let fwd = started_forwarder("local-node", &[("node-b", peer_addr, true)]).await;
+    async fn forward_to_known_target_accepted_does_not_fallback() -> anyhow::Result<()> {
+        let (peer_b_addr, _listener_b, mut received_b) = recording_listener().await?;
+        let (peer_c_addr, _listener_c, mut received_c) = recording_listener().await?;
+        let fwd = started_forwarder(
+            "local-node",
+            &[("node-b", peer_b_addr, true), ("node-c", peer_c_addr, true)],
+        )
+        .await;
         let req = sample_forward_request("news");
 
         let r = fwd.forward("node-b", &req).await;
         assert!(matches!(r, FwdResult::Delivered), "got {r:?}");
+
+        // Targeted peer must have received exactly one framed payload.
+        let payload_b = timeout(Duration::from_secs(1), received_b.recv())
+            .await
+            .map_err(|_| anyhow::anyhow!("timed out waiting for node-b frame"))?
+            .ok_or_else(|| anyhow::anyhow!("node-b listener closed before receiving frame"))?;
+        let msg_b: ClusterMessage = bincode::deserialize(&payload_b)?;
+        match msg_b {
+            ClusterMessage::Forward(_) => {}
+            other => panic!("node-b expected ClusterMessage::Forward, got {other:?}"),
+        }
+
+        // The fallback walk must not have attempted node-c. Use a
+        // short timeout — the absence of a frame is the assertion.
+        let frame_c = timeout(Duration::from_millis(100), received_c.recv()).await;
+        assert!(
+            frame_c.is_err(),
+            "node-c received an unexpected frame (fallback walk entered): {frame_c:?}"
+        );
+        Ok(())
     }
 
     /// When the targeted peer is registered in the route table but
