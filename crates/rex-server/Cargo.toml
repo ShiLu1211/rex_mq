@@ -36,3 +36,8 @@ arc-swap.workspace = true
 scopeguard.workspace = true
 sled.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# Test-only: decode ClusterMessage wire bytes captured by the
+# `announce_ack` regression test (transport uses bincode for the wire).
+bincode.workspace = true

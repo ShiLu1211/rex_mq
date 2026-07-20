@@ -519,9 +519,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn announce_ack_with_transport_walks_connected_nodes() {
-        let (peer_a_addr, _listener_a, mut received_a) = recording_listener().await;
-        let (peer_b_addr, _listener_b, mut received_b) = recording_listener().await;
+    async fn announce_ack_with_transport_walks_connected_nodes() -> anyhow::Result<()> {
+        let (peer_a_addr, _listener_a, mut received_a) = recording_listener().await?;
+        let (peer_b_addr, _listener_b, mut received_b) = recording_listener().await?;
         let forwarder = started_forwarder(
             "local-node",
             &[("node-a", peer_a_addr, true), ("node-b", peer_b_addr, true)],
@@ -537,16 +537,56 @@ mod tests {
 
         forwarder.announce_ack(&ack).await;
 
-        let message_a = timeout(Duration::from_secs(1), received_a.recv())
+        // Decode the framed payload (4-byte big-endian length header is
+        // already stripped by `recording_listener`) and confirm both
+        // connected peers received the same `ForwardAck` we broadcast.
+        // The first frame after `transport.connect` is the
+        // `ForwardAck` itself — there is no application-level handshake
+        // in the current transport — but decoding instead of counting
+        // bytes guards against a future handshake frame sneaking in.
+        let payload_a = timeout(Duration::from_secs(1), received_a.recv())
             .await
-            .expect("timed out waiting for node-a ack")
-            .expect("node-a listener closed before receiving ack");
-        let message_b = timeout(Duration::from_secs(1), received_b.recv())
+            .map_err(|_| anyhow::anyhow!("timed out waiting for node-a ack"))?
+            .ok_or_else(|| anyhow::anyhow!("node-a listener closed before receiving ack"))?;
+        let payload_b = timeout(Duration::from_secs(1), received_b.recv())
             .await
-            .expect("timed out waiting for node-b ack")
-            .expect("node-b listener closed before receiving ack");
-        assert!(message_a > 0, "node-a received an empty frame");
-        assert!(message_b > 0, "node-b received an empty frame");
+            .map_err(|_| anyhow::anyhow!("timed out waiting for node-b ack"))?
+            .ok_or_else(|| anyhow::anyhow!("node-b listener closed before receiving ack"))?;
+        let msg_a: ClusterMessage = bincode::deserialize(&payload_a)?;
+        let msg_b: ClusterMessage = bincode::deserialize(&payload_b)?;
+        match msg_a {
+            ClusterMessage::ForwardAck(got) => {
+                assert_eq!(got.forward_id, ack.forward_id, "node-a ack.forward_id");
+                assert_eq!(
+                    got.from_node_id, ack.from_node_id,
+                    "node-a ack.from_node_id"
+                );
+                assert_eq!(
+                    got.original_source, ack.original_source,
+                    "node-a ack.original_source"
+                );
+                assert_eq!(got.success, ack.success, "node-a ack.success");
+                assert_eq!(got.error, ack.error, "node-a ack.error");
+            }
+            other => panic!("node-a expected ClusterMessage::ForwardAck, got {other:?}"),
+        }
+        match msg_b {
+            ClusterMessage::ForwardAck(got) => {
+                assert_eq!(got.forward_id, ack.forward_id, "node-b ack.forward_id");
+                assert_eq!(
+                    got.from_node_id, ack.from_node_id,
+                    "node-b ack.from_node_id"
+                );
+                assert_eq!(
+                    got.original_source, ack.original_source,
+                    "node-b ack.original_source"
+                );
+                assert_eq!(got.success, ack.success, "node-b ack.success");
+                assert_eq!(got.error, ack.error, "node-b ack.error");
+            }
+            other => panic!("node-b expected ClusterMessage::ForwardAck, got {other:?}"),
+        }
+        Ok(())
     }
 
     #[tokio::test]
@@ -730,19 +770,17 @@ mod tests {
         (addr, handle)
     }
 
-    /// Bind a TCP listener that records each framed cluster message.
+    /// Bind a TCP listener that records each framed cluster message
+    /// (4-byte big-endian length header already stripped) and forwards
+    /// the raw payload to the caller via an unbounded mpsc channel.
     /// Used to verify that fan-out paths reach every connected peer.
-    async fn recording_listener() -> (
+    async fn recording_listener() -> anyhow::Result<(
         SocketAddr,
         tokio::task::JoinHandle<()>,
-        tokio::sync::mpsc::UnboundedReceiver<usize>,
-    ) {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind recording listener");
-        let addr = listener
-            .local_addr()
-            .expect("recording listener local_addr");
+        tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    )> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
         let (message_tx, message_rx) = tokio::sync::mpsc::unbounded_channel();
         let handle = tokio::spawn(async move {
             loop {
@@ -761,12 +799,12 @@ mod tests {
                         if stream.read_exact(&mut payload).await.is_err() {
                             break;
                         }
-                        let _ = message_tx.send(payload.len());
+                        let _ = message_tx.send(payload);
                     }
                 });
             }
         });
-        (addr, handle, message_rx)
+        Ok((addr, handle, message_rx))
     }
 
     /// Build a started `NetworkForwarder` with a real
