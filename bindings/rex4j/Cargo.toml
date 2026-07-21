@@ -2,6 +2,7 @@
 name = "rex4j"
 version.workspace = true
 edition.workspace = true
+build = "build.rs"
 
 [lib]
 name = "rex4j"
@@ -19,3 +20,14 @@ async-trait.workspace = true
 tokio.workspace = true
 jni.workspace = true
 kanal.workspace = true
+
+[dev-dependencies]
+rand.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process", "time", "io-util"] }
+uuid = { version = "1", features = ["v4"] }
+anyhow.workspace = true
+rex-test.workspace = true
+
+[[test]]
+name = "interop"
+path = "tests/interop.rs"

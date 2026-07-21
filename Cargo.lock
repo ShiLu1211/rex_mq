@@ -2169,10 +2169,13 @@ dependencies = [
  "async-trait",
  "jni",
  "kanal",
+ "rand 0.10.2",
  "rex-client",
  "rex-core",
+ "rex-test",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
