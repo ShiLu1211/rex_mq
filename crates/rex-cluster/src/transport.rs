@@ -464,11 +464,202 @@ impl ClusterTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::SocketAddr;
+    use std::time::Duration;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
 
     #[tokio::test]
     async fn test_transport_creation() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let transport = ClusterTransport::new(NodeId::new("test-node"), tx);
         assert!(transport.connected_nodes().is_empty());
+    }
+
+    // ---------- New tests (PR 2: rex-cluster test coverage) ----------
+
+    /// Bind an ephemeral TCP listener on 127.0.0.1:0 that accepts
+    /// connections and drains incoming bytes until the peer closes.
+    /// Returns the bound address plus the accept-loop JoinHandle so
+    /// tests can assert clean shutdown.
+    async fn drain_listener() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind drain listener");
+        let addr = listener.local_addr().expect("listener local_addr");
+        let handle = tokio::spawn(async move {
+            loop {
+                let (mut s, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    loop {
+                        match s.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => continue,
+                        }
+                    }
+                });
+            }
+        });
+        (addr, handle)
+    }
+
+    /// Same as `drain_listener` but echoes each framed payload
+    /// (4-byte big-endian length header already stripped) into the
+    /// returned `mpsc::Receiver<Vec<u8>>` so tests can assert on
+    /// the bytes that hit the wire.
+    async fn recording_listener() -> (
+        SocketAddr,
+        tokio::task::JoinHandle<()>,
+        mpsc::UnboundedReceiver<Vec<u8>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind recording listener");
+        let addr = listener.local_addr().expect("listener local_addr");
+        let (frame_tx, frame_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let handle = tokio::spawn(async move {
+            loop {
+                let (mut s, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                let frame_tx = frame_tx.clone();
+                tokio::spawn(async move {
+                    loop {
+                        let mut length = [0u8; 4];
+                        if s.read_exact(&mut length).await.is_err() {
+                            break;
+                        }
+                        let mut payload = vec![0u8; u32::from_be_bytes(length) as usize];
+                        if s.read_exact(&mut payload).await.is_err() {
+                            break;
+                        }
+                        let _ = frame_tx.send(payload);
+                    }
+                });
+            }
+        });
+        (addr, handle, frame_rx)
+    }
+
+    #[tokio::test]
+    async fn connect_then_is_connected_returns_true() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let transport = ClusterTransport::new(NodeId::new("local"), tx);
+        let (addr, _h) = drain_listener().await;
+
+        transport
+            .connect(NodeId::new("peer"), addr)
+            .await
+            .expect("connect");
+
+        assert!(transport.is_connected("peer"));
+        assert_eq!(transport.connected_nodes(), vec!["peer".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn remove_connection_drops_peer_from_connected_nodes() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let transport = ClusterTransport::new(NodeId::new("local"), tx);
+        let (addr, _h) = drain_listener().await;
+
+        transport.connect(NodeId::new("peer"), addr).await.unwrap();
+        assert!(transport.is_connected("peer"));
+
+        transport.remove_connection("peer");
+        assert!(!transport.is_connected("peer"));
+        assert!(transport.connected_nodes().is_empty());
+    }
+
+    #[tokio::test]
+    async fn send_to_unknown_node_returns_err() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let transport = ClusterTransport::new(NodeId::new("local"), tx);
+        let msg = ClusterMessage::Ping(crate::types::PingMessage {
+            node_id: "local".into(),
+            timestamp: 0,
+        });
+        let err = transport
+            .send_to("never-connected", &msg)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Not connected"), "got error: {msg}");
+    }
+
+    #[tokio::test]
+    async fn broadcast_with_no_connections_returns_ok_with_zero_sends() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let transport = ClusterTransport::new(NodeId::new("local"), tx);
+        let msg = ClusterMessage::Ping(crate::types::PingMessage {
+            node_id: "local".into(),
+            timestamp: 0,
+        });
+        // Empty connection set; broadcast should be a no-op Ok.
+        transport
+            .broadcast(&msg)
+            .await
+            .expect("broadcast with 0 peers");
+    }
+
+    #[tokio::test]
+    async fn send_to_round_trips_a_framed_message() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let transport = ClusterTransport::new(NodeId::new("local"), tx);
+        let (addr, _h, mut received) = recording_listener().await;
+        transport.connect(NodeId::new("peer"), addr).await.unwrap();
+
+        let original = ClusterMessage::Ping(crate::types::PingMessage {
+            node_id: "local".into(),
+            timestamp: 42,
+        });
+        transport.send_to("peer", &original).await.expect("send_to");
+
+        // Drain the framed payload (length header already stripped).
+        let payload = tokio::time::timeout(Duration::from_secs(1), received.recv())
+            .await
+            .expect("timed out waiting for frame")
+            .expect("listener closed");
+        let decoded: ClusterMessage = bincode::deserialize(&payload).expect("bincode deserialize");
+        match decoded {
+            ClusterMessage::Ping(p) => {
+                assert_eq!(p.node_id, "local");
+                assert_eq!(p.timestamp, 42);
+            }
+            other => panic!("expected Ping, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn broadcast_fan_outs_to_all_connected_peers() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let transport = ClusterTransport::new(NodeId::new("local"), tx);
+        let (addr_a, _h_a, mut rx_a) = recording_listener().await;
+        let (addr_b, _h_b, mut rx_b) = recording_listener().await;
+        transport.connect(NodeId::new("a"), addr_a).await.unwrap();
+        transport.connect(NodeId::new("b"), addr_b).await.unwrap();
+
+        let msg = ClusterMessage::Ping(crate::types::PingMessage {
+            node_id: "local".into(),
+            timestamp: 7,
+        });
+        transport.broadcast(&msg).await.expect("broadcast");
+
+        for (peer, rx) in [("a", &mut rx_a), ("b", &mut rx_b)] {
+            let payload = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+                .await
+                .unwrap_or_else(|_| panic!("timed out waiting for {peer} frame"))
+                .unwrap_or_else(|| panic!("{peer} listener closed"));
+            let decoded: ClusterMessage =
+                bincode::deserialize(&payload).expect("bincode deserialize");
+            match decoded {
+                ClusterMessage::Ping(p) => assert_eq!(p.timestamp, 7),
+                other => panic!("{peer} expected Ping, got {other:?}"),
+            }
+        }
     }
 }
