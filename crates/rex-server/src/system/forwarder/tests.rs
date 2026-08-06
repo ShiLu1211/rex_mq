@@ -507,3 +507,44 @@ async fn forward_target_refused_falls_back_to_other_peer() {
     let r = fwd.forward("node-b", &req).await;
     assert!(matches!(r, FwdResult::Delivered), "got {r:?}");
 }
+
+/// When the targeted peer is registered in the route table but
+/// the route table's address string is unparseable as a SocketAddr,
+/// `forward` must log and walk the fallback list rather than panic
+/// or return a misleading `NoPeerForTitle`. This is the regression
+/// case for any future route-table hand-off that drops the
+/// `parse::<SocketAddr>` guard.
+#[tokio::test]
+async fn forward_with_unparseable_route_addr_falls_back_to_known_peers() {
+    // node-f is connected via the started_forwarder helper, then we
+    // manually inject node-b with a garbage addr into the route
+    // table. We bypass `started_forwarder` because it requires
+    // SocketAddr in its peer tuple.
+    let (peer_f_addr, _listener_f) = drain_listener().await;
+    let fwd = started_forwarder("local-node", &[("node-f", peer_f_addr, true)]).await;
+    // Inject the bad addr post-construction.
+    let rt_arc = fwd.route_table().expect("route table set");
+    rt_arc.add_node("node-b".to_string(), "not-a-valid-addr".to_string());
+
+    let req = sample_forward_request("news");
+    let r = fwd.forward("node-b", &req).await;
+    assert!(
+        matches!(r, FwdResult::Delivered),
+        "expected Delivered via fallback walk, got {r:?}"
+    );
+}
+
+/// When the cluster is started but `connected_nodes()` is empty and
+/// the target is not in the route table, `forward` returns
+/// `NoPeerForTitle` — no panic, no silent success, no fallback
+/// walk to attempt.
+#[tokio::test]
+async fn forward_with_empty_connected_nodes_returns_no_peer_for_title() {
+    let fwd = started_forwarder("local-node", &[]).await;
+    let req = sample_forward_request("any_title");
+    let r = fwd.forward("unknown-peer", &req).await;
+    assert!(
+        matches!(r, FwdResult::NoPeerForTitle),
+        "expected NoPeerForTitle, got {r:?}"
+    );
+}
