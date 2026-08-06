@@ -5,7 +5,11 @@ use predicates::prelude::*;
 
 fn rex_cli() -> Command {
     #[allow(clippy::unwrap_used)]
-    Command::cargo_bin("rex-cli").unwrap()
+    // The crate's `[[bin]] name = "rex"` declares the binary file as
+    // `rex`, not `rex-cli`. `assert_cmd` looks up the env var
+    // `CARGO_BIN_EXE_<bin-name>` at test time, so the lookup string
+    // must match the Cargo.toml `[[bin]] name` value.
+    Command::cargo_bin("rex").unwrap()
 }
 
 #[test]
