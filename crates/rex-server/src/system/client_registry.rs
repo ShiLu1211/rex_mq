@@ -49,7 +49,6 @@ pub enum DuplicateClient {
 /// `remove_client` returns the removed client so the caller can close its
 /// connection and persist its removal — those side-effects are not the
 /// registry's job.
-#[allow(dead_code)] // Port added in commit 2; consumed in commit 7+.
 pub trait ClientRegistry: Send + Sync {
     fn add_client(&self, client: Arc<RexClientInner>);
 
@@ -130,7 +129,6 @@ pub trait ClientRegistry: Send + Sync {
 }
 
 /// DashMap-backed production implementation.
-#[allow(dead_code)] // Port added in commit 2; consumed in commit 7+.
 pub struct ClientRegistryImpl {
     id2client: DashMap<u128, Arc<RexClientInner>, RandomState>,
     title2clients: DashMap<String, Vec<Arc<RexClientInner>>, RandomState>,
@@ -138,7 +136,6 @@ pub struct ClientRegistryImpl {
 }
 
 impl ClientRegistryImpl {
-    #[allow(dead_code)] // Used in tests; production caller lands in commit 7+.
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             id2client: DashMap::with_hasher(RandomState::new()),

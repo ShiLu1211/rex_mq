@@ -51,7 +51,6 @@ pub trait OfflineBuffer: Send + Sync {
 }
 
 /// Sled-backed production implementation. Owns its `PersistenceStore`.
-#[allow(dead_code)] // Port added in commit 5; consumed in commit 7+.
 pub struct SledOfflineBuffer {
     store: Arc<PersistenceStore>,
     /// Last error observed by any write/read. `None` when no error has
@@ -153,7 +152,6 @@ impl OfflineBuffer for SledOfflineBuffer {
 
 /// No-op implementation. Every method returns immediately; `get_offline_messages`
 /// returns an empty `Vec`. Use when persistence is disabled or in tests.
-#[allow(dead_code)] // Port added in commit 5; consumed in commit 7+.
 pub struct NoopOfflineBuffer;
 
 #[async_trait]

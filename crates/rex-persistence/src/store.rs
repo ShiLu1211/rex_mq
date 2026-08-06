@@ -16,8 +16,6 @@ pub struct PersistenceStore {
     // same path twice from the same process fails — callers must
     // share a single `Arc<sled::Db>` instead.
     db: Arc<sled::Db>,
-    #[allow(dead_code)] // legacy: kept for API stability; not read after Task 10.
-    config: StoreConfig,
     offline_config: OfflineQueueConfig,
 }
 
@@ -69,7 +67,6 @@ impl PersistenceStore {
 
         Ok(Self {
             db: Arc::new(db),
-            config,
             offline_config: OfflineQueueConfig::default(),
         })
     }
@@ -81,12 +78,10 @@ impl PersistenceStore {
     /// calls on the same path.
     ///
     /// The caller owns the `Arc<sled::Db>` and is responsible for the
-    /// Db's lifecycle (we hold a clone of the `Arc`). Both
-    /// `StoreConfig` and `OfflineQueueConfig` default to their
-    /// standard production values — `persistence_path` is implicit in
-    /// the Db we received and the `enable_*` toggles are no longer
-    /// needed because the wiring decision is made per-adapter at the
-    /// caller (which adapter exists, not whether persistence is on).
+    /// Db's lifecycle (we hold a clone of the `Arc`). The offline
+    /// queue config defaults to its standard production value; per-adapter
+    /// wiring (which adapter exists, not whether persistence is on) is
+    /// decided at the caller.
     pub fn with_db(db: Arc<sled::Db>) -> Self {
         // Touch the trees we own so they exist on disk before any op.
         // (T_CLIENTS is owned by `ClientStateRepo`, not us.)
@@ -94,7 +89,6 @@ impl PersistenceStore {
         let _ = db.open_tree(T_OFFLINE_INDEX);
         Self {
             db,
-            config: StoreConfig::default(),
             offline_config: OfflineQueueConfig::default(),
         }
     }

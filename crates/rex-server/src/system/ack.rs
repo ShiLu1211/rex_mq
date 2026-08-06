@@ -28,12 +28,10 @@ pub struct PendingAckInfo {
     pub source_client_id: u128,
     pub title: String,
     pub timestamp: u64,
-    #[allow(dead_code)]
     pub is_group: bool,
 }
 
 /// Tracks pending ACK requests and identifies which have expired.
-#[allow(dead_code)] // Port added in commit 3; consumed in commit 7+.
 pub trait AckTracker: Send + Sync {
     /// Record a pending ACK for `message_id`. The tracker's clock is used to
     /// stamp the entry.
@@ -56,14 +54,12 @@ pub trait AckTracker: Send + Sync {
 }
 
 /// DashMap-backed production implementation. Owns its `timeout_secs` config.
-#[allow(dead_code)] // Port added in commit 3; consumed in commit 7+.
 pub struct AckTrackerImpl {
     pending_acks: DashMap<u64, PendingAckInfo, RandomState>,
     timeout_secs: u64,
 }
 
 impl AckTrackerImpl {
-    #[allow(dead_code)] // Used in tests; production caller lands in commit 7+.
     pub fn new(timeout_secs: u64) -> Arc<Self> {
         Arc::new(Self {
             pending_acks: DashMap::with_hasher(RandomState::new()),

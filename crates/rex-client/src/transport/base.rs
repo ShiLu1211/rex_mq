@@ -20,21 +20,11 @@ pub struct ClientBase {
     pub config: RexClientConfig,
     pub shutdown_tx: broadcast::Sender<()>,
     pub last_heartbeat: AtomicU64,
-    /// Pending ACKs for sent messages (message_id -> sender info)
-    pub pending_acks: DashMap<u64, PendingAckInfo>,
-}
-
-/// Information about a pending ACK.
-///
-/// `timestamp` / `title` are reserved for future diagnostics (retransmit
-/// tracking, age-based eviction, per-title metrics). They are currently
-/// populated on insert but not yet read; suppress the dead-code lint
-/// until the planned consumers land.
-pub struct PendingAckInfo {
-    #[allow(dead_code)]
-    pub timestamp: u64,
-    #[allow(dead_code)]
-    pub title: String,
+    /// Pending ACKs awaiting server confirmation. Only the message_id
+    /// is tracked; per-message metadata (retransmit count, age, title)
+    /// is intentionally out of scope — `Services` + the Janitor own
+    /// the authoritative pending-ACK view on the server side.
+    pub pending_acks: DashMap<u64, ()>,
 }
 
 impl ClientBase {
@@ -86,7 +76,7 @@ impl ClientBase {
                     data.set_message_id(message_id);
 
                     // Register pending ACK
-                    self.register_pending_ack(message_id, data.title().to_string());
+                    self.register_pending_ack(message_id);
                     debug!("Registered pending ACK for message {}", message_id);
                 }
                 _ => {}
@@ -211,12 +201,8 @@ impl ClientBase {
     }
 
     /// Register a pending ACK for a sent message
-    pub fn register_pending_ack(&self, message_id: u64, title: String) {
-        let info = PendingAckInfo {
-            timestamp: now_secs(),
-            title,
-        };
-        self.pending_acks.insert(message_id, info);
+    pub fn register_pending_ack(&self, message_id: u64) {
+        self.pending_acks.insert(message_id, ());
     }
 
     /// 通用的心跳任务

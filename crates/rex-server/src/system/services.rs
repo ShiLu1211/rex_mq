@@ -63,7 +63,6 @@ pub struct Services {
 
     /// Sled-backed (or no-op) persistent client-state store. Drives
     /// restart restoration and ghost GC. Added per the C5 deepening.
-    #[allow(dead_code)] // Wired in Task 5; consumed by add/remove in Task 6.
     pub state_store: Arc<dyn ClientStateStore>,
 
     /// Cross-cutting shutdown signal — held by every long-running task.

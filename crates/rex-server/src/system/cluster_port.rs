@@ -12,7 +12,6 @@ use async_trait::async_trait;
 
 /// Cluster-facing membership operations. All methods are sync state
 /// queries on the local route table — wire I/O lives on `Forwarder`.
-#[allow(dead_code)] // Port added in commit 6; consumed in commit 7+.
 #[async_trait]
 pub trait ClusterPort: Send + Sync {
     fn register_client(&self, client_id: u128);

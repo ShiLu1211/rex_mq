@@ -19,7 +19,6 @@ use rex_persistence::{ClientStateRepo, PersistedClient};
 use tracing::warn;
 
 /// A restored client entry — what `load_all` returns at startup.
-#[allow(dead_code)] // Consumed by startup restoration in the next integration task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoredClient {
     pub client_id: u128,
@@ -41,7 +40,6 @@ impl From<PersistedClient> for RestoredClient {
     }
 }
 
-#[allow(dead_code)] // Port consumed by Services in the next integration task.
 #[async_trait]
 pub trait ClientStateStore: Send + Sync {
     /// Persist a client entry. `ghost_until` is the timestamp after which
@@ -71,13 +69,11 @@ pub trait ClientStateStore: Send + Sync {
 ///
 /// The repo is held in `Mutex<Option<...>>` so `close()` can release the
 /// sled handle and a subsequent `open()` can re-acquire it on the same path.
-#[allow(dead_code)] // Adapter opened by Services in the next integration task.
 pub struct SledClientStateStore {
     repo: Mutex<Option<Arc<ClientStateRepo>>>,
     last_error: Arc<Mutex<Option<String>>>,
 }
 
-#[allow(dead_code)] // Adapter opened by Services in the next integration task.
 impl SledClientStateStore {
     /// Open a sled-backed store at `path`. The path is shared with
     /// the offline buffer's `PersistenceStore`; both wrappers operate over
@@ -203,7 +199,6 @@ impl ClientStateStore for SledClientStateStore {
 
 /// No-op implementation. All writes are silent. Used when persistence is
 /// disabled or in tests.
-#[allow(dead_code)] // Adapter used by persistence-disabled Services later.
 pub struct NoopClientStateStore;
 
 #[async_trait]
