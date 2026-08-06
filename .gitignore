@@ -6,7 +6,6 @@ target
 .cargo
 docs/superpowers
 
-Cargo.lock
 dependency-reduced-pom.xml
 *.so
 *.svg
