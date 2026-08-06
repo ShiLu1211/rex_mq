@@ -88,8 +88,6 @@ impl ServerClusterManager {
             seed_nodes: config.seed_nodes,
             communication_timeout_ms: config.communication_timeout_ms,
             heartbeat_interval_ms: config.heartbeat_interval_ms,
-            election_timeout_min_ms: config.election_timeout_min_ms,
-            election_timeout_max_ms: config.election_timeout_max_ms,
             max_retries: config.max_retries,
         };
 

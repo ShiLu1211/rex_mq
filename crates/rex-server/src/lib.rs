@@ -278,8 +278,6 @@ async fn start_cluster_manager(services: &Arc<Services>, config: &ClusterConfig)
         seed_nodes: config.seed_nodes.clone(),
         communication_timeout_ms: 1000,
         heartbeat_interval_ms: 1000,
-        election_timeout_min_ms: 5000,
-        election_timeout_max_ms: 10000,
         max_retries: 3,
     };
 
