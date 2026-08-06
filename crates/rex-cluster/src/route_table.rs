@@ -265,4 +265,110 @@ mod tests {
         assert_eq!(table2.get_all_nodes(), vec!["node1"]);
         assert_eq!(table2.get_node_by_client(&12345), Some("node1".to_string()));
     }
+    // ---------- New tests (PR 1: rex-cluster test coverage) ----------
+
+    #[test]
+    fn register_client_then_get_node_by_client_returns_node() {
+        let table = GlobalRouteTable::new();
+        table.add_node("node-1".to_string(), "127.0.0.1:9001".to_string());
+        table.register_client(0xCAFEu128, "node-1");
+
+        assert_eq!(
+            table.get_node_by_client(&0xCAFEu128),
+            Some("node-1".to_string())
+        );
+    }
+
+    #[test]
+    fn register_client_then_unregister_client_returns_none() {
+        let table = GlobalRouteTable::new();
+        table.add_node("node-1".to_string(), "127.0.0.1:9001".to_string());
+        table.register_client(0xCAFEu128, "node-1");
+        table.unregister_client(&0xCAFEu128);
+
+        assert!(table.get_node_by_client(&0xCAFEu128).is_none());
+    }
+
+    #[test]
+    fn is_client_local_for_unknown_client_returns_false() {
+        let table = GlobalRouteTable::with_local_node(NodeId::new("local-node"));
+        assert!(!table.is_client_local(&0xCAFEu128));
+    }
+
+    #[test]
+    fn is_client_local_returns_true_only_for_local_node_mapping() {
+        let table = GlobalRouteTable::with_local_node(NodeId::new("local-node"));
+        table.add_node("local-node".to_string(), "127.0.0.1:9001".to_string());
+        table.add_node("remote-node".to_string(), "127.0.0.1:9002".to_string());
+
+        table.register_client(0xCAFEu128, "local-node");
+        table.register_client(0xBABEu128, "remote-node");
+
+        assert!(table.is_client_local(&0xCAFEu128));
+        assert!(!table.is_client_local(&0xBABEu128));
+    }
+
+    #[test]
+    fn add_node_then_remove_node_clears_addr_and_ring_entry() {
+        let table = GlobalRouteTable::new();
+        table.add_node("node-1".to_string(), "127.0.0.1:9001".to_string());
+        assert_eq!(table.get_node_addr("node-1"), Some("127.0.0.1:9001".into()));
+
+        table.remove_node("node-1");
+        assert!(table.get_node_addr("node-1").is_none());
+        assert!(!table.get_all_nodes().contains(&"node-1".to_string()));
+    }
+
+    #[test]
+    fn get_node_addr_for_unknown_node_returns_none() {
+        let table = GlobalRouteTable::new();
+        assert!(table.get_node_addr("never-added").is_none());
+    }
+
+    #[test]
+    fn get_nodes_by_title_returns_at_most_n_distinct_nodes() {
+        let table = GlobalRouteTable::new();
+        table.add_node("node-1".to_string(), "127.0.0.1:9001".to_string());
+        table.add_node("node-2".to_string(), "127.0.0.1:9002".to_string());
+        table.add_node("node-3".to_string(), "127.0.0.1:9003".to_string());
+
+        // Ask for 5; only 3 nodes are registered.
+        let nodes = table.get_nodes_by_title("any-title", 5);
+        assert_eq!(nodes.len(), 3);
+        // All returned nodes are unique.
+        let unique: std::collections::HashSet<_> = nodes.iter().collect();
+        assert_eq!(unique.len(), 3);
+    }
+
+    #[test]
+    fn set_local_node_replaces_previous_local() {
+        let table = GlobalRouteTable::with_local_node(NodeId::new("first"));
+        assert_eq!(table.local_node().unwrap().as_str(), "first");
+
+        table.set_local_node(NodeId::new("second"));
+        assert_eq!(table.local_node().unwrap().as_str(), "second");
+    }
+
+    #[test]
+    fn version_increments_on_each_modification() {
+        let table = GlobalRouteTable::new();
+        let v0 = table.version();
+
+        table.add_node("node-1".to_string(), "127.0.0.1:9001".to_string());
+        let v1 = table.version();
+        assert_eq!(v1, v0 + 1);
+
+        table.add_node("node-2".to_string(), "127.0.0.1:9002".to_string());
+        let v2 = table.version();
+        assert_eq!(v2, v1 + 1);
+
+        table.register_client(0xCAFEu128, "node-1");
+        assert_eq!(table.version(), v2 + 1);
+
+        table.unregister_client(&0xCAFEu128);
+        assert_eq!(table.version(), v2 + 2);
+
+        table.remove_node("node-1");
+        assert_eq!(table.version(), v2 + 3);
+    }
 }
