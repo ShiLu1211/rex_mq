@@ -15,7 +15,6 @@ serde_json = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 parking_lot = { workspace = true }
-futures = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]

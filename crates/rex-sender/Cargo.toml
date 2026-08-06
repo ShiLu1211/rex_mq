@@ -15,4 +15,3 @@ tokio.workspace = true
 futures-util.workspace = true
 tokio-tungstenite.workspace = true
 quinn.workspace = true
-tracing.workspace = true

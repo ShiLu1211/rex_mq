@@ -6,6 +6,10 @@ edition.workspace = true
 [lints]
 workspace = true
 
+[[bin]]
+name = "rex"
+path = "src/main.rs"
+
 [dependencies]
 rex-core.workspace = true
 rex-client.workspace = true
@@ -13,11 +17,8 @@ rex-server.workspace = true
 rex-config.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
-tracing.workspace = true
 tracing-subscriber.workspace = true
 async-trait.workspace = true
-strum.workspace = true
-bytes.workspace = true
 clap.workspace = true
 rand.workspace = true
 hdrhistogram.workspace = true
@@ -27,4 +28,3 @@ toml.workspace = true
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
-rex-config.workspace = true
