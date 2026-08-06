@@ -10,24 +10,43 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  rust-core:
+    name: Rust workspace + tests
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build
-    - name: Run tests
-      run: cargo test
-    - name: Run
-      run: cargo run --example port_refuse
+      - uses: actions/checkout@v4
+      - name: Build workspace (all targets)
+        run: cargo build --workspace --all-targets
+      - name: Run tests
+        run: cargo test --workspace
+      - name: Run port_refuse example
+        run: cargo run --example port_refuse
 
-  spotbugs:
+  bindings-rust:
+    name: Binding cdylibs (rex4j / rex4p)
+    # The workspace build above already compiles the binding crates;
+    # this job asserts each cdylib builds in isolation so a future
+    # workspace-level dep change can't accidentally break only the
+    # bindings. Catches `jni` / `pyo3` ABI drift early.
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: bindings/rex4j
+    needs: rust-core
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Python headers (for rex4p)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-dev
+      - name: Build rex4j cdylib
+        run: cargo build -p rex4j
+      - name: Build rex4p cdylib
+        run: cargo build -p rex4p
+
+  bindings-java:
+    name: rex4j Java build + SpotBugs
+    runs-on: ubuntu-latest
+    needs: rust-core
 
     steps:
       - uses: actions/checkout@v4
@@ -36,5 +55,17 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
+      - name: Build rex4j native cdylib (cargo)
+        run: cargo build -p rex4j
+      - name: Copy native lib into Java resource dir
+        # The Java example + tests load `librex4j.so` from this path.
+        # See README "java" section.
+        run: |
+          mkdir -p bindings/rex4j/src/main/resources
+          cp target/debug/librex4j.so bindings/rex4j/src/main/resources/
+      - name: Run mvn test (rex4j)
+        working-directory: bindings/rex4j
+        run: mvn test
       - name: Run SpotBugs
+        working-directory: bindings/rex4j
         run: mvn spotbugs:check

@@ -18,13 +18,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use dashmap::DashMap;
-use tokio::io::AsyncReadExt;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::{Duration, interval};
 use tracing::{debug, error, info, warn};
 
 use crate::transport::{ClusterTransport, IncomingMessage};
-use crate::types::{ClusterConfig, ClusterMessage, HeartbeatMessage, NodeId, NodeInfo};
+use crate::types::{ClusterConfig, ClusterMessage, HeartbeatMessage, NodeInfo};
 
 /// Cluster node manager.
 pub struct NodeManager {
@@ -234,6 +233,11 @@ impl NodeManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::NodeId;
+    use std::net::SocketAddr;
+    use std::time::Duration;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
 
     #[tokio::test]
     async fn test_node_manager_creation() {
@@ -246,10 +250,6 @@ mod tests {
     }
 
     // ---------- New tests (PR 3: rex-cluster test coverage) ----------
-
-    use std::net::SocketAddr;
-    use std::time::Duration;
-    use tokio::net::TcpListener;
 
     /// Bind an ephemeral TCP listener on 127.0.0.1:0 and accept
     /// connections in the background, draining incoming bytes. Used
