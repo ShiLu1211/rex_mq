@@ -262,4 +262,50 @@ mod tests {
             assert_eq!(ring.get("test-key"), Some("node1"));
         }
     }
+
+    // ---------- New tests (PR 5: rex-cluster test coverage) ----------
+
+    #[test]
+    fn get_by_hash_returns_closest_node() {
+        let mut ring = HashRing::new();
+        ring.add_node("node1".to_string());
+        ring.add_node("node2".to_string());
+
+        // A known hash should resolve to one of the two nodes.
+        let result = ring.get_by_hash(12345);
+        assert!(matches!(result, Some("node1") | Some("node2")));
+    }
+
+    #[test]
+    fn nodes_returns_all_inserted() {
+        let mut ring = HashRing::new();
+        ring.add_node("node1".to_string());
+        ring.add_node("node2".to_string());
+        ring.add_node("node3".to_string());
+
+        let mut nodes = ring.nodes();
+        nodes.sort();
+        assert_eq!(nodes, vec!["node1", "node2", "node3"]);
+    }
+
+    #[test]
+    fn len_and_is_empty_match() {
+        let mut ring = HashRing::new();
+        assert!(ring.is_empty());
+        assert_eq!(ring.len(), 0);
+
+        ring.add_node("a".to_string());
+        assert!(!ring.is_empty());
+        assert_eq!(ring.len(), 1);
+
+        ring.add_node("b".to_string());
+        assert_eq!(ring.len(), 2);
+
+        ring.remove_node("a");
+        assert_eq!(ring.len(), 1);
+
+        ring.remove_node("b");
+        assert!(ring.is_empty());
+        assert_eq!(ring.len(), 0);
+    }
 }
