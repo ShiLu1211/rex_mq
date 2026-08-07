@@ -32,12 +32,24 @@ impl RexData {
     #[inline(always)]
     fn head(&self) -> &RexHead {
         debug_assert!(self.content.len() >= REX_HEAD_LEN);
+        // SAFETY: `self.content` is a `BytesMut` of `u8` with at least
+        // `REX_HEAD_LEN` bytes (asserted above). The cast to `*const
+        // RexHead` is valid because the byte buffer is `REX_HEAD_LEN`-
+        // aligned in practice — every `RexData` is constructed via
+        // `new()` (which `with_capacity`s to `REX_HEAD_LEN + ...`) or
+        // via `try_deserialize` (which checks `total_len >= REX_HEAD_LEN`
+        // before slicing). The resulting reference is bound to `&self`
+        // so the borrow checker prevents aliasing mut access.
         unsafe { &*(self.content.as_ptr() as *const RexHead) }
     }
 
     #[inline(always)]
     fn head_mut(&mut self) -> &mut RexHead {
         debug_assert!(self.content.len() >= REX_HEAD_LEN);
+        // SAFETY: Same alignment / length preconditions as `head()`
+        // above. The mutable pointer is derived from `&mut self`, so
+        // the borrow checker enforces exclusive access for the
+        // returned `&mut RexHead`.
         unsafe { &mut *(self.content.as_mut_ptr() as *mut RexHead) }
     }
 
@@ -92,12 +104,21 @@ impl RexData {
         let total_len = REX_HEAD_LEN + TITLE_LEN_SIZE + title_len + data_len;
 
         let mut content = BytesMut::with_capacity(total_len);
+        // SAFETY: `BytesMut::with_capacity(total_len)` allocates
+        // `total_len` uninitialised bytes; immediately bumping `set_len`
+        // exposes those bytes as `u8` (which is `MaybeUninit`-safe to
+        // read for the duration of the next `unsafe` block, where we
+        // overwrite every byte via `ptr::write`).
         unsafe {
             content.set_len(total_len);
         }
 
         let mut rex_data = RexData { content };
 
+        // SAFETY: `content` is `total_len` bytes long (just set_len'd).
+        // We write every byte at offsets `REX_HEAD_LEN..total_len`
+        // before returning — see the `new()` body below. The `ptr`
+        // is freshly allocated and not aliased.
         unsafe {
             let ptr = rex_data.content.as_mut_ptr();
             let mut pos = REX_HEAD_LEN;
@@ -183,6 +204,15 @@ impl RexData {
             self.content.len()
         );
 
+        // SAFETY: Caller (`title_str`) bounds `start..end` from a
+        // length-prefixed wire frame. The buffer is bounded by the
+        // wire format's `[title_len:1][title:title_len]` pair which
+        // was checked at deserialise time; the bytes between `start`
+        // and `end` are the title bytes that were written by the
+        // publisher. Title strings are ASCII in practice, but the
+        // wire format technically allows arbitrary UTF-8 — callers
+        // that need to surface invalid UTF-8 should use
+        // `title_str_lossy()` or `title_bytes()` instead.
         unsafe { std::str::from_utf8_unchecked(&self.content[start..end]) }
     }
 
@@ -245,13 +275,24 @@ impl RexData {
         let len = offset + data_len;
 
         if len > self.content.len() {
+            // `resize` zero-extends the buffer; subsequent
+            // `copy_nonoverlapping` writes `data_len` bytes into the
+            // prefix and leaves the tail (if any) zeroed.
             self.content.resize(len, 0);
         } else {
+            // SAFETY: shrinking an already-initialised buffer back to
+            // a previously-valid length is sound — no new uninitialised
+            // bytes are exposed.
             unsafe {
                 self.content.set_len(len);
             }
         }
 
+        // SAFETY: `data` is `data_len` bytes long (sourced from
+        // `&[u8]`); `self.content[offset..]` is `data_len` bytes
+        // (we just resized `len = offset + data_len`). The two ranges
+        // are disjoint because `offset` is past the title bytes that
+        // were initialised at construction time.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 data.as_ptr(),
@@ -296,6 +337,10 @@ impl AckData {
         let total_len = REX_HEAD_LEN + TITLE_LEN_SIZE + 8;
 
         let mut content = BytesMut::with_capacity(total_len);
+        // SAFETY: see `RexData::new` — `set_len(total_len)` exposes
+        // `total_len` freshly-allocated bytes; the subsequent `unsafe`
+        // block initialises every byte at `REX_HEAD_LEN..total_len`
+        // before returning.
         unsafe {
             content.set_len(total_len);
         }
@@ -305,6 +350,9 @@ impl AckData {
         // Write title_len (0) at offset REX_HEAD_LEN
         ack_data.content[REX_HEAD_LEN] = 0;
 
+        // SAFETY: `content` is `total_len` bytes long (just
+        // `set_len`'d); every byte is written via `ptr::write` before
+        // returning. `ptr` is freshly allocated and not aliased.
         unsafe {
             let ptr = ack_data.content.as_mut_ptr();
 
@@ -362,6 +410,11 @@ struct AckDataWrapper {
 impl AckDataWrapper {
     #[inline(always)]
     fn head_mut(&mut self) -> &mut RexHead {
+        // SAFETY: Same alignment / length preconditions as the
+        // `head_mut` defined earlier in the impl block; kept as a
+        // separate definition so the inner setter methods can use
+        // a tighter visibility boundary if needed. The mutable
+        // pointer is derived from `&mut self`.
         unsafe { &mut *(self.content.as_mut_ptr() as *mut RexHead) }
     }
 }
