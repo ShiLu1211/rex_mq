@@ -2184,9 +2184,14 @@ dependencies = [
  "async-trait",
  "kanal",
  "pyo3",
+ "rand 0.10.2",
  "rex-client",
  "rex-core",
+ "rex-server",
+ "rex-test",
+ "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

@@ -19,3 +19,25 @@ anyhow.workspace = true
 async-trait.workspace = true
 kanal.workspace = true
 arc-swap.workspace = true
+
+[dev-dependencies]
+# The interop test spawns a Python subprocess that loads the
+# rex4p cdylib, so we need the same workspace deps that the test
+# driver uses to start a server and publish.
+rex-server.workspace = true
+rex-client.workspace = true
+rex-core.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tempfile = "3"
+uuid.workspace = true
+rex-test.workspace = true
+rand.workspace = true
+async-trait.workspace = true
+
+[features]
+default = []
+# When the `test` feature is on, build.rs probes for `python3` and
+# emits a `HAS_PYTHON3` cfg flag. Tests should consult this flag and
+# skip cleanly when Python is not available.
+test = []
