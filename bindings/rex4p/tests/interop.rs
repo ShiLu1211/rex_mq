@@ -52,20 +52,46 @@ use uuid::Uuid;
 const PY_DRIVER: &str = r#"
 import sys
 import time
-from rex4p import RexClient, RexCommand, RexData, Protocol
+from rex4p import ClientConfig, RexClient, Protocol, RexCommand, RexData
 
-host, port = sys.argv[1], int(sys.argv[2])
-title = sys.argv[3]
+class Handler:
+    def on_login(self, data):
+        print("LOGIN_OK:" + str(data), flush=True)
 
-def hex(b):
-    return "PAYLOAD_HEX:" + b.hex()
+    def on_message(self, data):
+        # Hex-encode the payload bytes so the Rust test can grep for
+        # an unambiguous sentinel. data.data is a Python `bytes`
+        # object (the PyRexData getter exposes Vec<u8> as bytes).
+        payload = bytes(data.data)
+        print("PAYLOAD_HEX:" + payload.hex(), flush=True)
 
-client = RexClient(Protocol.Tcp)
-client.on_message = lambda data: print(hex(bytes(data.data)), flush=True)
-client.on_login = lambda data: print("LOGIN_OK", flush=True)
-client.connect(host, port)
-client.login(RexCommand.Title, title, b"")
-client.run()
+host, port, title = sys.argv[1], sys.argv[2], sys.argv[3]
+
+handler = Handler()
+config = ClientConfig(f"{host}:{port}", Protocol.tcp(), title, handler)
+client = RexClient()
+client.connect(config)
+
+# Wait for the login handshake to complete. The Rust publisher will
+# be racing to send its payload, so this must finish before the
+# publisher's send is queued (otherwise the message lands before the
+# subscriber is registered and the server drops it).
+deadline = time.time() + 5.0
+while not client.is_connected() and time.time() < deadline:
+    time.sleep(0.05)
+
+if not client.is_connected():
+    print("CONNECT_FAILED", flush=True)
+    sys.exit(1)
+
+# Idle forever. on_message fires from the binding's background
+# thread whenever the server forwards a message; the Rust test
+# will kill us via SIGKILL once it has seen PAYLOAD_HEX. We block
+# on a sleep loop rather than consume stdin so the test never has
+# to coordinate a "GO" handshake — closing our stdin would cause
+# us to exit and the next message would land in a dead process.
+while True:
+    time.sleep(1.0)
 "#;
 
 #[tokio::test(flavor = "current_thread")]
@@ -116,13 +142,46 @@ async fn python_binding_receives_payload_published_by_rust_client() -> Result<()
         .arg(port.to_string())
         .arg(title.clone())
         .env("PYTHONPATH", &cdylib_dir)
+        // Inherit stdin (closed) rather than piping it. A piped
+        // stdin that the parent never writes to causes the Python
+        // driver to see EOF on stdin and exit — which would kill
+        // the subscriber before the Rust publisher sends. Letting
+        // stdin be inherited from the parent (also closed in CI)
+        // puts the Python driver into the same EOF state, but it
+        // never reads stdin in the idle loop, so this is a no-op.
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("spawn python3")?;
 
+    // Wait for LOGIN_OK. The driver prints it as soon as the
+    // login_ok callback fires (background thread inside the
+    // binding); the Rust publisher cannot send before this point or
+    // the server drops the message because the subscriber isn't
+    // registered yet.
     let stdout = child.stdout.take().expect("stdout piped");
     let mut reader = BufReader::new(stdout).lines();
+    let logged_in_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut logged_in = false;
+    while tokio::time::Instant::now() < logged_in_deadline {
+        let line = match tokio::time::timeout(Duration::from_secs(1), reader.next_line()).await {
+            Ok(Ok(Some(l))) => l,
+            Ok(Ok(None)) => break,
+            Ok(Err(e)) => bail!("read python stdout: {e}"),
+            Err(_) => continue,
+        };
+        if line.starts_with("LOGIN_OK") {
+            logged_in = true;
+            break;
+        }
+        if line == "CONNECT_FAILED" {
+            bail!("python client failed to connect within 5s");
+        }
+    }
+    if !logged_in {
+        bail!("python client never logged in within 5s");
+    }
 
     // 5. Open a Rust publisher and send one Title message.
     let publisher = open_client(RexClientConfig::new(
