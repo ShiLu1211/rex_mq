@@ -141,6 +141,32 @@ pub fn observe_deliver_latency(title: &str, secs: f64) {
     .observe(secs);
 }
 
+/// Count one command processed by the dispatch table, labelled by command
+/// id and result. `result` is "ok" or "err" - call sites derive it from
+/// `Result::is_ok()`. Cardinality: ~16 commands x 2 results.
+pub fn inc_commands_total(command: &str, result: &str) {
+    lazy_counter_vec!(
+        "rex_commands_total",
+        "Commands processed by the dispatch table",
+        &["command", "result"],
+    )
+    .with_label_values(&[command, result])
+    .inc();
+}
+
+/// Record wall-clock time spent in a command handler, labelled by command.
+/// Latency is recorded regardless of `ok`/`err` outcome; splitting the
+/// label would double cardinality without informative value.
+pub fn observe_command_duration(command: &str, secs: f64) {
+    lazy_histogram_vec!(
+        "rex_command_duration_seconds",
+        "Wall-clock time spent in a command handler",
+        &["command"],
+    )
+    .with_label_values(&[command])
+    .observe(secs);
+}
+
 pub fn set_clients_connected(n: i64) {
     lazy_gauge!("rex_clients_connected", "Currently connected clients",).set(n);
 }
@@ -240,5 +266,82 @@ mod tests {
                 names
             );
         }
+    }
+
+    #[test]
+    fn inc_commands_total_increments_for_label() {
+        inc_commands_total("Title", "ok");
+        inc_commands_total("Title", "ok");
+        let count = command_counter_value("Title", "ok");
+        assert!(count >= 2.0, "expected counter >= 2, got {}", count);
+    }
+
+    #[test]
+    fn observe_command_duration_records_value() {
+        observe_command_duration("Title", 0.000123);
+        let count = command_histogram_count("Title");
+        assert!(
+            count >= 1,
+            "expected histogram sample count >= 1, got {}",
+            count
+        );
+    }
+
+    #[test]
+    fn result_label_distinguishes_ok_err() {
+        inc_commands_total("Title", "ok");
+        inc_commands_total("Title", "err");
+        let ok = command_counter_value("Title", "ok");
+        let err = command_counter_value("Title", "err");
+        assert!(ok >= 1.0, "expected ok counter >= 1, got {}", ok);
+        assert!(err >= 1.0, "expected err counter >= 1, got {}", err);
+    }
+
+    fn command_counter_value(command: &str, result: &str) -> f64 {
+        for mf in global_registry().gather() {
+            if mf.name() != "rex_commands_total" {
+                continue;
+            }
+            for metric in mf.get_metric() {
+                let labels: Vec<&str> = metric
+                    .get_label()
+                    .iter()
+                    .map(|p| p.name())
+                    .filter(|n| *n == "command" || *n == "result")
+                    .collect();
+                if labels.len() != 2 {
+                    continue;
+                }
+                let mut cmd = None;
+                let mut res = None;
+                for p in metric.get_label() {
+                    match p.name() {
+                        "command" => cmd = Some(p.value()),
+                        "result" => res = Some(p.value()),
+                        _ => {}
+                    }
+                }
+                if cmd == Some(command) && res == Some(result) {
+                    return metric.get_counter().value();
+                }
+            }
+        }
+        0.0
+    }
+
+    fn command_histogram_count(command: &str) -> u64 {
+        for mf in global_registry().gather() {
+            if mf.name() != "rex_command_duration_seconds" {
+                continue;
+            }
+            for metric in mf.get_metric() {
+                for p in metric.get_label() {
+                    if p.name() == "command" && p.value() == command {
+                        return metric.get_histogram().get_sample_count();
+                    }
+                }
+            }
+        }
+        0
     }
 }
