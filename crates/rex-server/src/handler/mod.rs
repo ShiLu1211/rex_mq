@@ -82,3 +82,113 @@ async fn dispatch(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rex_core::RexCommand;
+    use rex_observability::metrics::global_registry;
+
+    use super::*;
+    use crate::handler::test_util::{dummy_client_with_id, make_services};
+
+    /// Walk the global Prometheus registry and return the counter value
+    /// for `rex_commands_total{command=X, result=Y}`. Returns 0.0 when no
+    /// matching sample exists yet (label set created lazily on first inc).
+    fn command_counter(command: &str, result: &str) -> f64 {
+        for mf in global_registry().gather() {
+            if mf.name() != "rex_commands_total" {
+                continue;
+            }
+            for metric in mf.get_metric() {
+                let mut cmd = None;
+                let mut res = None;
+                for p in metric.get_label() {
+                    match p.name() {
+                        "command" => cmd = Some(p.value()),
+                        "result" => res = Some(p.value()),
+                        _ => {}
+                    }
+                }
+                if cmd == Some(command) && res == Some(result) {
+                    return metric.get_counter().value();
+                }
+            }
+        }
+        0.0
+    }
+
+    /// Walk the global Prometheus registry and return the histogram sample
+    /// count for `rex_command_duration_seconds{command=X}`.
+    fn command_duration_count(command: &str) -> u64 {
+        for mf in global_registry().gather() {
+            if mf.name() != "rex_command_duration_seconds" {
+                continue;
+            }
+            for metric in mf.get_metric() {
+                for p in metric.get_label() {
+                    if p.name() == "command" && p.value() == command {
+                        return metric.get_histogram().get_sample_count();
+                    }
+                }
+            }
+        }
+        0
+    }
+
+    #[tokio::test]
+    async fn dispatch_records_ok_for_known_command() {
+        let services = make_services(false);
+        let source = dummy_client_with_id(0xABu128);
+        let mut rex_data = RexData::new(RexCommand::Check, "", b"");
+        rex_data.set_source(0xABu128);
+
+        let before = command_counter("Check", "ok");
+        handle(&services, &source, &mut rex_data)
+            .await
+            .expect("Check should return Ok");
+        let after = command_counter("Check", "ok");
+
+        assert!(
+            after >= before + 1.0,
+            "expected rex_commands_total{{command=Check,result=ok}} to increment by >= 1 (was {before}, now {after})"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_does_not_increment_err_on_success() {
+        let services = make_services(false);
+        let source = dummy_client_with_id(0xABu128);
+        let mut rex_data = RexData::new(RexCommand::Check, "", b"");
+        rex_data.set_source(0xABu128);
+
+        let before = command_counter("Check", "err");
+        handle(&services, &source, &mut rex_data)
+            .await
+            .expect("Check should return Ok");
+        let after = command_counter("Check", "err");
+
+        assert!(
+            after <= before,
+            "expected rex_commands_total{{command=Check,result=err}} to NOT increment on success (was {before}, now {after})"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_records_duration_for_known_command() {
+        let services = make_services(false);
+        let source = dummy_client_with_id(0xABu128);
+        let mut rex_data = RexData::new(RexCommand::Check, "", b"");
+        rex_data.set_source(0xABu128);
+
+        let before = command_duration_count("Check");
+        handle(&services, &source, &mut rex_data)
+            .await
+            .expect("Check should return Ok");
+        let after = command_duration_count("Check");
+
+        assert!(
+            after > before,
+            "expected rex_command_duration_seconds{{command=Check}} sample count to increment by >= 1 (was {before}, now {after})"
+        );
+    }
+}
