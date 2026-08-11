@@ -17,6 +17,14 @@ For the forward-looking plan, see [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Per-command observability at the dispatch table.** `handler::handle` is now the single per-command observation site. New metrics:
+  - `rex_commands_total{command, result}` (counter; `result` is `ok` or `err`).
+  - `rex_command_duration_seconds{command}` (histogram, recorded regardless of outcome).
+  Handler-level errors also increment `rex_messages_failed_total{handler_error}`. Closes the prior coverage gap on `login` / `check` / `ack` / `session_mutator` and removes the 3-way hand-rolled inc-and-time blocks from `cast` / `title` / `group`. Existing per-title `rex_messages_published_total` / `rex_messages_delivered_total` semantics preserved.
+  - Spec: `docs/superpowers/specs/2026-08-11-c1-dispatch-observability-design.md`
+
 ## [0.4.0] — 2026-07-20 — Bindings cross-language interop
 
 ### Added

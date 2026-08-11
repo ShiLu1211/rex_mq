@@ -86,6 +86,16 @@ plus the [[Shutdown]] signal and config. Plus a small set of composite operation
 (`add_client`, `remove_client`, `setup_message_ack`) that orchestrate multiple ports.
 _Avoid_: container, registry, DI graph
 
+**Dispatch table** (`handler::handle`):
+The single site that routes a [[Client]]'s inbound [[RexCommand]] to its
+`CommandHandler` impl, and the single per-command observation site. Every
+dispatch emits `rex_commands_total{command,result}` (counter, `result` is
+`"ok"` or `"err"`) and `rex_command_duration_seconds{command}` (histogram).
+Handler-level errors also increment `rex_messages_failed_total{handler_error}`.
+Per-title publish / per-subscriber delivery counters remain in the handler
+impls because their cardinality differs.
+_Avoid_: command router, command bus, dispatch loop
+
 **Janitor**:
 A periodic task driven by [[Shutdown]] and a timer; uses [[AckTracker]] and
 [[ClientRegistry]] to time out pending ACKs and inactive clients.
