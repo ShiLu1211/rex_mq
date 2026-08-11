@@ -5,9 +5,7 @@ use anyhow::Result;
 use rex_core::{RetCode, RexClientInner, RexCommand, RexData};
 use rex_observability::metrics::{
     inc_forward_failures, inc_messages_delivered, inc_messages_published, observe_deliver_latency,
-    observe_publish_latency,
 };
-use scopeguard::guard;
 use tracing::{debug, info, warn};
 
 use crate::handler::port::CommandHandler;
@@ -27,18 +25,13 @@ impl CommandHandler for TitleHandler {
         debug!("Received title message: {}", title);
         let client_id: u128 = rex_data.source();
 
-        // --- Observability: count + time every accepted publish ---
-        // Snapshot the title and start time up front so the RAII guard
-        // can record latency on every return path (success, no-target,
-        // remote-forward, error). `title_for_metric` is borrowed by the
-        // closure so cloning it here avoids a `String` move out of the
-        // match arms (which already take `title` by value on remote).
-        let started = Instant::now();
+        // Per-title publish counter (the dispatch-level wrap handles
+        // per-command + duration). `local_deliver_started` snapshots the
+        // time we accepted the publish, used by `observe_deliver_latency`
+        // on the local-subscriber path below.
         let title_for_metric = title.clone();
+        let local_deliver_started = Instant::now();
         inc_messages_published(&title_for_metric);
-        let _metric_guard = guard((), |_| {
-            observe_publish_latency(&title_for_metric, started.elapsed().as_secs_f64());
-        });
 
         let mut success = false;
 
@@ -55,7 +48,10 @@ impl CommandHandler for TitleHandler {
                     // Observability: publish→subscriber enqueue latency
                     // (local case only — remote is bounded by the
                     // forward call, not by our local enqueue).
-                    observe_deliver_latency(&title_for_metric, started.elapsed().as_secs_f64());
+                    observe_deliver_latency(
+                        &title_for_metric,
+                        local_deliver_started.elapsed().as_secs_f64(),
+                    );
                 }
             }
             RoutePlan::Remote(node) => {

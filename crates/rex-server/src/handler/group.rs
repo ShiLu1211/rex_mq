@@ -2,14 +2,10 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-use std::time::Instant;
 
 use anyhow::Result;
 use rex_core::{RetCode, RexClientInner, RexCommand, RexData};
-use rex_observability::metrics::{
-    inc_messages_delivered, inc_messages_published, observe_publish_latency,
-};
-use scopeguard::guard;
+use rex_observability::metrics::{inc_messages_delivered, inc_messages_published};
 use tracing::{debug, warn};
 
 use crate::Services;
@@ -28,15 +24,12 @@ impl CommandHandler for GroupHandler {
         debug!("Received group message: {}", title);
         let client_id: u128 = rex_data.source();
 
-        // --- Observability: count + time every accepted publish ---
-        // Group picks exactly one subscriber via round-robin, so we
-        // record one publish and (on successful enqueue) one delivery.
-        let started = Instant::now();
+        // Per-title publish counter: group picks exactly one subscriber
+        // via round-robin, so we count once per inbound command (here)
+        // and per-subscriber delivery on success (below). The dispatch-
+        // level wrap handles per-command + duration; this is per-title.
         let title_for_metric = title.to_string();
         inc_messages_published(&title_for_metric);
-        let _metric_guard = guard((), |_| {
-            observe_publish_latency(&title_for_metric, started.elapsed().as_secs_f64());
-        });
 
         let matching_clients = services.registry.find_all_by_title(title, Some(client_id));
 
