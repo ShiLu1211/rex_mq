@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{PersistenceError, Result};
 
-const T_CLIENTS: &str = "clients";
+pub(crate) const T_CLIENTS: &str = "clients";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PersistedClient {
@@ -59,6 +59,26 @@ impl ClientStateRepo {
         Ok(out)
     }
 
+    /// Sweep all ghost entries whose `ghost_until` is strictly less than `now`
+    /// and return their client ids. The matching entries are also removed
+    /// from disk so they aren't returned again on the next sweep.
+    ///
+    /// Best-effort by design:
+    ///
+    /// - **Boundary**: uses strict `<` against `ghost_until`, meaning a row
+    ///   whose `ghost_until == now` is *not* reaped this call. This matches
+    ///   the Janitor contract (`take_expired(now)` should drop strictly-past
+    ///   entries; the next sweep handles the boundary case). Documented
+    ///   behaviour; do not change without updating the contract.
+    /// - **Atomicity**: the iter + remove phases are not atomic. If the
+    ///   process dies between collecting `to_remove` and applying the
+    ///   removes, the next call to `take_expired_ghosts` will re-collect the
+    ///   same ids (the rows are still present) and re-remove them. Idempotent.
+    /// - **Corrupted rows**: a row whose value fails to deserialize is logged
+    ///   and skipped rather than aborting the whole sweep. Stale rows still
+    ///   take space on disk but don't block the rest of the cleanup; an
+    ///   operator can inspect them via the sled admin tools. This is the
+    ///   safer choice for a periodic janitor task.
     pub fn take_expired_ghosts(&self, now: u64) -> Result<Vec<u128>> {
         let tree = self
             .db
@@ -67,9 +87,20 @@ impl ClientStateRepo {
         let mut expired = Vec::new();
         let mut to_remove = Vec::new();
         for entry in tree.iter() {
-            let (key, value) = entry.map_err(|e| PersistenceError::Db(e.to_string()))?;
-            let client: PersistedClient =
-                bincode::deserialize(&value).map_err(PersistenceError::Serialization)?;
+            let (key, value) = match entry {
+                Ok(kv) => kv,
+                Err(e) => {
+                    tracing::warn!("take_expired_ghosts: skipping corrupted kv pair: {e}");
+                    continue;
+                }
+            };
+            let client: PersistedClient = match bincode::deserialize(&value) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("take_expired_ghosts: skipping row with undecodable value: {e}");
+                    continue;
+                }
+            };
             if client.ghost_until < now && key.as_ref().len() == 16 {
                 let mut buf = [0u8; 16];
                 buf.copy_from_slice(key.as_ref());
@@ -205,6 +236,104 @@ mod tests {
         assert!(
             loaded.is_empty(),
             "expired ghosts should be removed after take"
+        );
+
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    #[test]
+    fn take_expired_ghosts_empty_tree_returns_empty_vec() {
+        let path = fresh_db_path();
+        std::fs::create_dir_all(&path).unwrap();
+        let db = sled::open(&path).unwrap();
+        let _ = db.open_tree(T_CLIENTS).unwrap();
+        let repo = ClientStateRepo::new(db.clone());
+
+        let expired = repo.take_expired_ghosts(100).unwrap();
+        assert!(expired.is_empty(), "empty tree should yield no ids");
+
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    #[test]
+    fn take_expired_ghosts_all_expired_returns_all_and_clears() {
+        let path = fresh_db_path();
+        std::fs::create_dir_all(&path).unwrap();
+        let db = sled::open(&path).unwrap();
+        let _ = db.open_tree(T_CLIENTS).unwrap();
+        let repo = ClientStateRepo::new(db.clone());
+
+        // All three entries expired at or before the sweep time.
+        repo.save(&PersistedClient {
+            client_id: 1,
+            titles: vec![],
+            created_at: 0,
+            ghost_until: 50,
+        })
+        .unwrap();
+        repo.save(&PersistedClient {
+            client_id: 2,
+            titles: vec![],
+            created_at: 0,
+            ghost_until: 50,
+        })
+        .unwrap();
+        repo.save(&PersistedClient {
+            client_id: 3,
+            titles: vec![],
+            created_at: 0,
+            ghost_until: 50,
+        })
+        .unwrap();
+
+        let mut expired = repo.take_expired_ghosts(100).unwrap();
+        expired.sort_unstable();
+        assert_eq!(expired, vec![1, 2, 3]);
+
+        // After a sweep with all reaped, the tree is empty.
+        let loaded = repo.load_all().unwrap();
+        assert!(
+            loaded.is_empty(),
+            "all-expired sweep should clear every row"
+        );
+
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    #[test]
+    fn take_expired_ghosts_skips_corrupted_rows() {
+        // Insert a real entry plus a row whose value is not valid
+        // bincode for PersistedClient. The corrupted row should be
+        // logged + skipped, the real entry reaped if expired.
+        let path = fresh_db_path();
+        std::fs::create_dir_all(&path).unwrap();
+        let db = sled::open(&path).unwrap();
+        let tree = db.open_tree(T_CLIENTS).unwrap();
+
+        let real = PersistedClient {
+            client_id: 0xABCD,
+            titles: vec![],
+            created_at: 0,
+            ghost_until: 50,
+        };
+        let real_bytes = bincode::serialize(&real).unwrap();
+        tree.insert(&0xABCDu128.to_le_bytes(), real_bytes).unwrap();
+
+        // 0xDEAD: 16-byte key but garbage value.
+        tree.insert(
+            &0xDEADu128.to_le_bytes(),
+            b"this is not a valid bincode payload".to_vec(),
+        )
+        .unwrap();
+
+        drop(tree);
+        let repo = ClientStateRepo::new(db.clone());
+
+        let expired = repo.take_expired_ghosts(100).unwrap();
+        assert_eq!(
+            expired,
+            vec![0xABCD],
+            "corrupted row should not abort the sweep"
         );
 
         std::fs::remove_dir_all(&path).ok();

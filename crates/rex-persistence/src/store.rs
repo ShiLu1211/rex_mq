@@ -40,7 +40,12 @@ impl Default for StoreConfig {
 }
 
 // 存储树（Table）名称
-const T_CLIENTS: &str = "clients";
+// T_CLIENTS lives in `client_state_repo.rs`; this crate only ever opens it
+// as a side effect of `with_db`, so we re-use the symbol rather than
+// duplicating the string. If the schema gains another table here, declare
+// it locally.
+use crate::client_state_repo::T_CLIENTS;
+
 const T_OFFLINE_QUEUE: &str = "offline_queue";
 const T_OFFLINE_INDEX: &str = "offline_index"; // client_id -> [message_ids]
 
@@ -84,7 +89,8 @@ impl PersistenceStore {
     /// decided at the caller.
     pub fn with_db(db: Arc<sled::Db>) -> Self {
         // Touch the trees we own so they exist on disk before any op.
-        // (T_CLIENTS is owned by `ClientStateRepo`, not us.)
+        // T_CLIENTS is owned by `ClientStateRepo`; it's already opened by
+        // the caller if the repo is in use, so we don't touch it here.
         let _ = db.open_tree(T_OFFLINE_QUEUE);
         let _ = db.open_tree(T_OFFLINE_INDEX);
         Self {
