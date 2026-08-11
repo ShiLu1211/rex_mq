@@ -84,8 +84,8 @@ mod tests {
             body
         );
         assert!(
-            body.contains("rex_publish_latency_seconds"),
-            "metrics body missing `rex_publish_latency_seconds`: {}",
+            body.contains("rex_command_duration_seconds"),
+            "metrics body missing `rex_command_duration_seconds`: {}",
             body
         );
 
