@@ -124,16 +124,23 @@ async fn interop_smoke() -> Result<()> {
     tokio::time::sleep(Duration::from_millis(2000)).await;
 
     // 5. Publish one RexData from a Rust TestClient.
-    //    The java example's rcv handler runs in bench mode — it
-    //    expects a long timestamp prefix (little-endian) and prints
-    //    TPS every 1s. Prepend now_nanos() to satisfy the handler.
+    //    The java example's rcv handler runs in bench mode — it reads
+    //    the first 8 bytes as a long via `ByteBuffer.wrap().getLong()`
+    //    (Java default: big-endian) and records `System.nanoTime() -
+    //    timestamp` into an HdrHistogram whose highest trackable value
+    //    is ~3.6e12 ns. Any garbage long (e.g. Unix-epoch nanos) would
+    //    blow past that ceiling and throw ArrayIndexOutOfBoundsException,
+    //    leaving the histogram at count=0 and `tps:` never printing.
+    //
+    //    Send a big-endian zero so Java reads 0L and records a positive
+    //    latency bounded by `System.nanoTime()`. The test only cares
+    //    that `tps:` appears in stdout, not the latency value itself.
     let publisher = env
         .create_client_to_addr(addr, &title)
         .await
         .context("creating publisher client")?;
-    let now_ns = rex_core::utils::now_micros() * 1_000; // micros → nanos
     let mut bench_payload = Vec::with_capacity(8 + payload.len());
-    bench_payload.extend_from_slice(&now_ns.to_le_bytes());
+    bench_payload.extend_from_slice(&0u64.to_be_bytes());
     bench_payload.extend_from_slice(&payload);
     publisher
         .send(rex_core::RexCommand::Title, &title, &bench_payload)
@@ -165,8 +172,10 @@ async fn interop_smoke() -> Result<()> {
     let _ = child.kill().await;
 
     if !found {
-        let cap = captured.lock().unwrap();
-        let stdout_str = String::from_utf8_lossy(&cap);
+        // Snapshot the captured bytes under the lock; drop the guard
+        // before any await to satisfy clippy::await_holding_lock.
+        let stdout_bytes = captured.lock().unwrap().clone();
+        let stdout_str = String::from_utf8_lossy(&stdout_bytes);
         let exit_status = child.wait().await.ok().and_then(|s| s.code());
         let mut stderr_buf = Vec::new();
         if let Some(mut stderr) = child.stderr.take() {
