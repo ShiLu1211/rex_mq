@@ -47,19 +47,33 @@ new architectural moves.
   + ADR-0002 + ADR-0003. Comment with the ADR + commit range
   (`96bfd2d` ... `b7859e6`), then close.
 
-### 1.3 Reclaim the `bindings/rex4j` interop test
+### 1.3 Reclaim the `bindings/rex4j` interop test  ✅ done
 
-- **Discrepancy**: `CHANGELOG.md` [0.4.0] claims
-  `bindings/rex4j/tests/interop.rs` runs end-to-end in CI, but
-  `git ls-tree HEAD bindings/rex4j/tests/` shows no `interop.rs`.
-  The commit recorded in `.superpowers/sdd/progress.md` as
-  `0886c9d` exists in the object store but is not reachable from
-  any branch on the dev lineage (`git branch -a --contains 0886c9d`
-  is empty). This is a documentation/reality drift.
-- **Action**: either cherry-pick `0886c9d` onto `dev` (and verify it
-  builds with the current `rex4j` API) or remove the rex4j interop
-  line from the [0.4.0] changelog. Do not leave the CHANGELOG
-  asserting coverage that does not exist.
+Cherry-pick landed as commit `82e115a` (single commit, 282 + Cargo.lock):
+
+- `bindings/rex4j/build.rs` - emits classpath via `mvn dependency:build-classpath`.
+- `bindings/rex4j/tests/interop.rs` - the foreign-JVM interop test.
+- `bindings/rex4j/tests_build_helpers.rs` - shared helpers for locating
+  the built .so and the compiled `RexEngine.class`.
+- `Cargo.lock` - new dev-deps `rand 0.10.2`, `rex-test`, `uuid` (from
+  the cherry-picked `Cargo.toml`).
+
+Verification locally:
+
+- `cargo build --release -p rex4j` -> clean.
+- `cd bindings/rex4j && mvn compile` -> emits
+  `target/classes/com/rex4j/example/RexEngine.class` (RexEngine.java
+  itself lives under `src/main/java/...`, Maven standard layout, not
+  the `examples/` directory the test comment references).
+- `cargo test --release -p rex4j --test interop -- --nocapture`
+  -> 1 passed, 0 failed in 2.34s.
+
+CHANGELOG.md [0.4.0] rex4j interop qualification revoked in commit
+`d7381e6` (the previous close-out note described the test as missing
+from `dev`; the cherry-pick resolved that drift).
+
+Full workspace after cherry-pick: `cargo test --workspace` -> 208
+passed, 0 failed.
 
 ### 1.4 Sweep the recorded Minor findings
 
