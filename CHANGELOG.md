@@ -34,7 +34,7 @@ For the forward-looking plan, see [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ### Verified
 
-- `bindings/rex4p/tests/interop.rs` starts a real `rex-server` (TCP listener on `127.0.0.1`) and runs end-to-end publish / receive through the binding; passes in CI. The rex4j counterpart (`bindings/rex4j/tests/interop.rs`) is not on the current `dev` lineage - see `docs/ROADMAP.md` 1.3.
+- `bindings/rex4p/tests/interop.rs` and `bindings/rex4j/tests/interop.rs` each start a real `rex-server` (TCP listener on `127.0.0.1`) and run end-to-end publish / receive through the binding under test. Both pass locally; `bindings/rex4j/tests/interop.rs` was cherry-picked onto `dev` in 82e115a after the 2026-08 close-out surfaced a documentation/reality drift (the test file was missing from `dev` despite the changelog claim).
 
 ### Spec / plan
 
