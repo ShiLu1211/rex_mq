@@ -5,13 +5,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/) — thoug
 versioning is pragmatic: anything in `0.y.0` is a development cycle; minor bumps may include
 breaking changes.
 
-## [Unreleased]
+For the forward-looking plan, see [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
-### Changed (in progress)
+## [0.5.0] - 2026-08-11 - Cluster seam closure
+
+### Changed
 
 - **Cluster crate slimmed: Raft-era scaffolding deleted.** `crates/rex-cluster/src/failover.rs`, `gossip.rs`, and `sync.rs` are gone — they had zero callers anywhere in the workspace. `NodeManager` lost its `term` / `voted_for` / `votes_received` / `role` fields plus `start_election` / `handle_request_vote` / `handle_vote_response` / `check_election_timeout`. `ClusterMessage` no longer carries `RequestVote` / `VoteResponse` / `AppendEntries` / `AppendEntriesResponse` / `StateSyncRequest` / `StateSyncResponse`. `ClusterRole` is gone (only `Standalone` was ever initialised; that branch was the lone path). `HeartbeatMessage` lost its `term` and `leader_commit` fields (always 0, never read). `NodeInfo` lost `is_leader` / `with_leader` / `state` / `term` / `version`. `ClusterConfig` lost `election_timeout_min_ms` / `election_timeout_max_ms`. Net: ~1,000 LOC of speculative scaffolding removed; the cluster crate now carries only what `NodeManager` + `Forwarder` + `ServerClusterManager` actually consume.
 - **`Forwarder` module split.** `crates/rex-server/src/system/forwarder.rs` (930 LOC) is now `crates/rex-server/src/system/forwarder/{mod,network,tests}.rs`. `mod.rs` carries the types (`FwdResult`, `DeliveryOutcome`), the `Forwarder` trait, and `NetworkForwarder`'s slot management. `network.rs` carries the `Forwarder` impl plus the private `try_send` / `try_reconnect_and_send` helpers. `tests.rs` carries all 14 unit tests and their `drain_listener` / `recording_listener` / `started_forwarder` fixtures. No behavioural change.
 - **ADR-0003 committed.** `docs/adr/0003-enforce-forwarder-seam.md` records the decision that closed the last five cross-node wire-I/O bypass sites during the 2026-07 Forwarder-seam enforcement (handler/title.rs hand-rolled fallback loop, cluster/forward_relay.rs duplicate fan-out, ServerClusterManager::forward_message, ServerClusterManager::broadcast, session_mutator.rs::broadcast).
+
+## [Unreleased]
 
 ## [0.4.0] — 2026-07-20 — Bindings cross-language interop
 
@@ -22,7 +26,7 @@ breaking changes.
 
 ### Verified
 
-- `bindings/rex4p/tests/interop.rs` and `bindings/rex4j/tests/interop.rs` start a real `rex-server` (TCP listener on `127.0.0.1`) and run end-to-end publish / receive through the binding under test. Both pass in CI.
+- `bindings/rex4p/tests/interop.rs` starts a real `rex-server` (TCP listener on `127.0.0.1`) and runs end-to-end publish / receive through the binding; passes in CI. The rex4j counterpart (`bindings/rex4j/tests/interop.rs`) is not on the current `dev` lineage - see `docs/ROADMAP.md` 1.3.
 
 ### Spec / plan
 
