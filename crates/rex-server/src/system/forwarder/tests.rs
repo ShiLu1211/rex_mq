@@ -493,7 +493,13 @@ async fn forward_target_refused_falls_back_to_other_peer() {
     // fails). node-c is connected and accepts the message; the
     // fallback walk should land on it.
     let (peer_c_addr, _listener_c) = drain_listener().await;
-    let unreachable: SocketAddr = "127.0.0.1:1".parse().expect("parse unreachable");
+    // `127.0.0.1:0` as the "unreachable" target: the address is
+    // registered in the route table (so `forward()` looks it up) but
+    // `started_forwarder` is told not to connect to it, so no socket
+    // is ever bound. Port 1 (IANA tcpmux) was the previous choice;
+    // port 0 avoids any future tcpmux collision and is the same
+    // shape as the other ephemeral-port stubs in this file.
+    let unreachable: SocketAddr = "127.0.0.1:0".parse().expect("parse unreachable");
     let fwd = started_forwarder(
         "local-node",
         &[

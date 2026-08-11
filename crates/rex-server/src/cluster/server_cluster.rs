@@ -199,6 +199,12 @@ impl ServerClusterManager {
                             let error = if success {
                                 None
                             } else if outcome.failed > 0 {
+                                // TODO(ack-driven-observability):
+                                // synthesised "Failed to deliver to N local
+                                // subscriber(s)" string swallows the per-
+                                // client error returned by `Forwarder::deliver`.
+                                // Ack-driven metrics/dashboards are not a current
+                                // requirement; revisit if they become one.
                                 Some(format!(
                                     "Failed to deliver to {} local subscriber(s)",
                                     outcome.failed
