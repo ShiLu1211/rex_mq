@@ -149,6 +149,7 @@ impl RexClientHandlerTrait for TestClientHandler {
 /// ------------------------- TestEnv -------------------------
 pub struct TestEnv {
     services: Arc<Services>,
+    config: RexSystemConfig,
     servers: HashMap<Protocol, Arc<dyn RexServerTrait>>,
     base_port: u16,
     /// ACK enabled flag
@@ -168,48 +169,55 @@ impl TestEnv {
     pub fn admin_addr(&self) -> Option<SocketAddr> {
         *self.services.admin_addr.lock()
     }
+
+    /// Borrow the underlying `Services` bundle. Use sparingly — direct
+    /// access bypasses the factory's lifecycle and exists only for
+    /// integration tests that need to call APIs the factory does not
+    /// wrap (e.g. `Services::add_client` for restart-restore coverage).
+    pub fn services(&self) -> &Arc<Services> {
+        &self.services
+    }
+
+    /// Snapshot the `RexSystemConfig` this env was built with. Used by
+    /// `restart()` to rebuild a fresh `Services` against the same config.
+    pub fn config(&self) -> &RexSystemConfig {
+        &self.config
+    }
 }
 
 impl TestEnv {
     pub async fn new() -> Self {
-        let _ = tracing_subscriber::fmt::try_init();
-        // Use random base port to avoid conflicts between parallel tests
-        let base_port = 28800 + (rand::random::<u16>() % 1000);
-        let cluster_port = 38800 + (rand::random::<u16>() % 1000);
-        // Ask the kernel for an ephemeral observability port (port 0)
-        // so parallel tests never collide on 9090.
-        let shutdown = Shutdown::new();
         let mut config = RexSystemConfig::from_id("test-system");
-        config.observability = ObservabilityConfig {
-            admin_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-            admin_token: None,
-            tracing_format: rex_observability::tracing_setup::TracingFormat::Pretty,
-            single_node_cluster_ok: true,
-            admin_metrics_token: None,
-        };
-        let services = build_services(config, shutdown, None).await;
-        Self {
-            services,
-            servers: HashMap::new(),
-            base_port,
-            ack_enabled: false,
-            cluster_port_counter: cluster_port,
-            port_counter: 0,
-            server_addrs: HashMap::new(),
-        }
+        config.ack_enabled = false;
+        Self::from_config(config).await
     }
 
     /// Create a new TestEnv with ACK enabled
     pub async fn new_with_ack() -> Self {
-        let _ = tracing_subscriber::fmt::try_init();
         let mut config = RexSystemConfig::from_id("test-system");
         config.ack_enabled = true;
         config.ack_timeout = 5000;
-        // Use random base port to avoid conflicts between parallel tests
+        Self::from_config(config).await
+    }
+
+    /// Build a TestEnv with persistence enabled at `path` (so the
+    /// caller controls the sled Db location — needed by restart tests
+    /// that boot the server twice against the same directory).
+    pub async fn with_persistence_path(path: std::path::PathBuf) -> Self {
+        let mut config = RexSystemConfig::from_id("test-system");
+        config.persistence_enabled = true;
+        config.persistence_path = path.to_string_lossy().to_string();
+        Self::from_config(config).await
+    }
+
+    /// Shared construction: config in, Services + base port + observability
+    /// out. Always asks the kernel for an ephemeral observability port
+    /// (port 0) so parallel tests never collide on 9090. Random base /
+    /// cluster ports avoid cross-test TCP collisions.
+    async fn from_config(mut config: RexSystemConfig) -> Self {
+        let _ = tracing_subscriber::fmt::try_init();
         let base_port = 28800 + (rand::random::<u16>() % 1000);
         let cluster_port = 38800 + (rand::random::<u16>() % 1000);
-        // Ask the kernel for an ephemeral observability port (port 0)
-        // so parallel tests never collide on 9090.
         config.observability = ObservabilityConfig {
             admin_addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             admin_token: None,
@@ -218,12 +226,14 @@ impl TestEnv {
             admin_metrics_token: None,
         };
         let shutdown = Shutdown::new();
-        let services = build_services(config, shutdown, None).await;
+        let ack_enabled = config.ack_enabled;
+        let services = build_services(config.clone(), shutdown, None).await;
         Self {
             services,
+            config,
             servers: HashMap::new(),
             base_port,
-            ack_enabled: true,
+            ack_enabled,
             cluster_port_counter: cluster_port,
             port_counter: 0,
             server_addrs: HashMap::new(),
