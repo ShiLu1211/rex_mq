@@ -40,3 +40,6 @@ thiserror.workspace = true
 # Test-only: decode ClusterMessage wire bytes captured by the
 # `announce_ack` regression test (transport uses bincode for the wire).
 bincode.workspace = true
+# Test-only: round-trip RexSystemConfig through TOML to verify the
+# serde defaults stay aligned with `from_id`.
+toml.workspace = true

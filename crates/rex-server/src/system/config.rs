@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RexSystemConfig {
+    #[serde(default = "default_server_id")]
     pub server_id: String,
     #[serde(default = "default_check_interval")]
     pub check_interval: u64,
@@ -66,6 +67,9 @@ fn default_ack_retries() -> u32 {
 fn default_ghost_ttl_secs() -> u64 {
     86400
 }
+fn default_server_id() -> String {
+    "rex".to_string()
+}
 
 impl RexSystemConfig {
     #[allow(clippy::too_many_arguments)]
@@ -99,18 +103,20 @@ impl RexSystemConfig {
     }
 
     pub fn from_id(server_id: &str) -> Self {
+        // Pull each default from its default_*() helper so the value
+        // lives in one place (also referenced by the serde derives).
         Self {
             server_id: server_id.to_string(),
-            check_interval: 15,
-            client_timeout: 45,
-            persistence_enabled: true,
-            persistence_path: "./.rex_sled".to_string(),
-            offline_enabled: true,
-            offline_ttl: 86400 * 7,
-            ack_enabled: false,
-            ack_timeout: 5000,
-            ack_retries: 3,
-            ghost_ttl_secs: 86400,
+            check_interval: default_check_interval(),
+            client_timeout: default_client_timeout(),
+            persistence_enabled: default_persistence_enabled(),
+            persistence_path: default_persistence_path(),
+            offline_enabled: default_offline_enabled(),
+            offline_ttl: default_offline_ttl(),
+            ack_enabled: default_ack_enabled(),
+            ack_timeout: default_ack_timeout(),
+            ack_retries: default_ack_retries(),
+            ghost_ttl_secs: default_ghost_ttl_secs(),
             observability: rex_observability::ObservabilityConfig::default(),
         }
     }
@@ -132,5 +138,47 @@ impl From<&rex_config::RexConfig> for RexSystemConfig {
             ghost_ttl_secs: r.persistence.offline.ghost_ttl_secs,
             observability: r.observability.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_id_matches_serde_defaults() {
+        // from_id and the serde defaults should agree on every field.
+        // If they drift, a caller using one path gets a different
+        // config than a caller using the other path.
+        let from_id = RexSystemConfig::from_id("test");
+        let toml = "";
+        let parsed: RexSystemConfig = toml::from_str(toml).expect("parse empty toml");
+        assert_eq!(from_id.check_interval, parsed.check_interval);
+        assert_eq!(from_id.client_timeout, parsed.client_timeout);
+        assert_eq!(from_id.persistence_enabled, parsed.persistence_enabled);
+        assert_eq!(from_id.persistence_path, parsed.persistence_path);
+        assert_eq!(from_id.offline_enabled, parsed.offline_enabled);
+        assert_eq!(from_id.offline_ttl, parsed.offline_ttl);
+        assert_eq!(from_id.ack_enabled, parsed.ack_enabled);
+        assert_eq!(from_id.ack_timeout, parsed.ack_timeout);
+        assert_eq!(from_id.ack_retries, parsed.ack_retries);
+        assert_eq!(from_id.ghost_ttl_secs, parsed.ghost_ttl_secs);
+        assert_eq!(
+            from_id.ghost_ttl_secs, 86_400,
+            "ghost_ttl_secs default is 24h"
+        );
+    }
+
+    #[test]
+    fn ghost_ttl_secs_round_trips_through_toml() {
+        // Field-level round-trip: parse a TOML with just ghost_ttl_secs set,
+        // re-serialise, and confirm the value survives the round trip.
+        let toml_src = "ghost_ttl_secs = 3600\n";
+        let parsed: RexSystemConfig = toml::from_str(toml_src).expect("parse toml");
+        assert_eq!(parsed.ghost_ttl_secs, 3600);
+
+        let serialised = toml::to_string(&parsed).expect("serialise");
+        let reparsed: RexSystemConfig = toml::from_str(&serialised).expect("reparse");
+        assert_eq!(reparsed.ghost_ttl_secs, 3600);
     }
 }
