@@ -15,6 +15,7 @@ fn main() {
         .unwrap_or(false);
     println!("cargo:rustc-env=HAS_JAVA={}", has_java);
 
+    #[allow(clippy::unwrap_used)]
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let so_name = "librex4j.so";
     let target_debug = out_dir.ancestors().nth(3).unwrap_or(&out_dir);
@@ -41,17 +42,16 @@ fn main() {
         .arg("-Dmdep.includeScope=runtime")
         .output();
     let mut classpath = format!("{}:{}", target_release.display(), classes_dir.display());
-    if let Ok(out) = mvn_cp {
-        if out.status.success() {
-            if let Ok(content) = std::fs::read_to_string("/tmp/rex4j-cp.txt") {
-                classpath = format!(
-                    "{}:{}:{}",
-                    content.trim(),
-                    target_release.display(),
-                    classes_dir.display()
-                );
-            }
-        }
+    if let Ok(out) = mvn_cp
+        && out.status.success()
+        && let Ok(content) = std::fs::read_to_string("/tmp/rex4j-cp.txt")
+    {
+        classpath = format!(
+            "{}:{}:{}",
+            content.trim(),
+            target_release.display(),
+            classes_dir.display()
+        );
     }
 
     println!(
