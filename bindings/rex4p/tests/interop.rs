@@ -110,11 +110,26 @@ async fn python_binding_receives_payload_published_by_rust_client() -> Result<()
     let payload = format!("interop-payload-{}", Uuid::new_v4()).into_bytes();
 
     // 3. Resolve the cdylib path. cargo puts it at
-    //    `target/debug/librex4p.so` for debug builds; for release it's
-    //    `target/release/librex4p.so`. We use whichever the env var
-    //    says, falling back to debug.
+    //    `<workspace>/target/<profile>/librex4p.so`. We must compute
+    //    the absolute path: `cargo test` runs the test binary with
+    //    cwd = `target/<profile>/deps/`, so a relative `target/...`
+    //    path resolves to a non-existent nested directory. Use
+    //    `CARGO_TARGET_DIR` (set by cargo, always absolute) when
+    //    available, otherwise resolve via `CARGO_MANIFEST_DIR`
+    //    (also absolute, set at compile time).
     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-    let target_dir = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
+    let target_dir = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| {
+        // CARGO_MANIFEST_DIR is `<workspace>/bindings/rex4p`; the
+        // workspace target dir is `<workspace>/target`.
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest
+            .parent() // bindings/
+            .and_then(|p| p.parent()) // workspace root
+            .expect("rex4p manifest dir should be at <workspace>/bindings/rex4p")
+            .join("target")
+            .to_string_lossy()
+            .into_owned()
+    });
     let cdylib_dir = PathBuf::from(target_dir).join(&profile);
     let cdylib_name = if cfg!(target_os = "macos") {
         "librex4p.dylib"
@@ -123,12 +138,52 @@ async fn python_binding_receives_payload_published_by_rust_client() -> Result<()
     };
     let cdylib_path = cdylib_dir.join(cdylib_name);
     if !cdylib_path.exists() {
-        bail!(
-            "rex4p cdylib not found at {} — did the interop test run \
-             before `cargo build -p rex4p`? Re-run with `cargo test \
-             -p rex4p --test interop` (which builds deps first).",
+        // `crate-type = ["cdylib"]` only emits the .so on explicit
+        // `cargo build -p rex4p`; `cargo test` alone doesn't trigger
+        // it. Self-heal by invoking cargo from inside the test so a
+        // plain `cargo test -p rex4p --test interop` works in any
+        // environment. CI is fixed either way (see .github/workflows).
+        eprintln!(
+            "rex4p cdylib not found at {}; running `cargo build -p rex4p` to build it",
             cdylib_path.display()
         );
+        let status = std::process::Command::new("cargo")
+            .args(["build", "-p", "rex4p"])
+            .status()
+            .context("spawn cargo build -p rex4p")?;
+        if !status.success() {
+            bail!(
+                "cargo build -p rex4p failed (status {status:?}); \
+                 cdylib still missing at {}",
+                cdylib_path.display()
+            );
+        }
+        if !cdylib_path.exists() {
+            bail!(
+                "cargo build -p rex4p succeeded but cdylib still \
+                 missing at {}",
+                cdylib_path.display()
+            );
+        }
+    }
+
+    // Python's import machinery looks for `rex4p.so` (no `lib`
+    // prefix) but cargo's cdylib output is `librex4p.so` on Linux.
+    // Create a hardlink with the expected name so `import rex4p`
+    // succeeds. The hardlink shares the inode (no extra disk
+    // space) and persists for the rest of the test run; cargo's
+    // next rebuild will replace the original .so in place and the
+    // hardlink continues to point at the new content. (This is the
+    // same workaround documented in README for the rex_engine.py
+    // example.)
+    let py_module_path = cdylib_dir.join(if cfg!(target_os = "macos") {
+        "rex4p.dylib"
+    } else {
+        "rex4p.so"
+    });
+    if !py_module_path.exists() {
+        std::fs::hard_link(&cdylib_path, &py_module_path)
+            .context("hardlink rex4p.so for python import")?;
     }
 
     // 4. Spawn the Python driver. PYTHONPATH = cdylib_dir so `import rex4p`
