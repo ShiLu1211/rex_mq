@@ -110,28 +110,78 @@ Each candidate gets its own spec + plan + SDD ledger entry; none
 ship without going through the same per-step verification model
 (commits leave the workspace green at every step).
 
-### 2.1 C1 - Command dispatch table
+**Architecture-review queue status** (sequence from issue #11):
 
-The architecture-review sequence lists C1 next after C3 / C4 land
-(both done). The handlers (`cast`, `group`, `title`, `login`,
-`check`, `del_title`, `reg_title`, `ack`) all depend on `&Services`
-post-C3, which makes them easier to put behind a single dispatch
-table than before. Spec, design, six-to-nine-task rollout mirroring
-the Forwarder seam enforcement.
+| Candidate | Status | Evidence |
+|---|---|---|
+| C3 (RexSystem -> ports) | done | ADR-0001 + ClientState Restoration (`49de459` etc.) + issue #11 closed |
+| C1 base (dispatch table) | done | commit `be557df` |
+| C4 (Router / Forwarder split) | done | ADR-0002 + ADR-0003 + issue #12 closed |
+| C2 (3 cluster wrappers -> 1) | done | commit `ec53673` |
+| C1 follow-up (dispatch observability) | done | commits `a7cf2ba`, `bffaf2c`, `9e2df73`, `fe41bd8`, `daf7a25`, `b005c29` |
+| C6 (TestServer over open_server) | not started | see 2.3 |
+| C5 (ConnectionDriver pattern) | not started | see 2.4 |
 
-**Why first**: removes the last handler-shaped duplication; opens
-the door to per-command metrics, per-command timeouts, and per-
-command middleware (auth, rate limit).
+Only C5 and C6 remain from the original architecture-review sequence.
+The "C1 follow-up" item emerged after C1's base land and is now closed.
 
-**Spec shape** (preliminary): `docs/superpowers/specs/2026-MM-DD-command-dispatch-table-design.md`. Each task <= one PR.
+### 2.1 C1 - Command dispatch table  ✅ done (base + follow-up)
 
-### 2.2 C2 - One cluster manager, not three
+Base land in commit `be557df` (2026-07-02):
 
-`ServerClusterManager` + `ClusterIntegration` + the (now-dead)
-`ClusterManager` were always flagged for unification. The cluster
-crate slim in 0.5.0 cleared out a lot, but the duplication remains.
-Investigate whether C2 is now small enough to fold directly into C1
-or whether it needs its own plan.
+- `CommandHandler` trait with one `async fn handle(&self, &Services,
+  &Arc<RexClientInner>, &mut RexData) -> Result<()>` method.
+- 7 handler structs implement it: `TitleHandler`, `GroupHandler`,
+  `CastHandler`, `LoginHandler`, `CheckHandler`, `SessionMutator`
+  (collapses `reg_title` + `del_title`), `AckHandler`.
+- `handler::handle` holds a `match` over `RexCommand` - exhaustiveness
+  checking from the compiler, no `HashMap`.
+- `crates/rex-server/src/handler/port.rs` carries the trait and
+  the design note ("after C1, handler/mod.rs holds a match-based
+  dispatch table").
+
+C1 follow-up (per-command observability) shipped in 6 commits on
+top of the base:
+
+- `a7cf2ba` - new metric helpers (`inc_commands_total`,
+  `observe_command_duration`)
+- `bffaf2c` - dispatch wrap
+- `9e2df73` - drop hand-rolled inc-and-time from cast/group/title
+- `fe41bd8` - dispatch-level tests
+- `daf7a25` - CONTEXT.md + CHANGELOG.md
+- `b005c29` - rex-test scrape assertion update
+
+Result: `rex_commands_total{command,result}`,
+`rex_command_duration_seconds{command}`, and
+`rex_messages_failed_total{handler_error}` all fired from
+`handler::handle`. Coverage gap on login/check/ack/session_mutator
+closed; 3-way hand-rolled inc-and-time blocks gone.
+
+**Spec**: `docs/superpowers/specs/2026-08-11-c1-dispatch-observability-design.md`
+
+**Future on this seam**: per-command middleware (auth, rate limit)
+and per-command timeouts can attach to `handler::handle` without
+further dispatch-shape changes. Not pursued here.
+
+### 2.2 C2 - One cluster manager, not three  ✅ done
+
+Completed in commit `ec53673` (2026-07-02, ahead of this roadmap):
+
+- Deleted `crates/rex-cluster/src/manager.rs` (204 LOC) - the
+  dead-code-marked `ClusterManager`.
+- Deleted `crates/rex-cluster/src/manager_tests.rs` (220 LOC).
+- Deleted `crates/rex-server/src/cluster.rs` (147 LOC) - the
+  thin-wrapper `ClusterIntegration`.
+- Net: 534 LOC removed, only `ServerClusterManager` remains,
+  owning the route table and implementing `ClusterPort`.
+
+`crates/rex-server/src/cluster/mod.rs` carries the post-C2 doc
+note: "C2 collapsed three wrapper structs (ClusterManager,
+ClusterIntegration, ServerClusterManager) into one." The
+architecture-review queue is now C1 base, C1 follow-up, C2, C3,
+C4 all done; only C5 and C6 remain from the original sequence.
+
+(No further action on 2.2; entry kept for reference.)
 
 ### 2.3 C6 - `TestServer` over `open_server`
 
@@ -210,9 +260,10 @@ flags any benchmark that regresses > 10% from that baseline.
 
 - Phase 1 is **bookkeeping** that costs < 1 day and unblocks
   Phase 2 by retiring stale branches and closing the issue tracker.
-- Phase 2 picks up the existing architecture-review queue in the
-  order it was written (C1 before C2 before C6 before C5). Each
-  candidate depends on the previous one's seams.
+- Phase 2 was originally scoped as C1 -> C2 -> C6 -> C5. Of these,
+  C1 and C2 have already landed on `dev` (see table above). The
+  remaining Phase-2 work is C6 (depends on C1's dispatch shape - now
+  satisfied) and C5 (depends on `ServerBase` shrinking further).
 - Phase 3 starts once Phase 2 produces a `Services` + `open_server`
   shape stable enough to test against the wire.
 
