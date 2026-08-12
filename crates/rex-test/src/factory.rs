@@ -203,10 +203,16 @@ impl TestEnv {
     /// Build a TestEnv with persistence enabled at `path` (so the
     /// caller controls the sled Db location — needed by restart tests
     /// that boot the server twice against the same directory).
+    /// Sets `check_interval = 1` so the background Janitor wakes
+    /// within 1s of `shutdown.signal()`; without this, the Janitor
+    /// holds `Arc<Services>` alive for up to 15s, which in turn
+    /// holds the sled::Db file lock — and env2's `sled::open` then
+    /// fails with WouldBlock.
     pub async fn with_persistence_path(path: std::path::PathBuf) -> Self {
         let mut config = RexSystemConfig::from_id("test-system");
         config.persistence_enabled = true;
         config.persistence_path = path.to_string_lossy().to_string();
+        config.check_interval = 1;
         Self::from_config(config).await
     }
 
@@ -238,6 +244,41 @@ impl TestEnv {
             port_counter: 0,
             server_addrs: HashMap::new(),
         }
+    }
+
+    /// Close every running server, flush the state store to disk,
+    /// signal the shutdown, drop the current services bundle, and
+    /// rebuild a fresh TestEnv against the same `RexSystemConfig`.
+    /// Returns the new env; the old self is left in a drained state.
+    ///
+    /// Use this for tests that need to simulate a process restart
+    /// (e.g. persistence restore coverage): the new env reads the
+    /// sled Db at the same path the old one wrote.
+    pub async fn restart(mut self) -> Result<Self> {
+        for (_proto, server) in self.servers.drain() {
+            server.close().await;
+        }
+        // sled's default flush is async; force it before the next open
+        // of the same path so the new env's load_all() sees the writes.
+        self.services.state_store.flush().await;
+        self.services.shutdown.signal();
+        drop(self.services);
+        // Brief sleep so the sled file lock is released before the
+        // fresh `build_services` call opens the same path.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        let base_port = self.base_port;
+        let cluster_port_counter = self.cluster_port_counter;
+        let port_counter = self.port_counter;
+        let ack_enabled = self.ack_enabled;
+        let server_addrs = self.server_addrs.clone();
+        let mut new_env = Self::from_config(self.config).await;
+        new_env.base_port = base_port;
+        new_env.cluster_port_counter = cluster_port_counter;
+        new_env.port_counter = port_counter;
+        new_env.ack_enabled = ack_enabled;
+        new_env.server_addrs = server_addrs;
+        Ok(new_env)
     }
 
     fn next_addr(&mut self, proto: Protocol) -> SocketAddr {
