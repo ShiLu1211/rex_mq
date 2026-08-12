@@ -63,6 +63,11 @@ pub trait ClientStateStore: Send + Sync {
 
     /// Flush + close the underlying store. Idempotent.
     async fn close(&self);
+
+    /// Force any pending writes to disk. No-op for adapters that
+    /// don't need it. Tests that simulate a process restart should
+    /// call this before dropping the store.
+    async fn flush(&self);
 }
 
 /// Sled-backed production implementation. Owns a `ClientStateRepo`.
@@ -192,7 +197,17 @@ impl ClientStateStore for SledClientStateStore {
         self.last_error.lock().clone()
     }
 
+    async fn flush(&self) {
+        let repo = self.repo.lock();
+        if let Some(repo) = repo.as_ref() {
+            repo.flush();
+        }
+    }
+
     async fn close(&self) {
+        // Flush first so any queued writes land on disk before the
+        // sled handle goes away.
+        self.flush().await;
         self.repo.lock().take();
     }
 }
@@ -211,6 +226,7 @@ impl ClientStateStore for NoopClientStateStore {
     async fn take_expired_ghosts(&self, _: u64) -> Vec<u128> {
         Vec::new()
     }
+    async fn flush(&self) {}
     fn last_error(&self) -> Option<String> {
         None
     }

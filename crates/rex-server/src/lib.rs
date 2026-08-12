@@ -182,7 +182,7 @@ pub async fn open_server(
 async fn open_shared_sled_db(path: &str) -> anyhow::Result<Arc<sled::Db>> {
     use anyhow::Context;
     std::fs::create_dir_all(path).context("create persistence dir")?;
-    let db = sled::open(path).context("open sled")?;
+    let db = sled::open(path).with_context(|| format!("open sled at {path}"))?;
     Ok(Arc::new(db))
 }
 
@@ -200,8 +200,12 @@ pub async fn build_services(
         match open_shared_sled_db(&config.persistence_path).await {
             Ok(db) => Some(db),
             Err(e) => {
+                // Use Debug format on the error chain so we see the
+                // underlying IO error (e.g. sled's flock WouldBlock) —
+                // Display collapses it to "open sled" via the context()
+                // call in `open_shared_sled_db`.
                 warn!(
-                    "Failed to open persistence store at {}: {}, continuing without persistence",
+                    "Failed to open persistence store at {}: {:?}, continuing without persistence",
                     config.persistence_path, e
                 );
                 None

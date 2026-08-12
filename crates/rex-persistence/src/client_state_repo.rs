@@ -33,6 +33,24 @@ impl ClientStateRepo {
         Ok(())
     }
 
+    /// Force any queued writes to disk. Blocks until flush completes.
+    /// sled's default async-flush is too lazy for test harnesses that
+    /// simulate a process restart in <1s; production code does not
+    /// need to call this.
+    pub fn flush(&self) {
+        // Flush the T_CLIENTS tree specifically so the per-row
+        // bincode writes hit disk. sled::Db::flush only flushes the
+        // default tree, which leaves ours buffered.
+        if let Ok(tree) = self.db.open_tree(T_CLIENTS) {
+            if let Err(e) = tree.flush() {
+                tracing::warn!("client_state_repo: tree.flush failed: {e}");
+            }
+        }
+        if let Err(e) = self.db.flush() {
+            tracing::warn!("client_state_repo: db.flush failed: {e}");
+        }
+    }
+
     pub fn remove(&self, client_id: u128) -> Result<()> {
         let tree = self
             .db
@@ -317,11 +335,11 @@ mod tests {
             ghost_until: 50,
         };
         let real_bytes = bincode::serialize(&real).unwrap();
-        tree.insert(&0xABCDu128.to_le_bytes(), real_bytes).unwrap();
+        tree.insert(0xABCDu128.to_le_bytes(), real_bytes).unwrap();
 
         // 0xDEAD: 16-byte key but garbage value.
         tree.insert(
-            &0xDEADu128.to_le_bytes(),
+            0xDEADu128.to_le_bytes(),
             b"this is not a valid bincode payload".to_vec(),
         )
         .unwrap();
