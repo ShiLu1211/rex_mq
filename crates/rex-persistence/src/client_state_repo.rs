@@ -41,10 +41,10 @@ impl ClientStateRepo {
         // Flush the T_CLIENTS tree specifically so the per-row
         // bincode writes hit disk. sled::Db::flush only flushes the
         // default tree, which leaves ours buffered.
-        if let Ok(tree) = self.db.open_tree(T_CLIENTS) {
-            if let Err(e) = tree.flush() {
-                tracing::warn!("client_state_repo: tree.flush failed: {e}");
-            }
+        if let Ok(tree) = self.db.open_tree(T_CLIENTS)
+            && let Err(e) = tree.flush()
+        {
+            tracing::warn!("client_state_repo: tree.flush failed: {e}");
         }
         if let Err(e) = self.db.flush() {
             tracing::warn!("client_state_repo: db.flush failed: {e}");
